@@ -1121,6 +1121,17 @@ const PANELES = [
       document.querySelector('.card[data-case="1"]').click()`
   },
   {
+    // Lo atrasado de un chat que ya se atendio despues (sin-responder): cerrado sin el agente,
+    // y el detalle dice por que, en el idioma del panel.
+    nombre: 'tablero-detalle-ya-atendido', archivo: 'activity.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, espera: 400,
+    datos: conTablero(tableroDe(TABLERO_CASOS.concat([caso(12, 'cerrado', {
+      title: 'La factura de marzo', chat_name: 'Laura Méndez', updated_at: minutos(5),
+      no_agent_rule: 'rezago_contestado' })]))),
+    guion: ABRIR_TABLERO + `;
+      document.querySelector('.card[data-case="12"]').click()`
+  },
+  {
     // Un caso en "Listo para responder": Enviar, Editar (cli-huecos, C1) y Cerrar.
     nombre: 'tablero-detalle-listo', archivo: 'activity.html', anchos: ANCHOS,
     enTodosLosAnchos: true, espera: 400, datos: conTablero(tableroDe(TABLERO_CASOS)),
@@ -1481,6 +1492,25 @@ const PANELES = [
           motivo: 'sin-juzgar', respaldo: 'failed' },
         'pn:15550000002': { desde: Math.round(Date.now() / 1000) - 31 * 60,
           motivo: 'despacho-atascado', respaldo: 'busy' } } } }) },
+  // linea-fuera-de-lista: viva y conectada pero no anotada en el almacen. La frase del por
+  // que es la mas larga de las filas: a 320 px tiene que partirse sin desbordar.
+  { nombre: 'config-linea-fuera-de-lista', archivo: 'config.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, espera: 300,
+    datos: Object.assign({}, DATOS, { workerBeat: { at: new Date().toISOString(),
+      lineas: { 'pn:15550000002': { desde: Math.round(Date.now() / 1000) - 12 * 60,
+        motivo: 'fuera-de-lista', respaldo: null } } } }) },
+  // lv3-auditoria: una linea que no se pudo leer, la salud entera que no llega y un tick que
+  // arranca pero no termina. Tres filas con su por que, a 320 px sin desbordar.
+  { nombre: 'config-lineas-salud-rota', archivo: 'config.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, espera: 300,
+    datos: Object.assign({}, DATOS, { workerBeat: { at: new Date().toISOString(),
+      lineas: {
+        'pn:15550000001': { desde: Math.round(Date.now() / 1000) - 12 * 60,
+          motivo: 'sin-salud', respaldo: 'ok' },
+        'pn:15550000002': { desde: Math.round(Date.now() / 1000) - 15 * 60,
+          motivo: 'salud-ilegible', respaldo: null },
+        'pn:15550000003': { desde: Math.round(Date.now() / 1000) - 9 * 60,
+          motivo: 'tick-incompleto', respaldo: 'busy' } } } }) },
   {
     // El worker que latia y dejo de hacerlo. Es otro estado y otra accion: aca no hay
     // nada que aprobar, hay que reiniciar Orca.

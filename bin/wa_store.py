@@ -261,9 +261,39 @@ def linea_pedida():
 
 
 def lineas_activas(con):
-    """Las lineas vinculadas AHORA, en orden (la primera es la principal), de
-    `store_meta.lineas_activas`, que anota cada sidecar. Un almacen de antes de esto solo
-    anoto `linea_activa`: entonces es esa sola."""
+    """Las lineas vinculadas AHORA, en orden (la primera es la principal): las anotadas
+    (`lineas_anotadas`) y, detras, las que no estan anotadas pero tienen su sidecar vivo y
+    conectado (`lineas_vivas`). Una linea que se cayo de la lista con el sidecar andando
+    (dos sidecars que la anotaron a la vez al reiniciar Orca) seguia capturando sin que
+    nadie la juzgara, por dias: el tick, la salud y el tablero recorren esta lista
+    (linea-fuera-de-lista)."""
+    anotadas = lineas_anotadas(con)
+    return anotadas + [c for c in lineas_vivas(con) if c not in anotadas]
+
+
+def lineas_vivas(con):
+    """Las lineas cuyo sidecar late AHORA con el socket abierto (`sidecar_vivo` de esa
+    linea), en el orden de sus llaves. Solo numeros (`pn:`): `local` no tiene sidecar
+    propio. Desvincular apaga el sidecar y anota la linea desconectada, asi que una linea
+    desvinculada no vuelve por aca."""
+    try:
+        filas = con.execute("select key from store_meta where key like ? order by key",
+                            (LATIDO_LINEA + "%",)).fetchall()
+    except sqlite3.Error:
+        return []
+    vivas = []
+    for (llave,) in filas:
+        cuenta = llave[len(LATIDO_LINEA):]
+        if (cuenta.startswith("pn:") and _LINEA_RE.match(cuenta) and cuenta not in vivas
+                and linea_conectada(con, cuenta) is True and sidecar_vivo(con, cuenta)):
+            vivas.append(cuenta)
+    return vivas
+
+
+def lineas_anotadas(con):
+    """Las lineas que anoto cada sidecar en `store_meta.lineas_activas`, en orden (la
+    primera es la principal). Un almacen de antes de esto solo anoto `linea_activa`:
+    entonces es esa sola."""
     try:
         fila = con.execute(
             "select value from store_meta where key='lineas_activas'").fetchone()
@@ -470,10 +500,16 @@ def columna_cita(con, prefijo="m"):
     return f"{prefijo}.cita_id" if tiene else "null"
 
 
-def inbox(con, dias, limite, ventana, solo="todos", linea=None):
-    """Lo que le hablo a usted y todavia no contesto."""
+def inbox(con, dias, limite, ventana, solo="todos", linea=None, stanzas=None):
+    """Lo que le hablo a usted y todavia no contesto. Con `stanzas`, esos mensajes y nada
+    mas, sin mirar la ventana de `dias`: lo atrasado que retoma ingest (sin-responder) se
+    lee con la misma forma que la bandeja."""
     corte = int(time.time()) - dias * 86400
     donde, args = filtro_linea(linea)
+    if stanzas is not None:
+        corte = 0
+        donde += f" and m.stanza_id in ({','.join('?' * len(stanzas))})"
+        args = args + list(stanzas)
     if solo == "grupos":
         donde += " and c.is_group = 1"
     elif solo == "directos":
@@ -650,6 +686,74 @@ def telefonos_de_lid(con):
     except sqlite3.Error:
         return {}
     return {(f["account"], f["lid"]): f["pn"] for f in filas}
+
+
+def pares_en_disco():
+    """`telefonos_de_lid` del almacen en disco, en solo lectura y sin pedirle un esquema:
+    {} sin almacen o sin la tabla. Es para quien busca un chat por referencia y no tiene el
+    almacen abierto (`wa-send`, la compuerta de `wa-scope`)."""
+    ruta = store_db_path()
+    if not os.path.exists(ruta):
+        return {}
+    try:
+        con = sqlite3.connect(f"file:{ruta}?mode=ro", uri=True, timeout=5)
+    except sqlite3.Error:
+        return {}
+    try:
+        con.row_factory = sqlite3.Row
+        return telefonos_de_lid(con)
+    finally:
+        con.close()
+
+
+# Un telefono escrito a mano: `+57 300 000 0011`, `573000000011`, `(57) 300-000-0011`.
+TELEFONO_ESCRITO = re.compile(r"^\+?[\d\s().-]{7,}$")
+
+
+def persona_de_ref(ref):
+    """El id de la persona que nombra una referencia escrita, sin el dispositivo:
+    `<digitos>@lid`, `<digitos>@s.whatsapp.net`, o un telefono escrito como
+    `<digitos>@s.whatsapp.net`. None para un grupo, un nombre o lo demas."""
+    texto = str(ref or "").replace("‎", "").strip()
+    if "@" in texto:
+        return id_de_persona(texto)
+    if TELEFONO_ESCRITO.match(texto):
+        digitos = re.sub(r"\D", "", texto)
+        return f"{digitos}@s.whatsapp.net" if digitos else None
+    return None
+
+
+def pares_de_persona(persona, pares):
+    """{cuenta: {ids}}: el OTRO id de la misma persona en cada linea, solo por un par EXACTO
+    de `lid_telefono` (`pares`, de `telefonos_de_lid`): los LID emparejados con ese
+    telefono, o el telefono de ese LID. Nunca por parte de los digitos, y el par de una
+    linea no vale en otra."""
+    salida = {}
+    if not persona:
+        return salida
+    es_lid = persona.endswith("@lid")
+    for (cuenta, lid), pn in pares.items():
+        if es_lid and lid == persona:
+            otro = pn
+        elif not es_lid and pn == persona:
+            otro = lid
+        else:
+            continue
+        salida.setdefault(cuenta, set()).add(otro)
+    return salida
+
+
+def de_la_persona(filas, persona, otros):
+    """Las filas (con `account` y `chat_jid`) que son de esa persona: las de su id y, en
+    cada linea donde su id no tiene fila, las de su par en ESA linea (`otros`, de
+    `pares_de_persona`). El id exacto gana al par: una linea con las dos formas no es
+    ambigua por eso."""
+    if not persona:
+        return []
+    directas = [f for f in filas if f["chat_jid"] == persona]
+    con_directa = {f["account"] for f in directas}
+    return directas + [f for f in filas if f["account"] not in con_directa
+                       and f["chat_jid"] in otros.get(f["account"], ())]
 
 
 def telefono_de(cuenta, chat_jid, pares):
@@ -948,6 +1052,13 @@ def resolver_chat(con, ref, linea=None):
                 or ref.lower() in (r["chat_name"] or "").lower()]
         exactos = [r for r in hits if (r["chat_name"] or "").lower() == ref.lower()]
         hits = exactos or hits
+    if not hits or ("@" not in ref and TELEFONO_ESCRITO.match(ref)):
+        # Un telefono o un LID nombra a la persona: su chat por ese id o, en cada linea, el
+        # del otro id con el que el sidecar la empareja (`lid_telefono`, exacto). Un
+        # telefono escrito manda sobre lo que sus digitos coincidan en un nombre.
+        persona = persona_de_ref(ref)
+        otros = pares_de_persona(persona, telefonos_de_lid(con))
+        hits = de_la_persona(filas, persona, otros) or hits
     if not hits:
         sys.exit(f"no chat matches {ref!r}")
     if len(hits) > 1:

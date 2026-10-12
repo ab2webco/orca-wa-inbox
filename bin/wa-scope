@@ -34,7 +34,7 @@ it written in the chat" about a message that is not there.
 Task service per conversation: plane, linear, github — or `ninguno` when that
 conversation opens no cards and the agent only reads, summarizes or replies.
 """
-import argparse, datetime, hashlib, json, os, pathlib, re, shlex, shutil, sqlite3, subprocess, sys, tempfile, time, unicodedata
+import argparse, datetime, hashlib, json, os, pathlib, re, shlex, shutil, sqlite3, subprocess, sys, tempfile, threading, time, unicodedata
 
 # El modulo vive al lado, y esto se carga tanto como script como importado
 # por ruta desde los chequeos: sin esto el segundo caso no lo encuentra.
@@ -842,6 +842,33 @@ def plugin_store_modifica(cambia, crear=True):
     return escritos
 
 
+# Lo mas que `storage-lock` presta el candado: un worker colgado no puede frenar para
+# siempre el sync y el tick, que escriben el storage con el mismo candado.
+CANDADO_PRESTADO_S = 20
+
+
+def cmd_storage_lock(con, a):
+    """`storage-lock`: el candado del storage, prestado al worker (lv3-auditoria, 7).
+
+    El host de Orca escribe storage.json leyendo el archivo, cambiando una clave y
+    escribiendo el archivo entero, sin este candado. Lo que el worker lee y reescribe por el
+    host -los contenedores de cada linea, `ajustesPorLinea` y `alcancePorLinea`- se perdia
+    si un sync o un tick escribia en medio, o pisaba lo que el worker acababa de guardar.
+    Con el candado tomado aca, ninguna escritura de wa-scope cae entre su lectura y su
+    escritura. Lo tiene hasta que el worker cierra la entrada (o muere), y como mucho
+    `CANDADO_PRESTADO_S`."""
+    os.makedirs(os.path.dirname(DB), exist_ok=True)
+    candado = candado_de_archivo(os.path.join(os.path.dirname(DB), "storage.lock"))
+    try:
+        print(json.dumps({"locked": True}), flush=True)
+        espera = threading.Thread(target=sys.stdin.read, daemon=True)
+        espera.start()
+        espera.join(CANDADO_PRESTADO_S)
+    finally:
+        candado.close()
+    return None
+
+
 def alcance_sin_pisar(scope, leido, fresco, cuenta):
     """El alcance que escribe el sync, sin pisar lo que el panel guardo despues de leerlo.
 
@@ -866,12 +893,14 @@ def alcance_sin_pisar(scope, leido, fresco, cuenta):
 
 
 def plugin_store_write(scope, agent_name=None, activity=None, health=None,
-                       routes=None, extra=None, leido=None):
+                       routes=None, extra=None, leido=None, fusiona=None):
     """Escritura atomica: el host lee este archivo en cualquier momento. Va por
     `plugin_store_modifica` (candado, temporal unico, sin pisar un store ilegible).
 
     `leido` es el alcance del panel sobre el que se armo `scope`: con el, lo que el panel
-    guardo despues no se pisa (`alcance_sin_pisar`).
+    guardo despues no se pisa (`alcance_sin_pisar`). `fusiona(vista)` arma claves sobre lo
+    que hay en el archivo con el candado puesto (la vista de esta linea): lo que se lee
+    afuera del candado pisa lo que otro escribio en medio (lv3-auditoria, 6).
 
     Con varias lineas, lo que es de una linea que no es la principal va a su lugar
     (`escribir_en_linea`, en wa_settings): el tick de cada linea corre en su propio
@@ -896,6 +925,8 @@ def plugin_store_write(scope, agent_name=None, activity=None, health=None,
             cambios["routes"] = routes
         if extra:
             cambios.update(extra)
+        if fusiona is not None:
+            cambios.update(fusiona(vista_de_linea(data, cuenta, principal)))
         escribir_en_linea(data, cambios, cuenta, principal)
         # El alcance de la principal va en la raiz: su copia en `alcancePorLinea` es un
         # resto viejo que `wa-send` igual cruzaba (guardar-panel G3).
@@ -1014,10 +1045,17 @@ def plugin_store_patch_run(trace):
     """Deja el rastro en el panel sin rearmar la actividad entera. Rearmarla cuesta una
     lectura completa de WhatsApp; al abrir y al cerrar una corrida lo unico que cambio
     es como va, y cobrar ese precio ahi dejaria el panel diciendo "corriendo" hasta el
-    siguiente sync — justo el minuto en que el dueno va a mirar."""
+    siguiente sync — justo el minuto en que el dueno va a mirar.
+
+    Es la actividad de la linea de esta corrida: la de otra linea va a su lugar
+    (`escribir_en_linea`), y el agente de la segunda no pisa la corrida de la principal
+    (lv3-auditoria, 3)."""
+    cuenta, principal = cuenta_activa(), linea_principal()
+
     def cambia(data):
-        actividad = data.get("activity")
-        data["activity"] = dict(actividad if isinstance(actividad, dict) else {}, run=trace)
+        actividad = vista_de_linea(data, cuenta, principal).get("activity")
+        escribir_en_linea(data, {"activity": dict(
+            actividad if isinstance(actividad, dict) else {}, run=trace)}, cuenta, principal)
         return True
     return plugin_store_modifica(cambia) > 0
 
@@ -1025,18 +1063,14 @@ def plugin_store_patch_run(trace):
 def mirror_to_panel(key, value):
     """Un ajuste que el panel tambien guarda tiene que viajar en las dos direcciones:
     si solo bajara del panel, un valor viejo del panel ganaria para siempre."""
-    campo = next((c for c, name in PANEL_ORCA_CAMPOS.items() if name == key), None)
-    if campo:
-        orca = plugin_store_raw().get(PANEL_ORCA)
-        orca = dict(orca) if isinstance(orca, dict) else {}
-        orca[campo] = value
-        return plugin_store_write(None, extra={PANEL_ORCA: orca})
-    campo = next((c for c, name in PANEL_PRIMER_CAMPOS.items() if name == key), None)
-    if campo:
-        primer = plugin_store_raw().get(PANEL_PRIMER)
-        primer = dict(primer) if isinstance(primer, dict) else {}
-        primer[campo] = value
-        return plugin_store_write(None, extra={PANEL_PRIMER: primer})
+    for clave, campos in ((PANEL_ORCA, PANEL_ORCA_CAMPOS), (PANEL_PRIMER, PANEL_PRIMER_CAMPOS)):
+        campo = next((c for c, name in campos.items() if name == key), None)
+        if campo:
+            # La fusion, dentro del candado: leida afuera, pisaba lo escrito en medio.
+            def fusiona(vista, clave=clave, campo=campo):
+                previo = vista.get(clave)
+                return {clave: dict(previo if isinstance(previo, dict) else {}, **{campo: value})}
+            return plugin_store_write(None, fusiona=fusiona)
     flat = next((f for f, name in PANEL_SETTINGS.items() if name == key), None)
     if not flat:
         return False
@@ -1781,7 +1815,7 @@ def db():
 
 # Lo que abre la base en solo lectura: lo que corre cada minuto para mirar, y no puede
 # escribir ni una fila (ni el esquema, ni las migraciones, ni la re-clave de `db`).
-SOLO_LECTURA = ("lineas-salud",)
+SOLO_LECTURA = ("lineas-salud", "storage-lock")
 
 
 def db_lectura():
@@ -2058,12 +2092,42 @@ def wa_chats(query=None):
     return json.loads(p.stdout) if p.returncode == 0 else []
 
 
-def jid_of(con, ref):
-    """Acepta el JID directo, el Z_PK, o parte del nombre. Devuelve (jid, nombre)."""
+def registrado_por_persona(con, ref):
+    """El jid registrado en esta linea que es la MISMA persona que `ref` (un telefono o un
+    LID), o None: el de su id, o el de su otro id por el par EXACTO de `lid_telefono` de
+    esta linea. Dos registrados con el mismo par no se eligen: sale como ambiguo."""
+    persona = wa_store.persona_de_ref(ref)
+    if not persona:
+        return None
+    cuenta = cuenta_activa()
+    filas = [{"account": cuenta, "chat_jid": j} for j in merged_scope(con)]
+    hits = sorted(f["chat_jid"] for f in wa_store.de_la_persona(
+        filas, persona, wa_store.pares_de_persona(persona, wa_store.pares_en_disco())))
+    if len(hits) > 1:
+        print(f"{ref!r} is ambiguous: it is paired to {len(hits)} registered chats; pass "
+              f"the JID:", file=sys.stderr)
+        for j in hits[:12]:
+            print(f"  {j}", file=sys.stderr)
+        sys.exit(2)
+    return hits[0] if hits else None
+
+
+def jid_of(con, ref, por_persona=False):
+    """Acepta el JID directo, el Z_PK, o parte del nombre. Devuelve (jid, nombre).
+
+    `por_persona`, para lo que BUSCA un chat registrado (la compuerta, `voice`, `mode`): un
+    telefono o un LID que no esta registrado tal cual encuentra el chat de la misma persona
+    (`registrado_por_persona`). `set` y `rm` nombran el jid exacto que tocan, y no lo usan."""
     if "@" in ref:
         row = con.execute("select chat_name from chat_scope where chat_jid=? and account=?",
                           (ref, cuenta_activa())).fetchone()
+        otro = None if row or not por_persona else registrado_por_persona(con, ref)
+        if otro:
+            return otro, ((merged_scope(con).get(otro) or {}).get("chat_name") or otro)
         return ref, (row["chat_name"] if row else ref)
+    otro = registrado_por_persona(con, ref) if por_persona else None
+    if otro:
+        return otro, ((merged_scope(con).get(otro) or {}).get("chat_name") or otro)
     hits = [c for c in wa_chats() if str(c["id"]) == ref
             or ref.lower() in (c["name"] or "").lower()]
     exact = [c for c in hits if (c["name"] or "").lower() == ref.lower()]
@@ -2245,7 +2309,7 @@ def cmd_set(con, a):
 
 
 def cmd_mode(con, a):
-    jid, _ = jid_of(con, a.chat)
+    jid, _ = jid_of(con, a.chat, por_persona=True)
     if a.value not in MODES:
         sys.exit(f"invalid mode: {a.value} (use {'/'.join(MODES)})")
     cuenta = cuenta_activa()
@@ -2282,7 +2346,7 @@ def cmd_rm(con, a):
 
 def cmd_check(con, a):
     """La compuerta. Toda automation llama esto antes de tocar nada."""
-    jid, name = jid_of(con, a.chat)
+    jid, name = jid_of(con, a.chat, por_persona=True)
     row = merged_scope(con).get(jid)
     mode = row["mode"] if row else "off"
     allowed = RANK[mode] >= RANK[a.for_]  and mode != "off"
@@ -3049,7 +3113,7 @@ def cmd_voice(con, a):
     global_tone = merged_settings(con).get("tone") or DEFAULT_CONFIG["tone"]
     if not a.chat:
         return [{"scope": "global", "tone": global_tone}]
-    jid, name = jid_of(con, a.chat)
+    jid, name = jid_of(con, a.chat, por_persona=True)
     row = merged_scope(con).get(jid) or {}
     own = (row.get("tone") or "").strip()
     provider = row.get("provider") or "plane"
@@ -3458,8 +3522,18 @@ def caso_fila(con, row):
         # siguiente firma del dueno la manda con `--approve` (acciones.mjs, `entregar`).
         req = id_envio_caso(caso["case_id"], caso.get("propuesta_version") or "")
         estados, _ = envios_del_almacen([req])
-        caso["destino"] = {"chat_jid": destino, "chat_name": nombre_del_chat(con, destino),
+        crudo = dict(row)
+        linea = linea_de_propuesta(crudo)
+        caso["destino"] = {"chat_jid": destino,
+                           "chat_name": nombre_del_chat(con, destino, linea),
                            "retenido": estados.get(req) == "borrador"}
+        # La orden del dueno (ordenes-del-dueno): la otra linea por la que sale, y si el
+        # destino esta en borrador (ahi la firma del dueno lo manda, como en cualquier chat en
+        # borrador: borrador y `--approve`). Solo cuando aplica: la fila de siempre no cambia.
+        if linea:
+            caso["destino"]["linea"] = linea
+        if modo_de_destino(con, crudo) == "borrador":
+            caso["destino"]["borrador"] = True
     return caso
 
 
@@ -3885,16 +3959,48 @@ def tick_recordatorios(con, resumen):
 def cmd_caso_atender(con, a):
     """El dueno pide que el agente atienda este caso en su proxima corrida (lo que era
     "Tomar" en la bandeja): lo marca `necesita_agente`, que es lo que mira
-    `pending --needs-agent`. Solo antes de que haya una propuesta."""
+    `pending --needs-agent`. Solo antes de que haya una propuesta.
+
+    `--pedido <caso>` (ordenes-del-dueno): el agente lo hace porque el dueno se lo ordeno en
+    ESE caso ("atiende el caso N"). Vale como el boton del dueno (tambien en un chat en
+    `observar`) solo si el pedido es suyo, por su id de WhatsApp; un Super admin, solo sobre un
+    caso de su misma conversacion. Nadie mas ordena nada (E_NOT_OWNER)."""
     caso_toma(con)
     caso = caso_de(con, a.id)
+    actor, detalle = a.actor, DETALLE_ATENDER
+    if getattr(a, "pedido", None) is not None:
+        pedido = orden_de_atender(con, a.pedido, caso)
+        actor, detalle = "dueno", f"{DETALLE_ATENDER} · {POR_ORDEN} #{pedido['case_id']}"
     if caso["etapa"] not in ETAPAS_ATENDER:
         caso_falla("E_STAGE", f"case #{a.id} is in {caso['etapa']}: only a case in "
-                              f"{' or '.join(ETAPAS_ATENDER)} can be handed to the agent")
-    caso_tocar(con, caso, a.actor, DETALLE_ATENDER,
+                              f"{' or '.join(ETAPAS_ATENDER)} can be handed to the agent. Tell "
+                              f"the owner where it stands (`caso estado {a.id}`)")
+    caso_tocar(con, caso, actor, detalle,
                necesita_agente=1)
     con.commit()
     return [lanza_si_ahora(con, a, caso_fila(con, caso_de(con, a.id)))]
+
+
+# El evento de "atender" que el dueno ordeno por WhatsApp desde otro caso (ordenes-del-dueno).
+POR_ORDEN = "ordered from case"
+
+
+def orden_de_atender(con, pedido_id, caso):
+    """El caso donde se ordeno atender `caso`, si la orden cuenta: del dueno (por su id de
+    WhatsApp, en cualquier linea), o de un Super admin de ESA misma conversacion. Si no, sale
+    con E_NOT_OWNER. El pedido se busca en todas las lineas: el dueno ordena desde la suya."""
+    fila = con.execute("select * from caso where case_id=?", (pedido_id,)).fetchone()
+    if not fila:
+        caso_falla("E_NOT_FOUND", f"no case #{pedido_id}")
+    pedido = dict(fila)
+    if caso_del_dueno(con, pedido):
+        return pedido
+    if (pedido["account"] == caso["account"] and pedido["chat_jid"] == caso["chat_jid"]
+            and caso_pide_como_dueno(con, pedido)):
+        return pedido
+    caso_falla("E_NOT_OWNER", f"case #{pedido_id} is not the owner's (nor a Super admin's of "
+                              f"case #{caso['case_id']}'s chat): only the owner orders the agent "
+                              f"to handle another case")
 
 
 def lanza_si_ahora(con, a, fila):
@@ -4159,12 +4265,14 @@ def pregunta_del_dueno(con, caso):
 def caso_espera_proyecto(con, chat, sender_jid):
     """El caso de la conversacion que espera la respuesta de ESTE remitente a una pregunta
     "A o B?" que se le hizo a el (`a` writer), ya enviada (el caso esta en respondido); o
-    None. Lo que escribe otro sigue el camino de siempre."""
+    None. Lo que escribe otro sigue el camino de siempre. Nunca uno que retoma lo atrasado
+    del chat: lo que llega ahora no se le suma."""
     quien = quien_escribe(sender_jid, chat)
     if not quien:
         return None
     for fila in con.execute("select * from caso where account=? and chat_jid=? and "
-                            "etapa='respondido' order by updated_at desc, case_id desc",
+                            f"etapa='respondido' and {sin_rezago_sql('caso')} "
+                            "order by updated_at desc, case_id desc",
                             (cuenta_activa(), chat)).fetchall():
         p = ruta_del_caso(fila).get("pregunta")
         if (isinstance(p, dict) and p.get("estado") == "abierta" and p.get("a") == "writer"
@@ -4374,9 +4482,13 @@ def cmd_caso_propuesta(con, a):
         if a.tipo not in TIPOS_CON_DESTINO:
             caso_falla("E_ARGS", f"--chat goes with {' or '.join(TIPOS_CON_DESTINO)}: a {a.tipo} "
                                  f"proposal sends nothing")
-        destino = destino_de_ref(con, caso, a.chat)
+        destino, linea = destino_de_ref(con, caso, a.chat)
         if destino:
             propuesta["chat"] = destino
+        if linea:
+            # La orden del dueno a un chat de otra linea: la linea por la que sale es parte
+            # de lo que firma (ordenes-del-dueno).
+            propuesta["linea"] = linea
     texto, version = propuesta_canonica(propuesta)
     if caso["etapa"] in ("decision", "listo") and caso["propuesta_version"] == version:
         # Triage repasa cada cinco minutos: lo mismo no es un cambio ni deja evento. En
@@ -4404,9 +4516,14 @@ def cmd_caso_propuesta(con, a):
 # Lo que pide el dueno o un Super admin de la conversacion puede ir a OTRO chat de la misma
 # linea en `responder` (`caso propuesta --chat`). El destino es parte de la propuesta y de su
 # version: el dueno firma el texto Y a donde va. Un cliente nunca redirige nada.
+# La orden del DUENO va mas lejos (ordenes-del-dueno): a un chat de otra linea vinculada (la
+# propuesta guarda la linea por la que sale, `linea`) y a uno en `borrador` (su orden lo
+# decide). Un Super admin sigue con lo de siempre: su linea y `responder`.
 # El motivo por el que la regla no firma una respuesta a otro chat: la firma el dueno.
 OTRO_CHAT = "other_chat"
 TELEFONO_REF = re.compile(r"^\+?[\d\s().-]{7,}$")
+# Los modos de un destino que acepta la orden del dueno; la de un Super admin, solo responder.
+MODOS_DESTINO_DUENO = ("responder", "borrador")
 
 
 def chats_de_la_linea(cuenta):
@@ -4427,27 +4544,63 @@ def chats_de_la_linea(cuenta):
         fuente.close()
 
 
+def chats_y_alcance(con, cuenta):
+    """(chats, pares, alcance) de una linea: los chats que conoce ({jid: nombre}, el nombre
+    del alcance manda), los telefonos de sus LID y su alcance (`merged_scope`)."""
+    scope = merged_scope(con, cuenta)
+    del_almacen, pares = chats_de_la_linea(cuenta)
+    chats = dict(del_almacen)
+    for jid, fila in scope.items():
+        nombre = fila.get("chat_name")
+        chats[jid] = nombre if nombre and nombre != jid else chats.get(jid) or nombre or jid
+    return chats, pares, scope
+
+
 def coincide_ref(ref, chats, cuenta, pares):
     """Los jids de `chats` ({jid: nombre}) que nombra `ref`: el jid, el telefono (de un
-    directo por telefono o por su LID) o el nombre, el exacto primero."""
-    if "@" in ref:
-        jid = wa_store.jid_sin_dispositivo(ref)
-        return [j for j in chats if j == jid]
-    if TELEFONO_REF.match(ref):
-        digitos = re.sub(r"\D", "", ref)
-        return [j for j in chats if wa_store.telefono_de(cuenta, j, pares) == f"+{digitos}"]
+    directo por telefono o por su LID) o el nombre, el exacto primero.
+
+    Un telefono o un LID nombra a la persona: el chat de ese id o, si no lo hay en la linea,
+    el de su otro id por el par EXACTO de `lid_telefono` de ESA linea (`pares`)."""
+    if "@" in ref or TELEFONO_REF.match(ref):
+        jid = wa_store.jid_sin_dispositivo(ref) if "@" in ref else None
+        if jid in chats:
+            return [jid]
+        persona = wa_store.persona_de_ref(ref)
+        filas = [{"account": cuenta, "chat_jid": j} for j in chats]
+        return [f["chat_jid"] for f in wa_store.de_la_persona(
+            filas, persona, wa_store.pares_de_persona(persona, pares))]
     bajo = ref.lower()
     hits = [j for j in chats if bajo in (chats[j] or "").lower()]
     exactos = [j for j in hits if (chats[j] or "").lower() == bajo]
     return exactos or hits
 
 
+def etiqueta_de_linea(linea):
+    """Como se nombra una linea ante el dueno: su numero (`pn:57...` -> `+57...`)."""
+    linea = str(linea or "")
+    return f"+{linea[3:]}" if linea.startswith("pn:") else linea
+
+
+def como_habilitar(nombre, jid, linea):
+    """Lo que el dueno hace para que un chat reciba lo que pide: la frase exacta."""
+    return (f"To enable it, the owner sets {nombre} to Responder (or Borrador) in the plugin "
+            f"panel, or runs `wa-scope mode \"{jid}\" responder --line {linea}`")
+
+
 def destino_de_ref(con, caso, ref):
-    """El jid del chat al que iria la propuesta, o None si `ref` nombra el chat del propio
-    caso. Sale con su codigo si no puede: E_DEST_ROLE (el que pide no es el dueno ni un
-    Super admin de la conversacion), E_DEST_NOT_FOUND, E_DEST_AMBIGUOUS, E_DEST_LINE (el chat
-    es de otra linea) o E_DEST_MODE (no esta en responder). La ambiguedad nunca se resuelve
-    en silencio, como en `wa_store.resolver_chat`."""
+    """(jid, linea) del chat al que iria la propuesta: `linea` es la otra linea por la que
+    sale, o None si es la del caso; (None, None) si `ref` nombra el chat del propio caso.
+
+    Sale con su codigo si no puede: E_DEST_ROLE (el que pide no es el dueno ni un Super admin
+    de la conversacion), E_DEST_NOT_FOUND, E_DEST_AMBIGUOUS (con los candidatos y su linea),
+    E_DEST_LINE (el chat es de otra linea y no lo pide el dueno, o esa linea no esta
+    vinculada) o E_DEST_MODE (no esta en un modo que lo reciba; el detalle dice como
+    habilitarlo). La ambiguedad nunca se resuelve en silencio, como en
+    `wa_store.resolver_chat`.
+
+    Solo la orden del dueno (`caso_del_dueno`) cruza a otra linea vinculada y acepta un chat
+    en `borrador`: lo decide el id de WhatsApp, nunca el texto."""
     ref = (ref or "").strip()
     if not ref:
         caso_falla("E_ARGS", "--chat is empty: name the chat by its JID, phone or name")
@@ -4456,33 +4609,63 @@ def destino_de_ref(con, caso, ref):
                                   f"admin's: only they can send a reply to another chat. A "
                                   f"customer's reply goes to its own chat")
     cuenta = caso["account"]
-    scope = merged_scope(con)
-    del_almacen, pares = chats_de_la_linea(cuenta)
-    chats = dict(del_almacen)
-    for jid, fila in scope.items():
-        nombre = fila.get("chat_name")
-        chats[jid] = nombre if nombre and nombre != jid else chats.get(jid) or nombre or jid
-    hits = coincide_ref(ref, chats, cuenta, pares)
-    if not hits:
-        ajenos = {r["chat_jid"]: r["chat_name"] for r in con.execute(
-            "select chat_jid, chat_name from chat_scope where account<>?", (cuenta,))}
-        if coincide_ref(ref, ajenos, cuenta, {}):
-            caso_falla("E_DEST_LINE", f"{ref!r} is on another line, not on {cuenta}: a reply "
-                                      f"only goes to a chat of the case's own line")
-        caso_falla("E_DEST_NOT_FOUND", f"no chat of the line {cuenta} matches {ref!r}")
-    if len(hits) > 1:
-        nombres = "; ".join(f"{j} ({chats[j]})" for j in hits[:12])
-        caso_falla("E_DEST_AMBIGUOUS", f"{ref!r} matches {len(hits)} chats: {nombres}. Pass "
-                                       f"the JID of the one you mean")
-    jid = hits[0]
+    dueno = caso_del_dueno(con, caso)
+    modos_ok = MODOS_DESTINO_DUENO if dueno else ("responder",)
+    por_linea = {cuenta: chats_y_alcance(con, cuenta)}
+    candidatos = [(j, cuenta) for j in coincide_ref(ref, por_linea[cuenta][0], cuenta,
+                                                    por_linea[cuenta][1])]
+    otras = [l for l in wa_store.lineas_activas_en_disco() if l != cuenta]
+    if not candidatos:
+        for linea in otras:
+            por_linea[linea] = chats_y_alcance(con, linea)
+            chats, pares, _ = por_linea[linea]
+            candidatos += [(j, linea) for j in coincide_ref(ref, chats, linea, pares)]
+    # El mismo chat en dos lineas es UNO: sale por la primera donde lo puede recibir.
+    unicos = {}
+    for jid, linea in candidatos:
+        modo = (por_linea[linea][2].get(jid) or {}).get("mode") or "off"
+        if jid not in unicos or (modo in modos_ok and unicos[jid][1] not in modos_ok):
+            unicos[jid] = (linea, modo)
+    if not unicos:
+        ajenos = {r["chat_jid"]: (r["chat_name"], r["account"]) for r in con.execute(
+            "select chat_jid, chat_name, account from chat_scope where account<>?", (cuenta,))}
+        hallados = coincide_ref(ref, {j: n for j, (n, _) in ajenos.items()}, cuenta, {})
+        if hallados:
+            linea = ajenos[hallados[0]][1]
+            caso_falla("E_DEST_LINE", f"{ref!r} is on the line {linea}, which is not linked "
+                                      f"now: nothing can go out through it. Link that number "
+                                      f"again in the plugin panel")
+        caso_falla("E_DEST_NOT_FOUND", f"no chat matches {ref!r} on the line {cuenta}"
+                                       + (f" nor on {', '.join(otras)}" if dueno and otras
+                                          else "")
+                                       + ": ask which chat he means (its name or phone)")
+    if len(unicos) > 1:
+        # Los candidatos van en el detalle, cada uno con su linea: el agente se los nombra
+        # a quien pidio (el contrato del error es `error` y `detail`, nada mas).
+        nombres = "; ".join(f"{por_linea[l][0].get(j) or j} ({j}, line {l})"
+                            for j, (l, _) in list(unicos.items())[:12])
+        caso_falla("E_DEST_AMBIGUOUS", f"{ref!r} matches {len(unicos)} chats: {nombres}. Ask "
+                                       f"him which one, or pass its JID")
+    jid, (linea, modo) = next(iter(unicos.items()))
+    nombre = por_linea[linea][0].get(jid) or jid
     if jid == caso["chat_jid"]:
-        return None
-    modo = (scope.get(jid) or {}).get("mode") or "off"
-    if modo != "responder":
-        caso_falla("E_DEST_MODE", f"{chats[jid] or jid} is on {modo}: a reply only goes to "
-                                  f"another chat authorized in responder. The owner "
-                                  f"authorizes it in the panel")
-    return jid
+        return None, None
+    if linea != cuenta and not dueno:
+        caso_falla("E_DEST_LINE", f"{nombre} is on the line {linea}, not on {cuenta}: only "
+                                  f"the owner's own order goes to a chat of another line. A "
+                                  f"Super admin's reply goes to a chat of this line")
+    if modo not in modos_ok:
+        if modo == "borrador":
+            caso_falla("E_DEST_MODE", f"{nombre} is on borrador on the line {linea}: a Super "
+                                      f"admin's reply only goes to a chat in responder (the "
+                                      f"owner's own order can go there). "
+                                      + como_habilitar(nombre, jid, linea))
+        estado = ({"off": "off", "observar": "on observar (it only reads)"}.get(modo, modo)
+                  if jid in por_linea[linea][2] else "not authorized (it is not in the "
+                                                     "plugin's chats)")
+        caso_falla("E_DEST_MODE", f"{nombre} is {estado} on the line {linea}: nothing is "
+                                  f"sent there. " + como_habilitar(nombre, jid, linea))
+    return jid, (linea if linea != cuenta else None)
 
 
 def cmd_caso_destinos(con, a):
@@ -4490,49 +4673,100 @@ def cmd_caso_destinos(con, a):
     dueno dice "reporta esto al cliente" sin nombrar el chat. Son los de la misma linea en
     `responder` que tienen el proyecto del caso (el mismo que usaria el despacho), sin el
     del propio caso. Uno: ese es el destino; varios: el agente pregunta cual; ninguno: lo
-    dice y pregunta. Solo lee."""
+    dice y pregunta. Solo lee.
+
+    Para la orden del DUENO (ordenes-del-dueno) tambien los de `borrador` y los de las otras
+    lineas vinculadas, con el proyecto del catalogo de cada una. Cada fila dice su linea."""
     caso = caso_de(con, a.id)
     if not caso_pide_como_dueno(con, caso):
         caso_falla("E_DEST_ROLE", f"case #{a.id} is not the owner's nor a Super admin's: its "
                                   f"reply only goes to its own chat")
+    cuenta = caso["account"]
+    dueno = caso_del_dueno(con, caso)
+    modos_ok = MODOS_DESTINO_DUENO if dueno else ("responder",)
     scope = merged_scope(con)
     catalogo = proyectos_del_dueno(con, linea_del_caso(caso))
     elegido = proyecto_de_ruta(ruta_del_caso(caso), scope.get(caso["chat_jid"]), catalogo)
     filas = []
     if elegido["id"] and not elegido["quitado"]:
         proyecto = {"id": elegido["id"], "name": elegido["name"]}
-        for jid, fila in sorted(scope.items(), key=lambda x: (x[1].get("chat_name") or x[0])):
-            if jid == caso["chat_jid"] or fila.get("mode") != "responder":
-                continue
-            aceptados, _ = proyectos_del_chat(fila, catalogo)
-            if not any(x["id"] == elegido["id"] for x in aceptados):
-                continue
-            filas.append({"chat_jid": jid, "chat_name": nombre_del_chat(con, jid),
-                          "mode": "responder", "project": proyecto,
-                          "why": f"same project as the case ({elegido['name'] or elegido['id']})"
-                                 f" and the chat is in responder"})
+        lineas = [cuenta] + ([l for l in wa_store.lineas_activas_en_disco() if l != cuenta]
+                             if dueno else [])
+        for linea in lineas:
+            alcance = scope if linea == cuenta else merged_scope(con, linea)
+            del_catalogo = catalogo if linea == cuenta else proyectos_del_dueno(con, linea)
+            for jid, fila in sorted(alcance.items(),
+                                    key=lambda x: (x[1].get("chat_name") or x[0])):
+                modo = fila.get("mode")
+                if jid == caso["chat_jid"] or modo not in modos_ok:
+                    continue
+                aceptados, _ = proyectos_del_chat(fila, del_catalogo)
+                if not any(x["id"] == elegido["id"] for x in aceptados):
+                    continue
+                donde = "" if linea == cuenta else f", on the line {linea} (the owner's order " \
+                                                  f"goes out through it)"
+                filas.append({"chat_jid": jid,
+                              "chat_name": nombre_del_chat(con, jid,
+                                                           None if linea == cuenta else linea),
+                              "mode": modo, "line": linea, "project": proyecto,
+                              "why": f"same project as the case ({elegido['name'] or elegido['id']})"
+                                     f" and the chat is in {modo}{donde}"})
     if a.json:
         return filas
     if not elegido["id"] or elegido["quitado"]:
         print(f"case #{a.id} has no project: name the chat (ask the owner which one)")
     elif not filas:
-        print(f"no chat of this line in responder has the project {elegido['id']}: ask the "
-              f"owner which chat")
+        print(f"no chat {'the owner can reach' if dueno else 'of this line in responder'} has "
+              f"the project {elegido['id']}: ask the owner which chat")
     for f in filas:
-        print(f"{f['chat_jid']} | {f['chat_name']} | {f['project']['id']} | {f['why']}")
+        print(f"{f['chat_jid']} | {f['chat_name']} | {f['line']} | {f['mode']} | "
+              f"{f['project']['id']} | {f['why']}")
     return None
 
 
-def destino_de_propuesta(caso):
-    """El jid del otro chat al que va la propuesta vigente, o None si va al del caso."""
+def _propuesta_dict(caso):
     try:
         propuesta = json.loads(caso["propuesta"] or "null")
     except (TypeError, ValueError, KeyError):
         return None
-    if not isinstance(propuesta, dict):
+    return propuesta if isinstance(propuesta, dict) else None
+
+
+def destino_de_propuesta(caso):
+    """El jid del otro chat al que va la propuesta vigente, o None si va al del caso."""
+    propuesta = _propuesta_dict(caso)
+    if propuesta is None:
         return None
     chat = propuesta.get("chat")
     return chat if chat and chat != caso["chat_jid"] else None
+
+
+def linea_de_propuesta(caso):
+    """La OTRA linea por la que sale la propuesta vigente (la orden del dueno a un chat de otra
+    linea, ordenes-del-dueno), o None: la del caso."""
+    propuesta = _propuesta_dict(caso)
+    linea = (propuesta or {}).get("linea")
+    return linea if destino_de_propuesta(caso) and linea and linea != caso["account"] else None
+
+
+def nombre_del_destino(con, caso):
+    """Como se llama el chat al que va la propuesta vigente, leido en SU linea."""
+    return nombre_del_chat(con, destino_de_propuesta(caso), linea_de_propuesta(caso))
+
+
+def linea_de_envio(caso):
+    """La linea por la que sale la respuesta vigente del caso: la del destino en otra linea, o
+    la del caso."""
+    return linea_de_propuesta(caso) or caso.get("account")
+
+
+def modo_de_destino(con, caso):
+    """El modo del chat al que va la propuesta vigente, en la linea por la que sale."""
+    destino = destino_de_propuesta(caso) or caso["chat_jid"]
+    linea = linea_de_envio(caso)
+    if linea and linea != cuenta_activa():
+        return modo_en_linea(con, destino, linea) or "off"
+    return (merged_scope(con).get(destino) or {}).get("mode") or "off"
 
 
 def propuesta_tipo(caso):
@@ -4586,6 +4820,9 @@ def trabajo_espera_al_dueno(con, caso):
     scope = merged_scope(con).get(caso["chat_jid"]) or {}
     if scope.get("mode") not in MODOS_SIN_CLIC:
         motivos.append("mode")
+    # Un pedido de hace dias no corre solo, aunque sea del dueno (sin-responder).
+    if es_rezago(con, caso["case_id"]):
+        motivos.append(REZAGO_FRENO)
     # El proyecto efectivo del caso, el mismo que usaria el despacho (proyectos-por-chat,
     # M4): sin ninguno espera (`no_project`); fuera de los proyectos aceptados del chat, o
     # con un `repo` que no lo nombra, tambien (`outside_project`).
@@ -4623,12 +4860,15 @@ def frenos_de_regla(con, caso):
       con su nivel. Un valor con forma de secreto va al dueno siempre (`secret`).
     - Un chat en `borrador` pregunta todo."""
     # Una respuesta a OTRO chat (respuesta-otro-chat) se juzga con los niveles de ese chat,
-    # el que la va a leer, y nunca la firma la regla: el dueno aprueba el texto y el destino.
+    # el que la va a leer, y la regla no la firma: el dueno aprueba el texto y el destino.
+    # En otra linea (la orden del dueno, ordenes-del-dueno), con los niveles de ESA linea.
+    # Decision (c) del dueno: lo que EL ordena ya es su firma del texto y del destino, asi
+    # que no espera un segundo `si N`; el piso, Jev y las reglas del destino quedan igual.
     destino = destino_de_propuesta(caso)
-    leyente = dict(caso, chat_jid=destino) if destino else caso
-    scope = merged_scope(con).get(leyente["chat_jid"]) or {}
+    leyente = dict(caso, chat_jid=destino, account=linea_de_envio(caso)) if destino else caso
+    scope = merged_scope(con, linea_de_propuesta(caso)).get(leyente["chat_jid"]) or {}
     niv = scope.get("niveles") or wa_reglas.niveles(None)
-    if chat_es_del_dueno(caso.get("account"), leyente["chat_jid"]) \
+    if chat_es_del_dueno(leyente.get("account"), leyente["chat_jid"]) \
             or directo_de_operador(con, leyente):
         # Lo que se le contesta al dueno no pasa por las reglas (T22.1): solo queda el
         # control destructivo, un secreto, y lo que el propio dueno pidio con el modo. Lo
@@ -4660,8 +4900,11 @@ def frenos_de_regla(con, caso):
     # (proyectos-por-chat, M5). La del que escribio se vuelve a mirar: sin su rol, del dueno.
     if pregunta_del_dueno(con, caso):
         al_dueno.append("project_question")
-    if destino:
+    if destino and not caso_del_dueno(con, caso):
         al_dueno.append(OTRO_CHAT)
+    # Lo que retoma lo atrasado de un chat lo firma el dueno, nunca la regla (sin-responder).
+    if caso.get("case_id") is not None and es_rezago(con, caso["case_id"]):
+        al_dueno.append(REZAGO_FRENO)
     return al_dueno, al_agente
 
 
@@ -4941,13 +5184,16 @@ def cmd_caso_resultado(con, a):
     # El trabajo que el dueno mando reportar a OTRO chat (respuesta-otro-chat): la respuesta
     # `resuelto` va alla. La pregunta de un `necesita` es para quien lo pidio: va a su chat,
     # donde su respuesta vuelve al caso.
-    destino = destino_de_propuesta(caso)
+    destino, linea = destino_de_propuesta(caso), linea_de_propuesta(caso)
     if pedido_chat is not None:
         # La misma resolucion y los mismos rechazos que `caso propuesta --chat`; None es el
-        # chat del propio caso. Espera la firma del dueno como aquella (`OTRO_CHAT`).
-        destino = destino_de_ref(con, caso, pedido_chat)
+        # chat del propio caso. Espera la firma del dueno como aquella (`OTRO_CHAT`), salvo
+        # la orden del propio dueno (decision c, `frenos_de_regla`).
+        destino, linea = destino_de_ref(con, caso, pedido_chat)
     if destino and estado == "resuelto":
         nueva["chat"] = destino
+        if linea:
+            nueva["linea"] = linea
     texto, version = propuesta_canonica(nueva)
     if (caso["etapa"] == "listo" and caso["propuesta_version"] == version
             and caso["resumen"] == resumen):
@@ -5025,6 +5271,9 @@ def avance_frena(con, caso):
     None. Se mira al pedirlo y otra vez al mandarlo: entre los dos el dueno pudo cambiar el
     chat o el caso pudo moverse."""
     cid = caso["case_id"]
+    if es_rezago(con, cid):
+        return ("E_CATCH_UP", f"case #{cid} picks up earlier pending topics: its one message is "
+                              f"a proposal the owner approves, and it sends no updates")
     fila = merged_scope(con).get(caso["chat_jid"]) or {}
     modo = primer_modo(fila, merged_settings(con, linea_del_caso(caso)))[0]
     if modo not in MODOS_AGENTE_PRIMERO:
@@ -5175,7 +5424,7 @@ def instrucciones_primer_mensaje(con, caso, actor):
     siempre (el acuse no lo escribe el agente) ya va en la cabeza del caso."""
     fila = merged_scope(con).get(caso["chat_jid"]) or {}
     pm = primer_mensaje_de(fila, merged_settings(con, linea_del_caso(caso)))
-    if not pm["beta"]:
+    if not pm["beta"] or es_rezago(con, caso["case_id"]):
         return []
     cid, wa = caso["case_id"], ruta_wa_scope()
     lineas = [
@@ -5300,6 +5549,11 @@ def cmd_caso_unir(con, a):
                              f"answers one conversation")
     if destino["etapa"] == "cerrado":
         caso_falla("E_STAGE", f"case #{a.destino} is cerrado: reopen it before joining into it")
+    # Un caso que retoma lo atrasado tiene solo lo de antes (decision del dueno, 2026-10-12):
+    # lo de ahora sigue en su caso, que se contesta a tiempo.
+    if es_rezago(con, a.destino) and not es_rezago(con, a.origen):
+        caso_falla("E_CATCH_UP", f"case #{a.destino} picks up earlier pending topics: it holds "
+                                 f"old messages only, and case #{a.origen} keeps its own flow")
     motivo = f"unido a {a.destino}"
     caso_valida(origen, "cerrado", motivo)
     cuenta = cuenta_activa()
@@ -5367,13 +5621,15 @@ def cmd_caso_asignar(con, a):
 
 def caso_abierto_de_chat(con, chat, horas, excluir=("cerrado",)):
     """El caso de la conversacion que se movio en las ultimas `horas` y no esta en una de
-    las etapas `excluir`, o None. El mas reciente si hay varios."""
+    las etapas `excluir`, o None. El mas reciente si hay varios. Nunca uno que retoma lo
+    atrasado del chat (`sin_rezago_sql`): lo que llega ahora no se le suma."""
     desde = time.strftime("%Y-%m-%d %H:%M:%S",
                           time.localtime(time.time() - horas * 3600))
     marcas = ",".join("?" * len(excluir))
     row = con.execute(
         f"select * from caso where account=? and chat_jid=? and etapa not in ({marcas}) "
-        "and updated_at >= ? order by updated_at desc, case_id desc limit 1",
+        f"and updated_at >= ? and {sin_rezago_sql('caso')} "
+        "order by updated_at desc, case_id desc limit 1",
         (cuenta_activa(), chat, *excluir, desde)).fetchone()
     return dict(row) if row else None
 
@@ -6169,7 +6425,8 @@ def cmd_caso_estado(con, a):
 EXTENSIONES_AUDIO = (".opus", ".ogg", ".oga", ".mp3", ".m4a", ".aac", ".wav", ".amr")
 # Lo que ingest reporta, en este orden. `casos` va aparte: son los ids tocados.
 CONTEOS_INGEST = ("vistos", "nuevos", "casos_creados", "unidos", "cerrados", "dudosos",
-                  "sin_caso", "ignorados", "anteriores", "audios_diferidos", "respuestas")
+                  "sin_caso", "ignorados", "anteriores", "audios_diferidos", "respuestas",
+                  "rezago_casos", "rezago_atendidos")
 # La prioridad de un caso que ingest clasifica. No la inventa: ni el dueno ni un veredicto
 # cacheado dicen cuan urgente es, y `none` es la unica que no afirma nada.
 PRIORIDAD_INGEST = "none"
@@ -6197,6 +6454,12 @@ SIN_AGENTE = {
     # credencial: en un grupo con mucho movimiento, cada linea suelta despertando al agente
     # es una corrida por charla. Un pedido, o una mencion, si lo despierta.
     "grupo_no_dirigido": "una linea de un grupo que no es para el asistente y no pide nada",
+    # Lo atrasado de un chat que ya se atendio de otra forma (sin-responder): salio un mensaje
+    # de la linea despues, un caso mas nuevo del chat lo cubre, o cita algo ya resuelto. No se
+    # le escribe nada al cliente.
+    "rezago_contestado": "ya atendido: salio un mensaje despues en el chat",
+    "rezago_cubierto": "ya atendido: lo cubre un caso mas nuevo del mismo chat",
+    "rezago_resuelto": "ya atendido: cita algo de un caso ya resuelto",
 }
 # Las clases de Jev que son un pedido (o lo que merece una respuesta): lo que despierta al
 # agente aunque el mensaje no vaya dirigido a el.
@@ -6965,11 +7228,12 @@ def con_respuesta(con, m, horas):
 def caso_de_rafaga_reciente(con, chat):
     """El caso del chat que se abrio o se reabrio hace menos de RAFAGA_S y sigue esperando
     (recibido, clasificado o decision), o None. Es lo que une un mensaje que llega solo,
-    en otra corrida, a lo que su rafaga ya abrio."""
+    en otra corrida, a lo que su rafaga ya abrio; nunca a un caso que retoma lo atrasado."""
     desde = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(time.time() - RAFAGA_S))
     fila = con.execute(
         "select c.* from caso c where c.account=? and c.chat_jid=? and c.etapa in "
-        "('recibido','clasificado','decision') and exists (select 1 from caso_evento e "
+        f"('recibido','clasificado','decision') and {sin_rezago_sql('c')} "
+        "and exists (select 1 from caso_evento e "
         "where e.case_id=c.case_id and e.a='recibido' and (e.de is null or e.de <> 'recibido') "
         "and e.at >= ?) order by c.updated_at desc, c.case_id desc limit 1",
         (cuenta_activa(), chat, desde)).fetchone()
@@ -7967,6 +8231,230 @@ def cmd_doctor(con, a):
     return None
 
 
+# ── Lo atrasado de cada chat (sin-responder) ────────────────────────────────────────────
+# Visto en vivo: 31 mensajes de clientes, de hace tres dias a hace ocho horas, que nadie
+# juzgo ni contesto: la linea estuvo dias sin atenderse y lo de antes de la ventana
+# (`inbox_days`) se perdia. Decision del dueno (2026-10-12): no se vence, no se le deja como
+# tarjetas para ordenar, y no se contesta mensaje por mensaje. Lo atrasado que ya se atendio
+# (salio un mensaje de la linea despues, un caso mas nuevo del chat lo cubrio, o cita algo de
+# un caso ya resuelto) se cierra con su motivo y al cliente no le sale nada. Lo que sigue
+# abierto se retoma en UN caso por chat, juzgado como UNA rafaga: su respuesta es UN mensaje
+# que retoma los temas pendientes, sin acuse ni avances, y lo firma el dueno (`catch_up`).
+# El evento con que nace el caso que retoma lo atrasado: es lo que lo distingue despues.
+REZAGO_EVENTO = "retoma pendientes:"
+# Por que la regla del dueno no firma sola lo que sale de ese caso.
+REZAGO_FRENO = "catch_up"
+# Cuantos chats atrasados retoma una corrida: un atraso grande se reparte en varias, del chat
+# que mas espera al que menos, y cada chat entra entero.
+TOPE_REZAGO_CHATS = 5
+# Los motivos con que se cierra lo atrasado que ya se atendio: reglas de `SIN_AGENTE`, que la
+# tarjeta cerrada dice en el idioma del panel. El cubierto nombra el caso que lo cubre.
+REZAGO_CONTESTADO = motivo_sin_agente("rezago_contestado")
+REZAGO_CUBIERTO = motivo_sin_agente("rezago_cubierto") + " (#{n})"
+REZAGO_YA_RESUELTO = motivo_sin_agente("rezago_resuelto")
+# Como empieza el mensaje que retoma lo pendiente, en el ejemplo que lee el agente.
+EJEMPLO_REZAGO = "Retomando los temas pendientes:"
+# Lo que el archivo del caso le dice al agente sobre ese mensaje (en ingles, como el resto del
+# archivo). Las reglas de redaccion son del dueno: nada de fallas ni disculpas, y nada que
+# juzgue el trabajo ya hecho; lo abierto es un seguimiento.
+REGLAS_REZAGO = (
+    "These messages arrived earlier and nobody answered them. Some topics may already be "
+    "settled: read the recent conversation first (`wa-read chat`) and leave out anything "
+    "already answered or handled.",
+    "Write ONE short message for this chat that picks up the topics still open, like a "
+    "start-of-week roundup, in the chat's language and its configured tone (`voice`). For "
+    f"example, in Spanish it can open with \"{EJEMPLO_REZAGO}\". Do not answer message by "
+    "message and do not repeat greetings.",
+    "Keep it short, concrete and about the open topics only, neutral and professional.",
+    "Never say or imply that the bot, the system or the service failed, was down, did not "
+    "work or caused a delay, and never apologize for a failure.",
+    "Never say or imply that the work already done for the customer does not work, failed, "
+    "is broken, has to be redone, or was wrong or useless. Unless the customer explicitly "
+    "reported a defect in this thread, present each open topic as a pending follow-up, "
+    "without judging past work.",
+    "Leave it as a `responder` proposal (`caso propuesta`): the owner approves it before it "
+    "goes out, never the rule. Never send updates (`caso avance`) on this case.",
+)
+
+
+def seccion_de_rezago(con, caso):
+    """Las lineas del archivo del caso que retoma lo atrasado de su chat; nada en otro."""
+    if not es_rezago(con, caso["case_id"]):
+        return []
+    return ["", "## Pending topics from earlier (catch-up)",
+            *[f"- {r}" for r in REGLAS_REZAGO]]
+
+
+def es_rezago(con, case_id):
+    """Si el caso nacio retomando lo atrasado de su chat (sin-responder)."""
+    return con.execute("select 1 from caso_evento where case_id=? and de is null and "
+                       "a='recibido' and detalle like ? limit 1",
+                       (case_id, f"{REZAGO_EVENTO}%")).fetchone() is not None
+
+
+def sin_rezago_sql(alias):
+    """La condicion SQL (sobre la tabla `caso` llamada `alias`) que deja fuera los casos que
+    retoman lo atrasado de su chat: la misma regla que `es_rezago`. Lo que llega ahora nunca
+    se les suma (decision del dueno, 2026-10-12)."""
+    return (f"not exists (select 1 from caso_evento rz where rz.case_id = {alias}.case_id and "
+            f"rz.de is null and rz.a = 'recibido' and rz.detalle like '{REZAGO_EVENTO}%')")
+
+
+def rezago_reparte(con, fuente, cuenta, chat, filas):
+    """(atendidos, abiertos) de lo atrasado de un chat: `atendidos` es {motivo: [stanza]} de
+    lo que ya se atendio de otra forma, y `abiertos` las filas que siguen esperando."""
+    mia = fuente.execute("select max(ts) from mensaje where account=? and chat_jid=? and "
+                         "from_me=1 and revocado=0", (cuenta, chat)).fetchone()[0] or 0
+    nuevo = con.execute("select case_id, created_at from caso where account=? and chat_jid=? "
+                        "order by created_at desc, case_id desc limit 1",
+                        (cuenta, chat)).fetchone()
+    nuevo_ts = sello_a_epoch(nuevo["created_at"]) if nuevo else None
+    citas = sorted({f["cita_id"] for f in filas if f.get("cita_id")})
+    resueltas = set()
+    if citas:
+        resueltas = {r["stanza_id"] for r in con.execute(
+            f"select m.stanza_id from caso_mensaje m join caso c on c.case_id=m.case_id where "
+            f"m.account=? and c.etapa in ('respondido','cerrado') and m.stanza_id in "
+            f"({','.join('?' * len(citas))})", (cuenta, *citas))}
+    atendidos, abiertos = {}, []
+    for f in filas:
+        if f["ts"] <= mia:
+            motivo = REZAGO_CONTESTADO
+        elif nuevo_ts is not None and f["ts"] <= nuevo_ts:
+            motivo = REZAGO_CUBIERTO.format(n=nuevo["case_id"])
+        elif f.get("cita_id") in resueltas:
+            motivo = REZAGO_YA_RESUELTO
+        else:
+            abiertos.append(f)
+            continue
+        atendidos.setdefault(motivo, []).append(f["stanza_id"])
+    return atendidos, abiertos
+
+
+def rezago_cierra(con, chat, stanzas, actor, motivo, juicio=None):
+    """Lo atrasado que no pide nada: un caso cerrado con su motivo, que el dueno ve en el
+    tablero, y nada al cliente. Devuelve cuantos mensajes cerro."""
+    caso_toma(con)
+    try:
+        stanzas = [s for s in stanzas if not caso_de_mensaje(con, s)]
+        if not stanzas:
+            con.rollback()
+            return 0
+        case_id = caso_nuevo(con, chat, "automatizacion", stanzas=stanzas,
+                             detalle=f"{REZAGO_EVENTO} {len(stanzas)} mensajes de antes")
+        caso = caso_de(con, case_id)
+        caso_valida(caso, "cerrado", motivo)
+        caso_mover(con, caso, "cerrado", actor, motivo)
+        if juicio:
+            caso_marca_jev(con, case_id, juicio, stanzas[0])
+        con.commit()
+    except BaseException:
+        con.rollback()
+        CANCELACIONES.clear()
+        raise
+    return len(stanzas)
+
+
+def rezago_abre(con, chat, items, veredicto):
+    """Lo atrasado que sigue abierto: UN caso con todos sus mensajes, clasificado con el
+    veredicto de la rafaga, sin acuse ni saludo. Devuelve el id, o None si ya tenian caso."""
+    caso_toma(con)
+    try:
+        items = [m for m in items if not caso_de_mensaje(con, m["stanza_id"])]
+        if not items:
+            con.rollback()
+            return None
+        stanzas = [m["stanza_id"] for m in items]
+        case_id = caso_nuevo(con, chat, "automatizacion", stanzas=stanzas,
+                             detalle=f"{REZAGO_EVENTO} {len(stanzas)} mensajes sin respuesta "
+                                     f"desde {items[0].get('date') or '-'}")
+        caso_enruta(con, case_id, SEPARADOR_RAFAGA.join(
+            (m.get("text") or "").strip() for m in items if (m.get("text") or "").strip()), chat)
+        if veredicto and veredicto.get("accion") == "clasificar":
+            caso_clasifica(con, case_id, veredicto)
+        if veredicto and veredicto.get("jev"):
+            caso_marca_jev(con, case_id, veredicto["jev"], stanzas[0])
+        for m in items:
+            caso_marca_regla(con, case_id, piso_de_entrada(m), m["stanza_id"])
+        con.commit()
+    except BaseException:
+        con.rollback()
+        CANCELACIONES.clear()
+        raise
+    return case_id
+
+
+def ingest_rezago(con, cuenta, leidos, scope, decisiones, prepara, horas, total, casos):
+    """Lo atrasado de la linea: lo que nadie juzgo (`pendientes_de_linea`), la lectura de
+    esta corrida no trajo y es de antes de la ventana de casos (`horas`), de a lo mas
+    TOPE_REZAGO_CHATS chats, el que mas espera primero.
+    Lo ya atendido se cierra con su motivo; lo abierto de cada chat es UNA rafaga, juzgada en
+    el orden de siempre (lo que marco el dueno, las reglas deterministas, Jev) y retomada en
+    UN caso. Lo que nada pudo juzgar (Jev sin contestar en una linea suelta de un grupo)
+    queda como estaba: lo sigue contando la salud, y la alerta de la linea lo dice."""
+    try:
+        fuente = wa_store.abrir()
+    except wa_store.SinFuente:
+        return
+    try:
+        # Solo lo de antes de la ventana de casos (decision del dueno, 2026-10-12): lo de
+        # ahora es del flujo de siempre aunque esta corrida no lo haya leido (llego mientras
+        # corria, o la bandeja lo dejo fuera por su tope), y lo toma la corrida siguiente.
+        ahora = time.time()
+        vivo_desde = ahora - horas * 3600
+        por_chat = {}
+        for f in pendientes_de_linea(con, fuente, cuenta, ahora):
+            if f["stanza_id"] not in leidos and f["ts"] < vivo_desde:
+                por_chat.setdefault(f["chat_jid"], []).append(f)
+        for chat in sorted(por_chat, key=lambda c: por_chat[c][0]["ts"])[:TOPE_REZAGO_CHATS]:
+            entrada = scope.get(chat)
+            if not entrada or entrada.get("mode") == "off":
+                continue
+            atendidos, abiertos = rezago_reparte(con, fuente, cuenta, chat, por_chat[chat])
+            for motivo, stanzas in atendidos.items():
+                total["rezago_atendidos"] += rezago_cierra(con, chat, stanzas,
+                                                           "automatizacion", motivo)
+            if not abiertos:
+                continue
+            leidas = wa_store.inbox(fuente, 0, len(abiertos), 5, "todos", cuenta,
+                                    stanzas=[f["stanza_id"] for f in abiertos])
+            items = [prepara(m, entrada) for m in reversed(leidas)]
+            ignorados = [m["stanza_id"] for m in items
+                         if (decisiones.get(m["stanza_id"]) or {}).get("decision") == "ignore"]
+            if ignorados:
+                total["rezago_atendidos"] += rezago_cierra(con, chat, ignorados, "dueno",
+                                                           "ignorado por el dueno")
+            items = [m for m in items if m["stanza_id"] not in ignorados]
+            if not items:
+                continue
+            # Los audios se transcriben como siempre; uno que pasa el tope de la corrida
+            # entra igual, sin texto: el caso es UNO y no se parte en dos corridas.
+            hechos = {m["stanza_id"]: m for m in transcribe_nuevos(con, items, horas, total)}
+            items = [hechos.get(m["stanza_id"], m) for m in items]
+            base = mensaje_de_rafaga(items) if len(items) > 1 else items[0]
+            veredicto = veredicto_de(base, None, con)
+            if veredicto and veredicto.get("accion") == "cerrar":
+                total["rezago_atendidos"] += rezago_cierra(
+                    con, chat, [m["stanza_id"] for m in items], veredicto["actor"],
+                    veredicto.get("motivo") or motivo_sin_agente("jev_skip"),
+                    veredicto.get("jev"))
+                continue
+            if veredicto is None and base.get("kind") == "grupo":
+                if jev_cacheado(con, base) is None:
+                    # Nadie lo juzgo (Jev no contesto): sigue pendiente y a la vista.
+                    continue
+                total["rezago_atendidos"] += rezago_cierra(
+                    con, chat, [m["stanza_id"] for m in items], "jev",
+                    motivo_sin_agente("grupo_no_dirigido"), jev_cacheado(con, base))
+                continue
+            case_id = rezago_abre(con, chat, items, veredicto)
+            if case_id is not None:
+                total["rezago_casos"] += 1
+                casos.add(case_id)
+    finally:
+        fuente.close()
+
+
 def cmd_ingest(con, a):
     """Los mensajes nuevos de las conversaciones autorizadas pasan a casos.
 
@@ -8015,6 +8503,23 @@ def cmd_ingest(con, a):
     rol_de = roles_de_entrada(con)
     numero = numero_aprobacion()
     tono_global = ajustes_auto.get("tone") or DEFAULT_CONFIG["tone"]
+
+    def prepara(m, entrada):
+        return dict(
+            m, modo=entrada.get("mode"),
+            rol=rol_de(m),
+            # Lo que Jev necesita del chat para juzgar (T22.5): como escribe el asistente
+            # ahi y que hace, tal como el dueno lo configuro.
+            tono=(entrada.get("tone") or "").strip() or tono_global,
+            instrucciones=(entrada.get("instructions") or "").strip() or None,
+            # En los modos del agente (Beta) el pedido nuevo tambien se reconoce: el primer
+            # mensaje lo escribe el agente aunque el acuse fijo este apagado.
+            primer=primer_modo(entrada, ajustes_auto)[0],
+            auto_acuse=(auto_ajuste(entrada, ajustes_auto, "acuse")[0]
+                        or primer_modo(entrada, ajustes_auto)[0] in MODOS_AGENTE_PRIMERO),
+            auto_saludo=auto_ajuste(entrada, ajustes_auto, "saludo")[0],
+            sticker_suelto=(m.get("media_type") == "sticker" and not (m.get("text") or "").strip()))
+
     abren, sueltos = [], []
     # Del mas viejo al mas nuevo: el inbox viene al reves, y el primero de un pedido es
     # el que abre el caso.
@@ -8040,20 +8545,7 @@ def cmd_ingest(con, a):
             if atiende_respuesta(con, m):
                 total["respuestas"] += 1
                 continue
-        nuevos.append(dict(
-            m, modo=entrada.get("mode"),
-            rol=rol_de(m),
-            # Lo que Jev necesita del chat para juzgar (T22.5): como escribe el asistente
-            # ahi y que hace, tal como el dueno lo configuro.
-            tono=(entrada.get("tone") or "").strip() or tono_global,
-            instrucciones=(entrada.get("instructions") or "").strip() or None,
-            # En los modos del agente (Beta) el pedido nuevo tambien se reconoce: el primer
-            # mensaje lo escribe el agente aunque el acuse fijo este apagado.
-            primer=primer_modo(entrada, ajustes_auto)[0],
-            auto_acuse=(auto_ajuste(entrada, ajustes_auto, "acuse")[0]
-                        or primer_modo(entrada, ajustes_auto)[0] in MODOS_AGENTE_PRIMERO),
-            auto_saludo=auto_ajuste(entrada, ajustes_auto, "saludo")[0],
-            sticker_suelto=(m.get("media_type") == "sticker" and not (m.get("text") or "").strip())))
+        nuevos.append(prepara(m, entrada))
     nuevos = transcribe_nuevos(con, nuevos, horas, total)
     # Lo que ya tiene decision del dueno o juicio del agente se resuelve solo; el resto,
     # junto con lo que llego pegado en el mismo chat, se juzga como una rafaga.
@@ -8089,6 +8581,15 @@ def cmd_ingest(con, a):
             if veredicto and veredicto.get("accion") == "cerrar":
                 # El resto de una rafaga que no pide nada se suma a ese mismo caso cerrado.
                 veredicto.setdefault("al_caso", case_id)
+    # Lo atrasado de cada chat (sin-responder): lo de antes de la ventana que nadie juzgo.
+    # Una falla aca no deshace lo de arriba, que ya quedo: se dice y lo cuenta la salud.
+    try:
+        ingest_rezago(con, cuenta, {m.get("stanza_id") for m in mensajes}, scope,
+                      decisiones, prepara, horas, total, casos)
+    except (sqlite3.Error, OSError) as exc:
+        if con.in_transaction:
+            con.rollback()
+        print(f"wa-scope: catch-up skipped: {exc}", file=sys.stderr)
     # Lo que Jev dejo con una credencial no pasa por el agente: va al dueno ya.
     casos_credencial_a_decision(con)
     # La confirmacion de lo que el dueno contesto sale ya, no al minuto siguiente: esta
@@ -8388,7 +8889,7 @@ def que_del_evento(detalle, medios=None):
         return "project", []
     if d.startswith("autorizadas:"):
         return "authorized", []
-    if d == DETALLE_ATENDER:
+    if d == DETALLE_ATENDER or d.startswith(f"{DETALLE_ATENDER} · "):
         return "attend", []
     if "titulo y resumen nuevos" in d:
         return "retitled", []
@@ -8518,7 +9019,7 @@ def tarjetas_de(con, casos, tope_eventos=EVENTOS_EN_TARJETA):
     for c in casos:
         destino = destino_de_propuesta(c)
         if destino and nombres.get(destino) in (None, "", destino):
-            nombres[destino] = nombre_del_chat(con, destino)
+            nombres[destino] = nombre_del_destino(con, c)
     titulos = titulos_de_mensajes(con, [c["case_id"] for c in casos if not c["titulo"]])
     bloqueados = [c["case_id"] for c in casos if c["etapa"] == "bloqueado"]
     motivos = {}
@@ -9651,9 +10152,9 @@ def pestanas_del_plugin(con):
 
 def terminal_dormida(terminal):
     """Si Orca lista la terminal DORMIDA: su sesion salio y queda la pestana como
-    `liveness: sleeping`, sin pty y con un handle nuevo en cada lista. Orca no la cierra ni
-    le escribe (`terminal_handle_stale`, `terminal_asleep`), asi que ni la limpieza ni nadie
-    la reintenta (guardar-panel G8): visto en vivo, 70 cierres fallidos cada 5 minutos."""
+    `liveness: sleeping`, sin pty y con un handle nuevo en cada lista. No lee nada, asi que
+    nadie le escribe. Orca 1.4.160-lab.94 cierra su pestana (`close --tab`, con el handle de
+    la lista de ahora); la lab.93 no (`terminal_handle_stale`): ver `cierra_dormida`."""
     if not isinstance(terminal, dict):
         return False
     return (terminal.get("liveness") == "sleeping" or bool(terminal.get("sleepingAgent"))
@@ -9662,6 +10163,58 @@ def terminal_dormida(terminal):
 
 # Lo que contesta Orca a una terminal que no puede tocar: ni un /exit le llega despues.
 NO_SE_PUEDE_TOCAR = re.compile(r"\b(terminal_handle_stale|terminal_asleep)\b")
+# Una Orca que no cierra pestanas dormidas: se vuelve a probar pasado este plazo, no en cada
+# vuelta (guardar-panel G8: visto en vivo, 70 cierres fallidos cada 5 minutos).
+DORMIDAS_RECHAZO = "dormidas_rechazo_at"
+DORMIDAS_REINTENTO_S = 6 * 3600
+
+
+def dormidas_cerrables(con):
+    """Si se puede intentar cerrar una pestana dormida: Orca no dijo que no hace menos de
+    DORMIDAS_REINTENTO_S."""
+    fila = con.execute("select value from settings where key=?", (DORMIDAS_RECHAZO,)).fetchone()
+    try:
+        return not fila or time.time() - float(fila["value"]) >= DORMIDAS_REINTENTO_S
+    except (TypeError, ValueError):
+        return True
+
+
+def handle_de_pestana(cli, tab, selector=None):
+    """El handle que tiene ahora la pestana `tab` (el de una dormida cambia en cada lista), o
+    None si no esta o no se pudo listar."""
+    if not cli or not tab:
+        return None
+    args = ["terminal", "list"] + (["--worktree", selector] if selector else ["--limit", "1000"])
+    res, error = orca_llama(cli, args, DESPACHO_LISTA_S)
+    if error or not isinstance(res.get("terminals"), list):
+        return None
+    for t in res["terminals"]:
+        handle = t.get("handle") if isinstance(t, dict) else None
+        if t.get("tabId") == tab and isinstance(handle, str) and handle:
+            return handle
+    return None
+
+
+def cierra_dormida(con, cli, handle, tab=None, selector=None):
+    """Cierra la pestana dormida de un agente del plugin, sin un /exit (no lee nada). True si
+    Orca la cerro. Un `terminal_handle_stale` puede ser otro tick que listo en medio: con su
+    `tabId` se busca el handle de ahora y se prueba una vez mas. Si Orca dice que no (la
+    lab.93, o una sin `--tab`), se anota y ninguna dormida se intenta hasta pasado
+    DORMIDAS_REINTENTO_S."""
+    for intento in range(2):
+        _, error = orca_llama(cli, ["terminal", "close", "--terminal", handle, "--tab"],
+                              DESPACHO_LISTA_S)
+        if not error:
+            return True
+        if not (NO_SE_PUEDE_TOCAR.search(error) or SIN_CIERRE_DE_PESTANA.search(error)):
+            return False
+        if intento or not tab or SIN_CIERRE_DE_PESTANA.search(error):
+            break
+        handle = handle_de_pestana(cli, tab, selector)
+        if not handle:
+            return False
+    guarda_ajuste(con, DORMIDAS_RECHAZO, str(time.time()))
+    return False
 
 
 def es_raiz_del_plugin(terminal, carpeta):
@@ -9694,27 +10247,43 @@ def cierra_huerfanas(con, cli, resumen, carpeta=None, en_curso=(), ahora=None):
         f"select id, case_id, terminal from caso_despacho where estado in "
         f"({','.join('?' * len(DESPACHO_EN_VUELO))})", DESPACHO_EN_VUELO)]
     corridas = [dict(r) for r in con.execute(
-        f"select id, case_id, terminal from agente_corrida where estado in "
+        f"select id, case_id, terminal, tab from agente_corrida where estado in "
         f"({','.join('?' * len(AGENTE_EN_VUELO))})", AGENTE_EN_VUELO)]
     en_vuelo, terminadas, de_casos_cerrados = pestanas_del_plugin(con)
     # Una corrida que se esta abriendo aun no anoto su terminal: sin saber cual es, ninguna
     # pestana de agente con titulo se toca.
     abriendo = any(not x["terminal"] for x in corridas)
+    # Una dormida cambia de handle en cada lista: solo su pestana dice de quien es. Con algo
+    # en vuelo sin pestana guardada (de antes), ninguna dormida se toca.
+    sin_pestana = con.execute(
+        f"select 1 from caso_despacho where tab is null and estado in "
+        f"({','.join('?' * len(DESPACHO_EN_VUELO))})", DESPACHO_EN_VUELO).fetchone() \
+        or any(not x["tab"] for x in corridas)
+    dormidas = not sin_pestana and dormidas_cerrables(con)
+
+    def cierra(t):
+        nonlocal dormidas
+        if not terminal_dormida(t):
+            cierra_terminal(cli, t["handle"])
+            resumen["limpiados"] += 1
+        elif cierra_dormida(con, cli, t["handle"], t.get("tabId")):
+            resumen["limpiados"] += 1
+        else:
+            dormidas = dormidas_cerrables(con)
+
     for t in terminales:
         handle, tab = t.get("handle"), t.get("tabId")
         if not isinstance(handle, str) or not handle or handle in en_vuelo["handles"] \
-                or tab in en_vuelo["tabs"] or terminal_dormida(t):
+                or tab in en_vuelo["tabs"] or (terminal_dormida(t) and not dormidas):
             continue
         if (tab and tab in terminadas) or handle in de_casos_cerrados:
-            cierra_terminal(cli, handle)
-            resumen["limpiados"] += 1
+            cierra(t)
             continue
         if es_raiz_del_plugin(t, carpeta) and not abriendo \
                 and t.get("worktreeId") not in en_curso:
             quieta = marca_s(t.get("lastOutputAt"))
             if quieta and (ahora or time.time()) - quieta >= PESTANA_QUIETA_S:
-                cierra_terminal(cli, handle)
-                resumen["limpiados"] += 1
+                cierra(t)
                 continue
         m = TITULO_DE_AGENTE.search(str(t.get("title") or ""))
         if not m:
@@ -9727,8 +10296,7 @@ def cierra_huerfanas(con, cli, resumen, carpeta=None, en_curso=(), ahora=None):
             continue
         if (m["corrida"] or m["corrida_sola"] or m["agente"] or m["del_caso"]) and abriendo:
             continue
-        cierra_terminal(cli, handle)
-        resumen["limpiados"] += 1
+        cierra(t)
 
 
 def limpia_espacios(con, resumen):
@@ -9778,7 +10346,7 @@ def limpia_espacios(con, resumen):
         tocados.append(ident)
         # Primero sus terminales: con una viva adentro, `rm` dijo que si y el espacio quedo.
         for t in suyas:
-            # Una dormida no se cierra (guardar-panel G8); `rm` se lleva el espacio igual.
+            # Una dormida no hace falta cerrarla: `rm` se lleva el espacio igual (G8).
             if isinstance(t.get("handle"), str) and t["handle"] and not terminal_dormida(t):
                 orca_json(cli, ["terminal", "close", "--terminal", t["handle"]])
         orca_json(cli, ["worktree", "rm", "--worktree", f"id:{ident}"])
@@ -9809,11 +10377,41 @@ def tick_toma():
     """El candado del tick, o None si otro tick lo tiene. No espera: un tick que llega
     mientras otro envia no tiene nada que hacer que el otro no este haciendo.
 
-    Con varias lineas el candado es de cada una: la principal conserva el de siempre y
-    otra linea tiene el suyo, asi un tick ocupado (o colgado) en una no frena a otra."""
-    nombre = (CANDADO_TICK if es_linea_principal()
-              else f"tick-{re.sub(r'[^A-Za-z0-9]', '-', cuenta_activa())}.lock")
-    ruta = os.path.join(os.path.dirname(DB), nombre)
+    El candado es de cada linea, por su cuenta: un tick ocupado (o colgado) en una no frena
+    a otra. Siempre el de su cuenta, sea o no la principal: con el nombre segun quien era la
+    principal, desvincular la principal a mitad de un tick de otra linea dejaba al siguiente
+    tick de esa linea con otro candado, y corrian dos a la vez (lv3-auditoria, 5). La
+    principal toma ademas el de siempre (`tick.lock`), el que toma un tick de una version
+    anterior; `local` toma solo ese."""
+    cuenta = cuenta_activa()
+    nombres = [] if cuenta == CUENTA_LOCAL else [
+        f"tick-{re.sub(r'[^A-Za-z0-9]', '-', cuenta)}.lock"]
+    if es_linea_principal():
+        nombres.append(CANDADO_TICK)
+    tomados = []
+    for nombre in nombres:
+        fh = _toma_candado_tick(os.path.join(os.path.dirname(DB), nombre))
+        if fh is None:
+            for otro in tomados:
+                otro.close()
+            return None
+        tomados.append(fh)
+    return _Candados(tomados)
+
+
+class _Candados:
+    """Varios candados que se sueltan juntos, con el `close()` de uno solo."""
+
+    def __init__(self, archivos):
+        self.archivos = archivos
+
+    def close(self):
+        for fh in reversed(self.archivos):
+            fh.close()
+
+
+def _toma_candado_tick(ruta):
+    """Un candado de archivo sin esperar, o None si otro lo tiene."""
     os.makedirs(os.path.dirname(ruta), exist_ok=True)
     fh = open(ruta, "a+")
     try:
@@ -9884,11 +10482,18 @@ def candidatos_tick(con):
             propuesta = json.loads(caso["propuesta"])
         except (TypeError, ValueError):
             continue
+        # Una propuesta que no es un objeto no se envia: antes reventaba aca y frenaba
+        # los envios de toda la linea.
+        if not isinstance(propuesta, dict):
+            continue
         if propuesta.get("tipo") != "responder" or not propuesta.get("respuesta"):
             continue
-        # La de otro chat sale solo mientras ESE chat siga en responder.
-        if (scope.get(destino_de_propuesta(caso) or caso["chat_jid"]) or {}).get("mode") \
-                != "responder":
+        # La de otro chat sale solo mientras ESE chat siga en responder, en la linea por la
+        # que sale (la de otra linea, ordenes-del-dueno). Uno en borrador lo manda la firma
+        # del dueno (`si N` o el tablero), nunca el tick.
+        modo = modo_de_destino(con, caso) if linea_de_propuesta(caso) else \
+            (scope.get(destino_de_propuesta(caso) or caso["chat_jid"]) or {}).get("mode")
+        if modo != "responder":
             continue
         salida.append((caso, propuesta["respuesta"]))
     return salida
@@ -9932,10 +10537,11 @@ def tick_envia(caso, texto, req):
     """`wa-send --send` con el id del caso: (codigo, detalle). `None` es enviado. Nunca
     devuelve el texto del mensaje: lo que se lee de stderr es el codigo y su detalle."""
     args = [WA_SEND, f"--id={req}"]
-    if caso.get("account"):
-        args.append(f"--line={caso['account']}")
-    # Una respuesta a otro chat sale a ESE chat (respuesta-otro-chat); `wa-send` le aplica el
-    # piso y Jev con los niveles de alla.
+    if linea_de_envio(caso):
+        args.append(f"--line={linea_de_envio(caso)}")
+    # Una respuesta a otro chat sale a ESE chat (respuesta-otro-chat), por SU linea si es de
+    # otra (la orden del dueno, ordenes-del-dueno); `wa-send` le aplica el piso y Jev con los
+    # niveles de alla.
     args += ["--send", f"--timeout={PLAZO_ENVIO_TICK_S}", "--json", "--",
              destino_de_propuesta(caso) or caso["chat_jid"], texto]
     try:
@@ -10030,7 +10636,8 @@ MOTIVOS_AVISO = {
            "project_question": "la pregunta de proyecto es suya",
            "mode": "el chat no responde solo", "stale": "la propuesta tiene mas de un dia",
            "exceptions": "el caso trae excepciones", "no_instructions": "no trae instrucciones",
-           "other_chat": "va a otro chat y lo aprueba usted"},
+           "other_chat": "va a otro chat y lo aprueba usted",
+           "catch_up": "retoma temas pendientes de antes y lo aprueba usted"},
     "en": {"money": "it mentions money", "credential": "it names a credential",
            "commitment": "it commits to a date", "jev": "Jev held it",
            "jev-unavailable": "Jev did not answer", "secret": "it carries a secret",
@@ -10046,13 +10653,15 @@ MOTIVOS_AVISO = {
            "mode": "the chat does not answer on its own",
            "stale": "the proposal is more than a day old",
            "exceptions": "the case carries exceptions", "no_instructions": "it has no instructions",
-           "other_chat": "it goes to another chat and you approve it"},
+           "other_chat": "it goes to another chat and you approve it",
+           "catch_up": "it picks up earlier pending topics and you approve it"},
 }
 # Lo que dice cada aviso, en el tono del panel (de usted). `{n}` es el numero del caso.
 TEXTOS_AVISO = {
     "es": {"caso": "Caso {n}", "pide": "Pide: {x}", "espera": "Espera porque: {x}",
            "respuesta": "Respuesta propuesta: {x}", "trabajo": "Trabajo propuesto: {x}",
            "destino": "Va a: {x}",
+           "destino_linea": "Va a: {x} (sale por la linea {l})",
            "credencial": "Hay una credencial en el caso: apruebelo en el tablero, no por aqui.",
            "credencial_si": "Caso {n} lleva una credencial: apruebelo en el tablero, no por aqui.",
            "como": "Responda si {n} para aprobar, no {n} para cerrar, o {n} y su correccion.",
@@ -10071,7 +10680,7 @@ TEXTOS_AVISO = {
            "corregido": "Caso {n}: su correccion va al agente, que propone de nuevo.",
            "corrige_listo": "Caso {n} ya trae el resultado del proyecto: conteste si {n} o no {n}, "
                             "o corrijalo en el tablero.",
-           "vencido": "El aviso del caso {n} se vencio: decidalo en el tablero.",
+           "decidido": "Caso {n}: ese aviso ya se habia decidido, asi que no se hizo nada.",
            "cambio": "El caso {n} cambio desde el aviso: le llega uno nuevo si sigue esperando.",
            "no_se_pudo": "Caso {n}: no se pudo ({x}). Mirelo en el tablero.",
            "sin_confirmar": "Caso {n}: no pude confirmar su respuesta; mirelo en el tablero.",
@@ -10098,6 +10707,7 @@ TEXTOS_AVISO = {
     "en": {"caso": "Case {n}", "pide": "Asks: {x}", "espera": "Waiting because: {x}",
            "respuesta": "Proposed reply: {x}", "trabajo": "Proposed work: {x}",
            "destino": "Goes to: {x}",
+           "destino_linea": "Goes to: {x} (through the line {l})",
            "credencial": "A credential is involved: approve it on the board, not here.",
            "credencial_si": "Case {n} involves a credential: approve it on the board, not here.",
            "como": "Answer yes {n} to approve, no {n} to close, or {n} and your correction.",
@@ -10116,7 +10726,7 @@ TEXTOS_AVISO = {
            "corregido": "Case {n}: your correction goes to the agent, which proposes again.",
            "corrige_listo": "Case {n} already has the project's result: answer yes {n} or no {n}, "
                             "or correct it on the board.",
-           "vencido": "The notice for case {n} expired: decide it on the board.",
+           "decidido": "Case {n}: that notice was already settled, so nothing was done.",
            "cambio": "Case {n} changed since the notice: you get a new one if it still waits.",
            "no_se_pudo": "Case {n}: it could not be done ({x}). Check the board.",
            "sin_confirmar": "Case {n}: I could not confirm your answer; check the board.",
@@ -10183,9 +10793,10 @@ def recorta(texto, largo):
     return t if len(t) <= largo else t[:largo - 1].rstrip() + "…"
 
 
-def nombre_del_chat(con, jid):
-    """Como se llama la conversacion: el nombre del alcance, o el del almacen, o el jid."""
-    nombre = (merged_scope(con).get(jid) or {}).get("chat_name")
+def nombre_del_chat(con, jid, linea=None):
+    """Como se llama la conversacion: el nombre del alcance, o el del almacen, o el jid.
+    `linea`: la de otra linea (el destino de una orden del dueno); sin ella, esta."""
+    nombre = (merged_scope(con, linea).get(jid) or {}).get("chat_name")
     if nombre and nombre != jid:
         return nombre
     try:
@@ -10194,7 +10805,7 @@ def nombre_del_chat(con, jid):
         return nombre or jid
     try:
         fila = fuente.execute("select chat_name from chat where account=? and chat_jid=?",
-                              (cuenta_activa(), jid)).fetchone()
+                              (linea or cuenta_activa(), jid)).fetchone()
         return (fila["chat_name"] if fila and fila["chat_name"] else None) or nombre or jid
     except sqlite3.Error:
         return nombre or jid
@@ -10238,7 +10849,11 @@ def espera_del_dueno(con, caso):
         if " veces (" in d and "lo decide el dueno" in d and d.endswith(marca):
             return _codigos(d.split("(", 1)[1].split(")", 1)[0])
     # En un chat `borrador` toda respuesta espera el visto del dueno: el tick no la intenta
-    # (`candidatos_tick` solo toma `responder`), asi que no queda freno que lo anote.
+    # (`candidatos_tick` solo toma `responder`), asi que no queda freno que lo anote. Lo mismo
+    # con un destino en borrador, la orden del dueno (ordenes-del-dueno): en SU linea.
+    if (propuesta_tipo(caso) == "responder" and destino_de_propuesta(caso)
+            and modo_de_destino(con, caso) == "borrador"):
+        return ["borrador", OTRO_CHAT]
     if (propuesta_tipo(caso) == "responder"
             and (merged_scope(con).get(caso["chat_jid"]) or {}).get("mode") == "borrador"):
         return ["borrador"]
@@ -10366,7 +10981,11 @@ def texto_de_aviso(con, caso, motivos):
     destino = destino_de_propuesta(caso)
     if destino:
         # A donde va, antes del texto: el dueno aprueba las dos cosas (respuesta-otro-chat).
-        lineas.append(tx["destino"].format(x=recorta(nombre_del_chat(con, destino), LARGO_PIDE)))
+        nombre = recorta(nombre_del_destino(con, caso), LARGO_PIDE)
+        linea = linea_de_propuesta(caso)
+        # Por otra linea (la orden del dueno, ordenes-del-dueno): el aviso dice cual.
+        lineas.append(tx["destino_linea"].format(x=nombre, l=etiqueta_de_linea(linea)) if linea
+                      else tx["destino"].format(x=nombre))
     if cuerpo:
         lineas.append(tx["trabajo" if tipo == "trabajar" else "respuesta"]
                       .format(x=recorta(cuerpo, LARGO_PROPUESTA)))
@@ -10662,25 +11281,39 @@ def envia_avisos(con, resumen=None, inicio=None):
 
 
 def avisos_vigentes(con):
-    """Los avisos de aprobacion que todavia se pueden contestar: enviados, sin contestar,
-    dentro de `approval_hours`, y con el caso todavia en la version que avisaron. Los de esta
-    linea y los de otra que salieron por esta (linea-viva V6): el dueno contesta donde le
-    llego. Un aviso y su recordatorio (linea-viva-2, W4) son UNA propuesta: queda el mas
-    nuevo."""
+    """Los avisos de aprobacion que un `si` o un `no` a secas (sin numero y sin citar un
+    aviso) puede contestar: abiertos (`aviso_estado`) y enviados dentro de `approval_hours`.
+    La edad cuenta solo aca: a secas, el dueno contesta lo que acaba de leer; uno viejo lo
+    contesta con su numero o citandolo, y eso vale siempre. Los de esta linea y los de otra
+    que salieron por esta (linea-viva V6): el dueno contesta donde le llego. Un aviso y su
+    recordatorio (linea-viva-2, W4) son UNA propuesta: queda el mas nuevo."""
     horas = horas_aprobacion(con)
     salida = {}
     for f in con.execute("select * from aviso where tipo='aprobacion' and (account=? or "
                          "sale_por=?) and estado='enviado' order by at, rowid",
                          (cuenta_activa(), cuenta_activa())).fetchall():
-        if aviso_estado(con, f, horas) is None:
+        if (aviso_estado(con, f) is None
+                and edad_de(f["enviado_at"] or f["at"]) <= horas * 3600):
             salida[(f["case_id"], f["version"])] = f
     return list(salida.values())
 
 
-def aviso_estado(con, aviso, horas):
-    """Por que ese aviso ya no vale (`vencido` | `cambio`), o None si vale."""
-    if edad_de(aviso["enviado_at"] or aviso["at"]) > horas * 3600:
-        return "vencido"
+def aviso_estado(con, aviso):
+    """Por que ese aviso ya no se contesta (`decidido` | `cambio`), o None si sigue abierto.
+
+    La edad no cuenta (decision del dueno, 2026-10-12): el `si N`, el `no N` o la respuesta
+    que cita el aviso valen aunque el aviso sea viejo; `approval_hours` solo dice cuanto
+    espera un aviso para salir y cuando se recuerda. `decidido`: ya se contesto, el caso se
+    cerro, o esa version ya se aprobo o ya salio. `cambio`: el caso tiene otra propuesta o
+    ya no espera esa decision por otra razon."""
+    caso = con.execute("select etapa, propuesta_version, propuesta_aprobada from caso where "
+                       "case_id=?", (aviso["case_id"],)).fetchone()
+    if aviso["estado"] == "contestado" or (caso and (
+            caso["etapa"] == "cerrado"
+            or (caso["propuesta_version"] == aviso["version"]
+                and (caso["propuesta_aprobada"] == aviso["version"]
+                     or caso["etapa"] == "respondido")))):
+        return "decidido"
     if aviso["estado"] != "enviado" or version_superada(con, aviso):
         return "cambio"
     return None
@@ -10764,7 +11397,7 @@ def atiende_respuesta(con, m, relevado=None):
     texto = tx["sin_confirmar"].format(n=n)
     tomo_aviso = False
     try:
-        porque = aviso_estado(con, aviso, horas_aprobacion(con))
+        porque = aviso_estado(con, aviso)
         # Despues se toma el aviso: dos respuestas distintas (si en un proceso, no en otro)
         # pueden haberlo visto vigente las dos, y decide solo la primera que lo toma. Lo
         # mismo entre un aviso y su recordatorio: uno tomado frena al otro.
@@ -10988,12 +11621,16 @@ def entrega_del_dueno(con, caso, tx):
     n, version = caso["case_id"], caso["propuesta_version"]
     req = id_envio_caso(n, version)
     texto = respuesta_de_propuesta(caso)
-    if destino_de_propuesta(caso):
+    destino = destino_de_propuesta(caso)
+    # Un destino en borrador (la orden del dueno, ordenes-del-dueno) sale como cualquier chat
+    # en borrador: la firma del dueno lo manda. Otro destino pasa por el piso y Jev de alla.
+    if destino and modo_de_destino(con, caso) != "borrador":
         return entrega_a_otro_chat(con, caso, texto, tx)
-    args = [WA_SEND, f"--id={req}"] + ([f"--line={caso['account']}"] if caso.get("account") else [])
+    linea = linea_de_envio(caso)
+    args = [WA_SEND, f"--id={req}"] + ([f"--line={linea}"] if linea else [])
     con_llave = dict(os.environ, **{VARIABLE_APROBADOR: llave_aprobador() or ""})
-    pasos = ((args + [f"--timeout={PLAZO_ENVIO_TICK_S}", "--json", "--", caso["chat_jid"], texto],
-              None),
+    pasos = ((args + [f"--timeout={PLAZO_ENVIO_TICK_S}", "--json", "--", destino or caso["chat_jid"],
+                      texto], None),
              ([WA_SEND, "--approve", req, "--by", "whatsapp-reply",
                f"--timeout={PLAZO_ENVIO_TICK_S}", "--json"], con_llave))
     for paso, env in pasos:
@@ -11019,6 +11656,12 @@ def entrega_del_dueno(con, caso, tx):
     except BaseException:
         con.rollback()
         raise
+    if destino:
+        if caso["chat_jid"] == numero_aprobacion():
+            # La respuesta a este aviso ya lo dice: la confirmacion del tick no se repite.
+            anota_confirmacion(con, caso, "en la respuesta al aviso")
+        return tx["aprobado_destino"].format(n=n, chat=recorta(nombre_del_destino(con, caso),
+                                                                LARGO_PIDE))
     return tx["aprobado_sale"].format(n=n)
 
 
@@ -11028,7 +11671,7 @@ def entrega_a_otro_chat(con, caso, texto, tx):
     revisan con los niveles de alla, y lo que frenen queda para el tablero. Devuelve la
     confirmacion, que nombra el chat."""
     n, version = caso["case_id"], caso["propuesta_version"]
-    chat = recorta(nombre_del_chat(con, destino_de_propuesta(caso)), LARGO_PIDE)
+    chat = recorta(nombre_del_destino(con, caso), LARGO_PIDE)
     req = id_envio_caso(n, version)
     estados, vivo = envios_del_almacen([req])
     if not vivo:
@@ -11099,7 +11742,7 @@ def tick_confirma_destinos(con, resumen):
         req = id_envio_caso(caso["case_id"], caso["propuesta_version"])
         if estados.get(req) != "enviado":
             continue
-        chat = recorta(nombre_del_chat(con, destino_de_propuesta(caso)), LARGO_PIDE)
+        chat = recorta(nombre_del_destino(con, caso), LARGO_PIDE)
         texto = tx["enviado_a"].format(n=caso["case_id"], chat=chat)
         # Al chat del caso: sin la propuesta, `tick_envia` escribe en el del caso.
         codigo, _ = tick_envia(dict(caso, propuesta=None), texto, f"{req}-ok")
@@ -11618,9 +12261,21 @@ def cmd_tick(con, a):
             if con.in_transaction:
                 con.rollback()
             print(f"wa-scope: agent updates skipped: {exc}", file=sys.stderr)
-        candidatos = candidatos_tick(con)
-        estados, vivo = envios_del_almacen(
-            [id_envio_caso(c["case_id"], c["propuesta_version"]) for c, _ in candidatos])
+        # Lo que envia, atrapado como lo demas (lv3-auditoria, 2): un caso roto aca se
+        # llevaba el despacho, el agente, los avisos y el tablero. Una vuelta sin esto no es
+        # un tick entero: no anota `tick_ok_at`, y la salud lo ve.
+        entero = True
+        try:
+            candidatos = candidatos_tick(con)
+            estados, vivo = envios_del_almacen(
+                [id_envio_caso(c["case_id"], c["propuesta_version"]) for c, _ in candidatos])
+        except Exception as exc:
+            if con.in_transaction:
+                con.rollback()
+            entero = False
+            candidatos, estados, vivo = [], {}, False
+            resumen["errores"] += 1
+            print(f"wa-scope: sends skipped: {exc}", file=sys.stderr)
         if candidatos and not vivo:
             # Sin la linea corriendo no se firma ni se encola nada: quedaria aprobado por
             # la regla algo que no salio. El minuto siguiente lo intenta de nuevo.
@@ -11723,6 +12378,11 @@ def cmd_tick(con, a):
             if con.in_transaction:
                 con.rollback()
             resumen["limpieza_error"] += 1
+        if entero:
+            try:
+                tick_anota(con, "tick_ok_at")
+            except sqlite3.Error as exc:
+                print(f"wa-scope: tick end not recorded: {exc}", file=sys.stderr)
     finally:
         candado.close()
     print(json.dumps(resumen, ensure_ascii=False))
@@ -12006,8 +12666,9 @@ def tick_caso(con, caso, texto, estados, resumen):
             resumen["bloqueados"] += 1
         return
     # Sin peticion, o pendiente (un tick anterior se quedo sin veredicto): la regla firma
-    # —idempotente si ya firmo— y se pregunta con el MISMO id. Una respuesta a otro chat no
-    # la firma nunca la regla: sale solo con la firma del dueno (respuesta-otro-chat).
+    # —idempotente si ya firmo— y se pregunta con el MISMO id. Una respuesta a otro chat la
+    # firma la regla solo si la ordeno el dueno (decision c, `frenos_de_regla`); la de un
+    # Super admin sale solo con la firma del dueno (respuesta-otro-chat).
     firmada_por_dueno = (destino_de_propuesta(caso) is not None
                          and caso.get("propuesta_aprobada") == version)
     try:
@@ -12031,7 +12692,8 @@ def tick_caso(con, caso, texto, estados, resumen):
         return
     if codigo == ENVIO_FRENADO:
         motivos = motivos_del_freno(detalle)
-        niv = (merged_scope(con).get(destino_de_propuesta(caso) or caso["chat_jid"]) or {}) \
+        niv = (merged_scope(con, linea_de_propuesta(caso))
+               .get(destino_de_propuesta(caso) or caso["chat_jid"]) or {}) \
             .get("niveles") or wa_reglas.niveles(None)
         if freno_revisable(motivos, niv):
             rondas = rondas_de_revision(con, cid)
@@ -12299,10 +12961,12 @@ def casos_por_reintentar(con):
 
 def caso_espera_cliente(con, chat):
     """El caso de la conversacion que espera la respuesta del cliente a una pregunta del
-    agente del proyecto (su despacho `necesita`), ya enviada; o None."""
+    agente del proyecto (su despacho `necesita`), ya enviada; o None. Nunca uno que retoma
+    lo atrasado del chat: lo que llega ahora no se le suma."""
     row = con.execute(
         "select c.* from caso c join caso_despacho d on d.case_id = c.case_id where "
-        "c.account=? and c.chat_jid=? and c.etapa in ('respondido','trabajo') and "
+        f"c.account=? and c.chat_jid=? and {sin_rezago_sql('c')} and "
+        "c.etapa in ('respondido','trabajo') and "
         "(d.estado='esperando' or (d.estado in ('lanzando','activo') and d.resultado='necesita')) "
         "order by d.id desc limit 1", (cuenta_activa(), chat)).fetchone()
     return dict(row) if row else None
@@ -12932,11 +13596,14 @@ def brief_de_despacho(con, caso, proyecto, instrucciones):
     a_otro_chat = [
         "",
         "## Where your reply goes",
-        f"The owner asked to report the result to another chat of this line: "
-        f"{' '.join(nombre_del_chat(con, destino).split())} ({destino}), not to the chat "
+        f"The owner asked to report the result to another chat "
+        f"{'of the line ' + linea_de_propuesta(caso) if linea_de_propuesta(caso) else 'of this line'}: "
+        f"{' '.join(nombre_del_destino(con, caso).split())} ({destino}), not to the chat "
         f"of this case. Your `resuelto` --respuesta goes there, so write it for the people "
-        f"of that chat. It waits for the owner's approval before it goes out, and the plugin "
-        f"tells this case's chat once it is sent. A `necesita` question goes to whoever "
+        f"of that chat. " + ("The owner's own order goes out once the plugin's review passes "
+                             "(no second approval)" if del_dueno else
+                             "It waits for the owner's approval before it goes out") +
+        f", and the plugin tells this case's chat once it is sent. A `necesita` question goes to whoever "
         f"asked, in this case's chat.",
     ] if destino else []
     cola = [
@@ -12984,7 +13651,8 @@ def brief_de_despacho(con, caso, proyecto, instrucciones):
         f"evidence: commit, PR or ticket link, files, test output>\" --respuesta \"<reply>\"",
         *([f"When the owner (or a Super admin) asked you to report to another chat of this "
            f"line, add --chat \"<jid>\" to that command (`{wa} caso destinos {cid}` lists the "
-           f"candidates): the reply goes there after the owner's approval, never before."]
+           f"candidates): the owner's own order goes out once the plugin's review passes; a "
+           f"Super admin's waits for the owner's approval, never before."]
           if del_dueno or rol_del_caso(con, caso) == wa_store.ROL_ADMIN else []),
         (REPORTE_DUENO["necesita"] if del_dueno else
          "A real doubt that would make the work wrong or a guess (missing data, an ambiguous "
@@ -13155,15 +13823,18 @@ def cabeza_del_caso(con, caso, del_dueno=None, operador=None, de_casos=True):
     # Si lo que pide el caso puede reportarse a OTRO chat (respuesta-otro-chat): solo el
     # dueno o un Super admin de esta conversacion; lo decide el id, como el rol.
     # El agente de casos lo propone; el del proyecto no propone: reporta con `caso resultado
-    # --chat` (guardar-panel G5), y espera la firma del dueno igual.
+    # --chat` (guardar-panel G5), y espera la firma del dueno igual, salvo la orden del
+    # propio dueno (decision c).
     puede_otro_chat = del_dueno or rol_del_caso(con, caso) == wa_store.ROL_ADMIN
     if not de_casos and puede_otro_chat:
         lineas.append(f"- Reply to another chat: allowed (the owner or a Super admin of this "
                       f"chat asked). When he asks you to report the result to another chat, "
                       f"add `--chat <jid>` to `caso resultado {caso['case_id']} --estado "
                       f"resuelto`; if he does not name it, `caso destinos {caso['case_id']}` "
-                      f"lists the candidates. It waits for the owner's approval before it "
-                      f"goes out")
+                      f"lists the candidates. "
+                      + ("The owner's own order goes out once the plugin's review passes"
+                         if del_dueno else "It waits for the owner's approval before it goes "
+                                           "out"))
     elif not de_casos:
         lineas.append("- Reply to another chat: no (a customer's case: your reply goes to "
                       "this chat only)")
@@ -13171,11 +13842,24 @@ def cabeza_del_caso(con, caso, del_dueno=None, operador=None, de_casos=True):
         lineas.append(f"- Reply to another chat: allowed (the owner or a Super admin of this "
                       f"chat asked). When he asks to report to another chat, propose with "
                       f"`caso propuesta {caso['case_id']} ... --chat <jid>`; if he does not name "
-                      f"it, `caso destinos {caso['case_id']}` lists the candidates")
+                      f"it, `caso destinos {caso['case_id']}` lists the candidates"
+                      + (". The owner's own order also reaches a chat of another linked line "
+                         "(it goes out through that line) and a chat in borrador"
+                         if del_dueno else ""))
+        # Nunca en silencio (ordenes-del-dueno): una negativa vuelve a quien lo pidio.
+        lineas.append(f"- If the plugin refuses the destination (E_DEST_*, exit 2), never drop "
+                      f"the order: propose a reply in THIS chat (no --chat) saying in plain words "
+                      f"why it cannot go and what would make it possible (the detail says how "
+                      f"to enable a chat); with E_DEST_AMBIGUOUS, name the candidates of its "
+                      f"detail (name and line) and ask which one")
     else:
         lineas.append("- Reply to another chat: no (a customer's case: the reply goes to "
                       "this chat only)")
     modo = primer_modo(chat, merged_settings(con, linea_del_caso(caso)))[0]
+    if es_rezago(con, cid):
+        lineas.append("- First message: none on this case: it picks up earlier pending topics "
+                      "in one message the owner approves (see below)")
+        return lineas + instrucciones_del_chat(chat)
     lineas.append(f"- First message: first_reply_mode {modo} (Beta): you write it, see "
                   f"\"First message and updates\" below" if modo in MODOS_AGENTE_PRIMERO else
                   f"- First message: first_reply_mode {modo}: the plugin sends the fixed "
@@ -13215,7 +13899,7 @@ def historia_del_caso(con, caso):
         destino = destino_de_propuesta(caso)
         if destino:
             # Un rehacer conserva el destino: `caso propuesta --chat <jid>` otra vez.
-            lineas.append(f"Goes to another chat: {' '.join(nombre_del_chat(con, destino).split())}"
+            lineas.append(f"Goes to another chat: {' '.join(nombre_del_destino(con, caso).split())}"
                           f" ({destino}); keep it with --chat {destino}")
         for campo in ("respuesta", "instrucciones"):
             if propuesta.get(campo):
@@ -13285,8 +13969,8 @@ def seccion_de_linea(caso):
 def archivo_de_caso(con, caso):
     """El archivo del caso para el agente de casos, en ingles."""
     cid = caso["case_id"]
-    cola = (seccion_de_linea(caso) + seccion_de_pregunta(con, caso)
-            + historia_del_caso(con, caso)
+    cola = (seccion_de_linea(caso) + seccion_de_rezago(con, caso)
+            + seccion_de_pregunta(con, caso) + historia_del_caso(con, caso)
             + instrucciones_primer_mensaje(con, caso, "agente")) + [
         "", "## The whole record, if you need it",
         f"{ruta_wa_scope()} caso ver {cid} --json",
@@ -13411,9 +14095,10 @@ def cierra_terminal(cli, handle, selector=None, detener_espacio=False):
         orca_llama(cli, ["terminal", "stop", "--worktree", selector], DESPACHO_LISTA_S)
 
 
-def cierra_pestana(cli, tab, selector):
+def cierra_pestana(con, cli, tab, selector):
     """Cierra la pestana `tab` del espacio con el handle que tenga ahora: la terminal que el
-    plugin abrio ya no vive, pero Orca pudo dejar la pestana con otro shell o con Claude."""
+    plugin abrio ya no vive, pero Orca pudo dejar la pestana con otro shell, con Claude, o
+    dormida (`cierra_dormida`)."""
     if not cli or not tab or not selector:
         return
     res, error = orca_llama(cli, ["terminal", "list", "--worktree", selector], DESPACHO_LISTA_S)
@@ -13421,10 +14106,13 @@ def cierra_pestana(cli, tab, selector):
         return
     for t in res["terminals"]:
         handle = t.get("handle") if isinstance(t, dict) else None
-        if t.get("tabId") == tab and isinstance(handle, str) and handle \
-                and not terminal_dormida(t):
+        if t.get("tabId") != tab or not isinstance(handle, str) or not handle:
+            continue
+        if not terminal_dormida(t):
             cierra_terminal(cli, handle)
-            return
+        elif dormidas_cerrables(con):
+            cierra_dormida(con, cli, handle, tab, selector)
+        return
 
 
 def terminales_vivas(cli, selector):
@@ -13986,7 +14674,7 @@ def tick_vigila_agente(con, cli, resumen):
         if vivas is None:
             continue
         if f["terminal"] not in vivas:
-            cierra_pestana(cli, f.get("tab"), f["workspace_selector"])
+            cierra_pestana(con, cli, f.get("tab"), f["workspace_selector"])
             agente_cierra(con, None, f, "terminado")
             continue
         if not f["turno_at"]:
@@ -14160,7 +14848,8 @@ DETALLE_ATENDER = "the owner asked the agent to handle it now"
 def atendido_por_dueno(con, case_id):
     """Si el dueno apreto Atender ahora en este caso."""
     return con.execute("select 1 from caso_evento where case_id=? and actor='dueno' and "
-                       "detalle=? limit 1", (case_id, DETALLE_ATENDER)).fetchone() is not None
+                       "(detalle=? or detalle like ?) limit 1",
+                       (case_id, DETALLE_ATENDER, f"{DETALLE_ATENDER} · %")).fetchone() is not None
 
 
 def casos_para_agente(con):
@@ -14273,13 +14962,14 @@ TICK_VIVO_S = 180
 CRON_ARREGLA = ("sin-cli", "sin-espacio", "sin-prompt")
 
 
-def tick_anota(con):
+def tick_anota(con, nombre="tick_at"):
     """Cuando corrio el tick: lo lee el precheck del cron. Cada linea anota el suyo
     (`tick_at@<cuenta>`, linea-viva V2): con uno solo, el tick de una linea tapaba que el de
     la otra no corria (visto en vivo: seis horas y media sin juzgar nada). El global sigue,
-    para lo que lo lee de antes."""
+    para lo que lo lee de antes. `tick_ok_at` es cuando TERMINO uno entero (lv3-auditoria,
+    2): `tick_at` se anota al arrancar y no dice si lo que envia llego a correr."""
     ahora_s = str(time.time())
-    for clave in dict.fromkeys(("tick_at", rastro("tick_at"))):
+    for clave in dict.fromkeys((nombre, rastro(nombre))):
         con.execute("insert into settings (key,value) values (?,?) on conflict(key) "
                     "do update set value=excluded.value", (clave, ahora_s))
     con.commit()
@@ -14296,7 +14986,7 @@ def tick_previo(con):
 
 
 # ── El worker muerto (odd/tasks/linea-viva-2.md, W5) ──────────────────────────────────────
-# El worker late cada 5 s en el storage del plugin (`workerBeat.at`, main.mjs). Con el muerto
+# El worker late cada 20 s en el storage del plugin (`workerBeat.at`, main.mjs). Con el muerto
 # se van el respaldo del tick y los avisos de las lineas (linea-viva V4 y V5), y nada lo
 # decia. El tick, que corre Orca, lo mira: un latido de mas de 3 minutos sale en el resumen
 # (`worker_muerto`), y al dueno le llega UN aviso por incidente (el incidente es ese latido)
@@ -14378,6 +15068,10 @@ def pendiente_agente(con, precheck=False):
     tambien 1 callado mientras el tick se encarga del agente."""
     casos = casos_para_agente(con)
     if not casos or (precheck and tick_se_encarga(con)):
+        # El hijo de `por_cada_linea` dice su JSON tambien sin trabajo: un 1 sin JSON es una
+        # linea que revento, no una al dia (lv3-auditoria, 4).
+        if os.environ.get(REPARTO_ENV):
+            print(json.dumps({"needs_agent": 0, "cases": []}))
         sys.exit(1)
     print(json.dumps({"needs_agent": len(casos), "cases": casos}, ensure_ascii=False))
     sys.exit(0)
@@ -14400,43 +15094,63 @@ def edad_s(desde, ahora_s):
         return None
 
 
-def sin_juzgar_de_linea(con, fuente, cuenta, ahora_s):
-    """Los `ts` de lo que llego a la linea y nadie juzgo: entrante, no revocado, de la
-    ventana de casos, en una conversacion autorizada y no `off` de ESA linea, sin fila en
-    `caso_mensaje` ni veredicto en `juicio` (el suyo, o el de la rafaga que lo incluye).
+def corte_sin_juzgar(con, cuenta, ahora_s):
+    """Desde cuando un mensaje que nadie juzgo sigue siendo de alguien (sin-responder), en
+    epoch: la linea base de ingest de la linea (la que fijaria su primera corrida, si todavia
+    no corrio: lo de antes de estrenarla no se importa) y nunca antes de lo que guarda el
+    almacen (`capture_days`). Ni `inbox_days` ni `case_window_hours` lo acortan: visto en
+    vivo, una linea que estuvo dias sin atenderse perdia todo lo anterior a la ventana, sin
+    caso, sin respuesta y sin que la alerta lo viera."""
+    base = base_ingest_guardada(con, cuenta)
+    if base is None:
+        base = ahora_s - ventana_casos(con, cuenta) * 3600
+    dias = wa_store.entero(wa_store.ajustes(cuenta), "capture_days")
+    return max(base, ahora_s - dias * 86400)
+
+
+def pendientes_de_linea(con, fuente, cuenta, ahora_s):
+    """Lo que llego a la linea y nadie juzgo, del mas viejo al mas nuevo: entrante, no
+    revocado, desde `corte_sin_juzgar`, en una conversacion autorizada y no `off` de ESA
+    linea, sin fila en `caso_mensaje` ni veredicto en `juicio` (el suyo, o el de la rafaga
+    que lo incluye). Filas con `chat_jid`, `stanza_id`, `ts` y `cita_id`. Es la misma regla
+    para la salud y para lo atrasado que retoma ingest.
 
     No cuenta lo que ingest no juzga a proposito: lo de antes de su linea base (o de la de
-    una autorizacion que siguio a un directo), las respuestas del dueno a un aviso, y una
+    una autorizacion que siguio a un directo), las respuestas del dueno a un aviso, una
     linea suelta de un grupo sin Jev en la linea (sin Jev queda sin caso, y no es una linea
-    parada)."""
+    parada), y un sticker suelto de un grupo (la regla lo cierra sin caso ni juicio)."""
     scope = merged_scope(con, cuenta)
     autorizados = {jid for jid, e in scope.items() if e.get("mode") != "off"}
     if not autorizados:
         return []
-    horas = ventana_casos(con, cuenta)
-    dias = wa_store.entero(wa_store.ajustes(cuenta), "inbox_days")
-    desde = max(ahora_s - horas * 3600, ahora_s - dias * 86400,
-                base_ingest_guardada(con, cuenta) or 0)
+    desde = corte_sin_juzgar(con, cuenta, ahora_s)
     bases = bases_lid(con, cuenta)
     con_jev = bool(jev_en_linea(cuenta) and wa_jev.llave())
     marcas = ",".join("?" * len(autorizados))
     filas = fuente.execute(
-        "select m.chat_jid, m.stanza_id, m.ts, m.menciona_me, m.cita_me, c.is_group "
+        f"select m.chat_jid, m.stanza_id, m.ts, m.menciona_me, m.cita_me, c.is_group, "
+        f"m.media_type, m.body, {wa_store.columna_cita(fuente)} cita_id "
         "from mensaje m join chat c on c.account = m.account and c.chat_jid = m.chat_jid "
         "where m.account = ? and m.from_me = 0 and m.revocado = 0 and m.ts >= ? "
-        f"and m.chat_jid in ({marcas})", (cuenta, int(desde), *sorted(autorizados))).fetchall()
+        f"and m.chat_jid in ({marcas}) order by m.ts, m.rowid",
+        (cuenta, int(desde), *sorted(autorizados))).fetchall()
     candidatos = [f for f in filas if f["ts"] >= bases.get(f["chat_jid"], 0)
-                  and (con_jev or wa_store.clase_de(f) != "grupo")]
+                  and (wa_store.clase_de(f) != "grupo"
+                       or (con_jev and not (f["media_type"] == "sticker"
+                                            and not (f["body"] or "").strip())))]
     if not candidatos:
         return []
     stanzas = sorted({f["stanza_id"] for f in candidatos})
-    de_ellos = ",".join("?" * len(stanzas))
-    juzgados = {r["stanza_id"] for r in con.execute(
-        f"select stanza_id from caso_mensaje where account=? and stanza_id in ({de_ellos}) "
-        f"union select stanza_id from aviso where tipo='respuesta' and account=? and "
-        f"stanza_id in ({de_ellos})", (cuenta, *stanzas, cuenta, *stanzas))}
+    juzgados = set()
+    for i in range(0, len(stanzas), 400):
+        parte = stanzas[i:i + 400]
+        de_ellos = ",".join("?" * len(parte))
+        juzgados.update(r["stanza_id"] for r in con.execute(
+            f"select stanza_id from caso_mensaje where account=? and stanza_id in ({de_ellos}) "
+            f"union select stanza_id from aviso where tipo='respuesta' and account=? and "
+            f"stanza_id in ({de_ellos})", (cuenta, *parte, cuenta, *parte)))
     # Jev juzga una rafaga bajo su primer mensaje: los demas van en `rafaga`. Un veredicto
-    # se escribe despues de que llego su mensaje: los de antes de la ventana no hacen falta.
+    # se escribe despues de que llego su mensaje: los de antes del corte no hacen falta.
     for r in con.execute(f"select stanza_id, rafaga from juicio where account=? and "
                          f"chat_jid in ({marcas}) and at >= ?",
                          (cuenta, *sorted(autorizados),
@@ -14448,17 +15162,28 @@ def sin_juzgar_de_linea(con, fuente, cuenta, ahora_s):
             rafaga = []
         if isinstance(rafaga, list):
             juzgados.update(s for s in rafaga if isinstance(s, str))
-    return [f["ts"] for f in candidatos if f["stanza_id"] not in juzgados]
+    return [{k: f[k] for k in ("chat_jid", "stanza_id", "ts", "cita_id")}
+            for f in candidatos if f["stanza_id"] not in juzgados]
+
+
+def sin_juzgar_de_linea(con, fuente, cuenta, ahora_s):
+    """Los `ts` de lo que llego a la linea y nadie juzgo (`pendientes_de_linea`)."""
+    return [f["ts"] for f in pendientes_de_linea(con, fuente, cuenta, ahora_s)]
 
 
 def cmd_lineas_salud(con, a):
     """`lineas-salud`: UN objeto JSON, `{"at": <epoch>, "lineas": [...]}`, con una fila por
     linea activa en el orden de `lineas_activas` (la principal primero): `cuenta`,
-    `principal`, hace cuanto corrio su tick (`tick_hace_s`, null si nunca), cuantos mensajes
+    `principal`, hace cuanto corrio su tick (`tick_hace_s`, null si nunca) y hace cuanto
+    termino uno entero (`tick_ok_hace_s`, null si nunca: lv3-auditoria, 2), cuantos mensajes
     llegaron y nadie juzgo (`sin_juzgar`) y hace cuanto llego el mas viejo de esos
     (`sin_juzgar_hace_s`, null sin ninguno), y el ultimo latido del sidecar
-    (`latido_hace_s`). Sin almacen o sin lineas, `lineas` vacia. Sale 0 aunque una linea
-    este parada: decidir que hacer es de quien lee."""
+    (`latido_hace_s`). Una linea viva que no esta anotada en el almacen lleva ademas
+    `"fuera_de_lista": true` (linea-fuera-de-lista): se atiende igual, pero es un incidente.
+    Una linea que no se pudo leer (una base tomada, un dato roto) sale con `cuenta`,
+    `principal` y su `error` corto, y las demas con lo suyo: el fallo de una no deja sin
+    salud a todas (lv3-auditoria, 1). Sin almacen o sin lineas, `lineas` vacia. Sale 0
+    aunque una linea este parada: decidir que hacer es de quien lee."""
     ahora_s = time.time()
     filas = []
     try:
@@ -14467,18 +15192,29 @@ def cmd_lineas_salud(con, a):
         fuente = None
     if fuente is not None:
         try:
+            anotadas = wa_store.lineas_anotadas(fuente)
             for n, cuenta in enumerate(wa_store.lineas_activas(fuente)):
-                # El de ESA linea (V8): el global lo late cualquiera, y con dos lineas la
-                # viva hacia ver viva a la caida.
-                latido = wa_store.ultimo_latido(fuente, cuenta)
-                tick = con.execute("select value from settings where key=?",
-                                   (rastro("tick_at", cuenta),)).fetchone()
-                sin = sin_juzgar_de_linea(con, fuente, cuenta, ahora_s)
-                filas.append({"cuenta": cuenta, "principal": n == 0,
-                              "tick_hace_s": edad_s(tick["value"] if tick else None, ahora_s),
-                              "sin_juzgar": len(sin),
-                              "sin_juzgar_hace_s": edad_s(min(sin) if sin else None, ahora_s),
-                              "latido_hace_s": edad_s(latido, ahora_s)})
+                try:
+                    # El de ESA linea (V8): el global lo late cualquiera, y con dos lineas la
+                    # viva hacia ver viva a la caida.
+                    latido = wa_store.ultimo_latido(fuente, cuenta)
+                    tick, tick_ok = (con.execute(
+                        "select value from settings where key=?",
+                        (rastro(nombre, cuenta),)).fetchone() for nombre in ("tick_at", "tick_ok_at"))
+                    sin = sin_juzgar_de_linea(con, fuente, cuenta, ahora_s)
+                    fila = {"cuenta": cuenta, "principal": n == 0,
+                            "tick_hace_s": edad_s(tick["value"] if tick else None, ahora_s),
+                            "tick_ok_hace_s": edad_s(tick_ok["value"] if tick_ok else None,
+                                                     ahora_s),
+                            "sin_juzgar": len(sin),
+                            "sin_juzgar_hace_s": edad_s(min(sin) if sin else None, ahora_s),
+                            "latido_hace_s": edad_s(latido, ahora_s)}
+                except Exception as exc:
+                    fila = {"cuenta": cuenta, "principal": n == 0,
+                            "error": (str(exc) or type(exc).__name__)[:200]}
+                if cuenta not in anotadas:
+                    fila["fuera_de_lista"] = True
+                filas.append(fila)
         finally:
             fuente.close()
     print(json.dumps({"at": ahora_s, "lineas": filas}, ensure_ascii=False))
@@ -14500,6 +15236,9 @@ DE_TODAS = ("orca-aviso",)
 # de otra. `owner` es el chat al que avisan las skills: el de la linea que el dueno eligio
 # para eso en el panel (todo-por-linea, P7), y sin eleccion el de la principal.
 DE_LA_PRINCIPAL = ("owner",)
+# La marca que `por_cada_linea` pone a sus hijos de `pending --needs-agent`: con ella el hijo
+# dice su JSON tambien sin trabajo (lv3-auditoria, 4). Sin ella, el 1 callado de siempre.
+REPARTO_ENV = "WA_INBOX_REPARTO"
 
 
 def fija_linea(a):
@@ -14554,31 +15293,39 @@ def por_cada_linea(a):
     hijos = {}
     for linea in lineas:
         env = dict(os.environ, **{wa_store.LINEA_ENV: linea})
+        if agente:
+            env[REPARTO_ENV] = "1"
         # Lo que corre en todas las lineas ignora la linea heredada (`fija_linea`): a cada
         # hijo se la nombra con `--line`, o volveria a repartirse.
         nombrada = [f"--line={linea}"] if a.cmd in DE_TODAS else []
         hijos[linea] = subprocess.Popen([sys.executable, os.path.abspath(__file__),
                                          *sys.argv[1:], *nombrada], env=env,
-                                        stdout=subprocess.PIPE, text=True)
-    salidas = {linea: (h.communicate()[0], h.returncode) for linea, h in hijos.items()}
+                                        stdout=subprocess.PIPE,
+                                        stderr=subprocess.PIPE if agente else None, text=True)
+    salidas = {linea: h.communicate() + (h.returncode,) for linea, h in hijos.items()}
     if agente:
         # Hay trabajo para el agente si lo hay en alguna linea; cada caso es de su linea, y
-        # `caso` con su id corre en ella (`fija_linea`).
-        casos = []
-        for texto, codigo in salidas.values():
-            leido = _json_o_nada(texto) if codigo == 0 else None
-            casos += (leido or {}).get("cases") or [] if isinstance(leido, dict) else []
+        # `caso` con su id corre en ella (`fija_linea`). Una linea que revento no frena los
+        # casos de las demas, pero se dice, y sin casos no sale como "sin trabajo".
+        for _, error, _ in salidas.values():
+            if error:
+                sys.stderr.write(error)
+        casos, fallas = junta_pendientes({linea: (texto, codigo, error)
+                                          for linea, (texto, error, codigo) in salidas.items()})
+        for linea, codigo, detalle in fallas:
+            print(f"wa-scope: pending on {linea} failed (exit {codigo}): {detalle}",
+                  file=sys.stderr)
         if not casos:
-            sys.exit(1)
+            sys.exit(2 if fallas else 1)
         print(json.dumps({"needs_agent": len(casos), "cases": casos}, ensure_ascii=False))
         return True
     if a.cmd == "tick":
         print(json.dumps(junta_ticks({linea: _json_o_nada(texto)
-                                      for linea, (texto, _) in salidas.items()}),
+                                      for linea, (texto, _, _) in salidas.items()}),
                          ensure_ascii=False))
     else:
         filas = []
-        for linea, (texto, _) in salidas.items():
+        for linea, (texto, _, _) in salidas.items():
             leido = _json_o_nada(texto)
             for fila in leido if isinstance(leido, list) else []:
                 filas.append(dict(fila, account=linea) if isinstance(fila, dict) else fila)
@@ -14587,10 +15334,27 @@ def por_cada_linea(a):
         else:
             for f in filas:
                 print(" | ".join(f"{v}" for v in f.values() if v not in (None, "")))
-    peor = max(codigo for _, codigo in salidas.values())
+    peor = max(codigo for _, _, codigo in salidas.values())
     if peor:
         sys.exit(peor)
     return True
+
+
+def junta_pendientes(por_linea):
+    """(casos, fallas) de los hijos de `pending --needs-agent`, `{linea: (stdout, codigo,
+    stderr)}`. Un hijo sano siempre dice su JSON: 0 con sus casos, o 1 con la lista vacia
+    (`REPARTO_ENV`). Lo demas -un 1 sin JSON, un 0 sin JSON, otro codigo- es una linea que
+    revento: `(linea, codigo, ultima linea de su stderr)`."""
+    casos, fallas = [], []
+    for linea, (texto, codigo, error) in por_linea.items():
+        leido = _json_o_nada(texto)
+        lista = leido.get("cases") if isinstance(leido, dict) else None
+        if codigo in (0, 1) and isinstance(lista, list) and (codigo == 0 or not lista):
+            casos += lista
+            continue
+        ultima = next((l.strip() for l in reversed((error or "").splitlines()) if l.strip()), "")
+        fallas.append((linea, codigo, ultima[:200] or "no JSON"))
+    return casos, fallas
 
 
 def _json_o_nada(texto):
@@ -14846,6 +15610,12 @@ def main():
                                  "CLI; exits 0 even when a line is stalled")
     s.set_defaults(fn=cmd_lineas_salud)
 
+    s = add("storage-lock", help="take the lock of the panel storage, print {\"locked\": true} "
+                                 "and hold it until stdin closes (at most "
+                                 f"{CANDADO_PRESTADO_S} s): the worker writes the per-line "
+                                 "containers under it")
+    s.set_defaults(fn=cmd_storage_lock)
+
     s = add("sync",help="runs ingest, then pushes registry, name and activity to the "
                          "plugin panel")
     s.set_defaults(fn=cmd_sync)
@@ -14931,6 +15701,11 @@ def main():
                    help="and launch the case agent now, like the board's Atender ahora "
                         "(`agente lanzar`): the output says `agent` launched | running | "
                         "failed | waiting | nothing")
+    c.add_argument("--pedido", type=int, metavar="CASE",
+                   help="the case where the owner ordered it (\"atiende el caso N\"): counts as "
+                        "his Atender, also in an observar chat. Only the owner's case (by "
+                        "WhatsApp id), or a Super admin's of the same chat; otherwise "
+                        "E_NOT_OWNER")
     c.set_defaults(fn=cmd_caso_atender)
 
     c = muta("autorizar", help="the owner waives the inbound exceptions of a case in decision: "
@@ -14987,14 +15762,17 @@ def main():
     c.add_argument("--chat", help="send the reply (or the job's final reply) to ANOTHER chat "
                                   "instead of the case's: its JID, phone or name. Only for a "
                                   "case of the owner or of a Super admin of the conversation, "
-                                  "and only to a chat of the same line in responder; it always "
-                                  "waits for the owner's approval, and the case's chat gets a "
-                                  "confirmation once it is sent. `caso destinos <id>` lists the "
-                                  "candidates. Refusals (exit 2): E_DEST_ROLE (a customer's "
-                                  "case), E_DEST_NOT_FOUND, E_DEST_AMBIGUOUS (the candidates "
-                                  "are in the detail: pass the JID), E_DEST_LINE (the chat is "
-                                  "on another line), E_DEST_MODE (the chat is not in "
-                                  "responder), E_ARGS (escalar or descartar)")
+                                  "and only to a chat of the same line in responder (the owner's "
+                                  "own order also to a chat of another linked line, through "
+                                  "that line, or in borrador). The owner's own order goes out "
+                                  "once the floor and Jev pass (a chat in borrador waits for his "
+                                  "signature); a Super admin's waits for the owner's approval. "
+                                  "The case's chat gets a confirmation once it is sent. `caso destinos <id>` lists the candidates. Refusals "
+                                  "(exit 2): E_DEST_ROLE (a customer's case), E_DEST_NOT_FOUND, "
+                                  "E_DEST_AMBIGUOUS (the detail names the candidates, each "
+                                  "with its line: pass the JID), E_DEST_LINE (another line), "
+                                  "E_DEST_MODE (the chat cannot receive it: the detail says how "
+                                  "to enable it), E_ARGS (escalar or descartar)")
     c.set_defaults(fn=cmd_caso_propuesta)
 
     c = caso("aprobar", help="the owner's approval of ONE proposal version; refused if "
@@ -15029,12 +15807,16 @@ def main():
     c.add_argument("--chat", help="with --estado resuelto: send the reply to ANOTHER chat "
                                   "instead of the case's: its JID, phone or name. Only for a "
                                   "case of the owner or of a Super admin of the conversation, "
-                                  "and only to a chat of the same line in responder; it always "
-                                  "waits for the owner's approval, and the case's chat gets a "
-                                  "confirmation once it is sent. `caso destinos <id>` lists the "
-                                  "candidates. Refusals (exit 2): E_DEST_ROLE (a customer's "
-                                  "case), E_DEST_NOT_FOUND, E_DEST_AMBIGUOUS (pass the JID), "
-                                  "E_DEST_LINE, E_DEST_MODE, E_ARGS (necesita or bloqueado)")
+                                  "and only to a chat of the same line in responder (the owner's "
+                                  "own order also to another linked line or a chat in "
+                                  "borrador). The owner's own order goes out at once if the "
+                                  "floor and Jev pass; a Super admin's waits for the owner's "
+                                  "approval. The case's chat gets a confirmation once it is "
+                                  "sent. `caso "
+                                  "destinos <id>` lists the candidates. Refusals (exit 2): "
+                                  "E_DEST_ROLE (a customer's case), E_DEST_NOT_FOUND, "
+                                  "E_DEST_AMBIGUOUS (pass the JID), E_DEST_LINE, E_DEST_MODE, "
+                                  "E_ARGS (necesita or bloqueado)")
     # Solo el trabajador: es su reporte, y cualquier otro firmandolo seria un resultado
     # de un trabajo que no hizo.
     c.add_argument("--actor", required=True, choices=["trabajador"])
@@ -15160,7 +15942,9 @@ def main():
     c = caso("destinos", help="the chats a reply of this case could go to when the owner "
                               "or a Super admin says 'report it to the client' without naming "
                               "the chat: the chats of the same line in responder that have "
-                              "the case's project, with the reason. One: pass it to `caso "
+                              "the case's project, with the reason (the owner's own case also "
+                              "lists those in borrador and those of the other linked lines; "
+                              "each row says its line and mode). One: pass it to `caso "
                               "propuesta --chat`; several: ask the owner which; none: say so "
                               "and ask which chat. A customer's case: E_DEST_ROLE")
     c.add_argument("id", type=int); c.set_defaults(fn=cmd_caso_destinos)

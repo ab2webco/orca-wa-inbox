@@ -1601,8 +1601,16 @@
           lineBackupNone: 'el respaldo del plugin la esta revisando.',
           lineWhySinTick: 'Orca no corrio su revision de cada minuto para esta linea.',
           lineWhySinJuzgar: 'Tiene mensajes recibidos que siguen sin revisar.',
+          lineWhyFueraDeLista: 'Esta conectada pero quedo fuera de la lista de lineas activas. ' +
+            'El plugin la sigue atendiendo; reiniciar Orca suele corregirlo.',
           lineWhyDespacho: 'Las automatizaciones de WhatsApp quedaron atascadas en Orca. ' +
             'Reiniciar Orca suele destrabarlas.',
+          lineWhySinSalud: 'No se pudo revisar el estado de esta linea; el plugin la atiende ' +
+            'igual.',
+          lineWhySaludIlegible: 'El plugin no puede revisar el estado de las lineas. Reiniciar ' +
+            'Orca suele corregirlo.',
+          lineWhyTickIncompleto: 'Su revision de cada minuto arranca pero no termina, y no ' +
+            'envia lo que espera.',
           workerStaleHow: 'Espere unos segundos y, si no vuelve, reinicie Orca. Dejo de ' +
             'dar senales hace {s} s.',
           chatLabel: 'Conversacion',
@@ -2191,8 +2199,16 @@
           lineBackupNone: 'the plugin backup is checking it.',
           lineWhySinTick: 'Orca did not run its every-minute check for this line.',
           lineWhySinJuzgar: 'It has received messages that are still not reviewed.',
+          lineWhyFueraDeLista: 'It is connected but ended up outside the list of active lines. ' +
+            'The plugin keeps attending it; restarting Orca usually fixes it.',
           lineWhyDespacho: 'The WhatsApp automations are stuck in Orca. Restarting Orca ' +
             'usually clears them.',
+          lineWhySinSalud: 'The state of this line could not be checked; the plugin attends ' +
+            'it anyway.',
+          lineWhySaludIlegible: 'The plugin cannot check the state of the lines. Restarting ' +
+            'Orca usually fixes it.',
+          lineWhyTickIncompleto: 'Its every-minute check starts but does not finish, and what ' +
+            'is waiting is not sent.',
           workerStaleHow: 'Wait a few seconds and, if it does not come back, restart ' +
             'Orca. It stopped signalling {s} s ago.',
           chatLabel: 'Conversation',
@@ -2741,8 +2757,16 @@
         lineBackupNone: 'o backup do plugin esta revisando.',
         lineWhySinTick: 'O Orca nao rodou a revisao de cada minuto para esta linha.',
         lineWhySinJuzgar: 'Tem mensagens recebidas que continuam sem revisar.',
+        lineWhyFueraDeLista: 'Esta conectada mas ficou fora da lista de linhas ativas. ' +
+          'O plugin continua atendendo-a; reiniciar o Orca costuma corrigir.',
         lineWhyDespacho: 'As automacoes do WhatsApp travaram no Orca. Reiniciar o Orca ' +
           'costuma destrava-las.',
+        lineWhySinSalud: 'Nao foi possivel verificar o estado desta linha; o plugin a ' +
+          'atende mesmo assim.',
+        lineWhySaludIlegible: 'O plugin nao consegue verificar o estado das linhas. Reiniciar ' +
+          'o Orca costuma corrigir.',
+        lineWhyTickIncompleto: 'A revisao de cada minuto comeca mas nao termina, e o que ' +
+          'espera nao e enviado.',
         workerStaleHow: 'Espere alguns segundos e, se nao voltar, reinicie o Orca. ' +
           'Parou de dar sinal ha {s} s.',
         qualityLabel: 'Qualidade da transcricao',
@@ -3339,10 +3363,11 @@
         caja.hidden = false
       }
 
-      // Cuanto puede tardar un latido antes de darlo por ido. El worker late cada 5 s
+      // Cuanto puede tardar un latido antes de darlo por ido. El worker late cada 20 s
       // y una llamada a la CLI de Orca lo puede tener ocupado 30: por debajo de eso se
-      // marcaria muerto a un worker que solo estaba trabajando.
-      var LATIDO_VENCE_MS = 30000
+      // marcaria muerto a un worker que solo estaba trabajando. El MISMO numero que
+      // `LATIDO_VENCE_MS` de main.mjs (la prueba de paneles los compara).
+      var LATIDO_VENCE_MS = 90000
 
       /** Si no hay nadie corriendo, y decirlo. Devuelve true cuando tomo el aviso.
        *
@@ -3395,7 +3420,9 @@
       // este panel no conoce dice lo general, nunca el codigo.
       var LINEA_RESPALDO = { ok: 'lineBackupOk', busy: 'lineBackupBusy', failed: 'lineBackupFailed' }
       var LINEA_PORQUE = { 'sin-tick': 'lineWhySinTick', 'sin-juzgar': 'lineWhySinJuzgar',
-        'despacho-atascado': 'lineWhyDespacho' }
+        'despacho-atascado': 'lineWhyDespacho', 'fuera-de-lista': 'lineWhyFueraDeLista',
+        'sin-salud': 'lineWhySinSalud', 'salud-ilegible': 'lineWhySaludIlegible',
+        'tick-incompleto': 'lineWhyTickIncompleto' }
       /** `sinWorker`: con el worker callado su latido es viejo y lo que dice de las lineas
        *  tambien; manda el aviso del worker. */
       function pintarLineasSinAtender (beat, sinWorker) {

@@ -17,7 +17,7 @@ import { decidirTrasCierre, calcularEsperaMs, intentoTrasEvento, mensajeQr, qrVe
   PARCHES_DE_LIBRETA, CIERRES_REPETIDOS_TOPE, CIERRES_VENTANA_MS,
   QR_ROTACION_MS, QR_VIGENCIA_MS, SALIDA, LATIDO_LINEA_MS, mensajeLatido,
   ALMACEN_LATIDO_MS, anotarLinea, LINEA_SECUNDARIA_ENV, CUENTA_PREVIA_ENV, rutaRegistro,
-  authDeSocket
+  authDeSocket, curarLinea
 } from '../sidecar/src/index.js'
 import { crearCacheDeReintentos } from '../sidecar/src/envio.js'
 import { crearRegistro, FALLO_DE_DESCIFRADO } from '../sidecar/src/registro.js'
@@ -516,6 +516,49 @@ console.log('\nsidecar: L1 — cada linea anota la suya y pregunta por su alcanc
   ok('la variable es la misma que leen los CLI', LINEA_ENV === 'WA_INBOX_LINEA', String(LINEA_ENV))
 }
 
+
+// ───────── linea-fuera-de-lista: el latido devuelve la linea al conjunto ─────────
+// Si algo la saco del conjunto de activas con el sidecar vivo y conectado (la carrera de
+// dos sidecars al reiniciar Orca), nadie la juzgaba. Cada latido la vuelve a poner: la
+// secundaria al final, la principal primera y con `linea_activa`. Solo conectada: un
+// sidecar que todavia no sabe su numero, o que esta reconectando, no anota nada.
+console.log('\nsidecar: linea-fuera-de-lista — el latido vuelve a poner su linea')
+{
+  const home = mkdtempSync(join(tmpdir(), 'wa-sidecar-curar-'))
+  const almacen = abrirAlmacen(rutaAlmacen({ HOME: home }))
+  const A = 'pn:573000000001'
+  const B = 'pn:573000000002'
+  const secundaria = { [LINEA_SECUNDARIA_ENV]: '1' }
+  anotarLinea({ almacen, cuenta: A, env: {} })
+  // Lo que dejo la carrera: el sidecar de B late y esta conectado, y su linea no esta.
+  ok('sin numero todavia no anota nada',
+    curarLinea({ almacen, cuenta: null, conectado: true, env: secundaria }) === false &&
+    JSON.stringify(almacen.lineasActivas()) === JSON.stringify([A]))
+  ok('reconectando no anota nada',
+    curarLinea({ almacen, cuenta: B, conectado: false, env: secundaria }) === false &&
+    JSON.stringify(almacen.lineasActivas()) === JSON.stringify([A]))
+  const curada = curarLinea({ almacen, cuenta: B, conectado: true, env: secundaria })
+  ok('conectada y fuera del conjunto, la secundaria vuelve al final sin tocar la principal',
+    curada === true && JSON.stringify(almacen.lineasActivas()) === JSON.stringify([A, B]) &&
+    almacen.lineaActiva() === A, JSON.stringify({ curada, l: almacen.lineasActivas() }))
+  ok('ya en el conjunto, el latido no escribe nada',
+    curarLinea({ almacen, cuenta: B, conectado: true, env: secundaria }) === false)
+  almacen.anotarActivas([B])
+  const principal = curarLinea({ almacen, cuenta: A, conectado: true, env: {} })
+  ok('la principal vuelve primera y sigue siendo la principal',
+    principal === true && JSON.stringify(almacen.lineasActivas()) === JSON.stringify([A, B]) &&
+    almacen.lineaActiva() === A, JSON.stringify(almacen.lineasActivas()))
+  almacen.cerrar()
+  rmSync(home, { recursive: true, force: true })
+
+  // Va en el reloj de cada segundo, junto al latido de la linea, con su conexion.
+  const fuente = readFileSync(new URL('../sidecar/src/index.js', import.meta.url), 'utf8')
+  const reloj = fuente.slice(fuente.indexOf('const salidaTimer = setInterval'),
+    fuente.indexOf('}, ENVIO_LATIDO_MS)'))
+  ok('el reloj del latido cura la linea con su cuenta y su conexion',
+    /almacen\.latir\(/.test(reloj) && /curarLinea\(\{ almacen, cuenta, conectado \}\)/.test(reloj),
+    reloj.slice(0, 200))
+}
 
 console.log('\nsidecar: lo que no se pudo descifrar queda dicho, sin contenido')
 {

@@ -2115,6 +2115,15 @@ console.log('\nconfig.html: el latido del worker')
   ok('con worker vivo el boton de reintentar el sync sigue encendido',
     vivo.doc.getElementById('sync-retry').disabled === false)
 
+  // El worker late cada 20 s: uno de hace 60 s (un latido perdido y una llamada lenta a la
+  // CLI de Orca) sigue siendo un worker vivo, no "dejo de responder".
+  const lento = await montar('config.html', { workerBeat: {
+    at: new Date(Date.now() - 60000).toISOString() }, health: { ok: true } }, 'es-419')
+  const a4 = lento.doc.getElementById('alert')
+  ok('un latido de hace 60 s no marca al plugin como ido',
+    (a4.hidden || !/dejo de responder/.test(a4.textContent)) &&
+    lento.doc.getElementById('sync-retry').disabled === false, a4.textContent.slice(0, 120))
+
   // Y el caso que hace que esto valga: un host que RECHAZA la lectura no es un worker
   // ausente. No saber no es saber que no esta.
   const rechazo = await montar('config.html', { health: { ok: true } }, 'es-419',
@@ -9513,6 +9522,19 @@ console.log('\nconfig.html — linea-viva: el aviso de una linea sin atender')
       /\+15550000002 lleva 31 min/.test(txt) && /Reiniciar Orca/.test(filas[1].textContent), filas[1].textContent)
   }
   {
+    const lineas = { [L2]: { desde: hace(12), motivo: 'fuera-de-lista', respaldo: null } }
+    const es = await montar('config.html', { workerBeat: latido(lineas) }, 'es-419')
+    const en = await montar('config.html', { workerBeat: latido(lineas) }, 'en-US')
+    const pt = await montar('config.html', { workerBeat: latido(lineas) }, 'pt-BR')
+    await espera()
+    ok('linea-fuera-de-lista: la fila dice que la linea quedo fuera de la lista, en cada idioma',
+      /\+15550000002 lleva 12 min/.test(caja(es.doc).textContent) &&
+      /fuera de la lista de lineas activas/.test(caja(es.doc).textContent) &&
+      /outside the list of active lines/.test(caja(en.doc).textContent) &&
+      /fora da lista de linhas ativas/.test(caja(pt.doc).textContent),
+      `${caja(es.doc).textContent} | ${caja(en.doc).textContent} | ${caja(pt.doc).textContent}`)
+  }
+  {
     const { doc } = await montar('config.html', { workerBeat: latido(undefined) }, 'es-419')
     await espera()
     ok('linea-viva: con todas las lineas atendidas no hay nada', caja(doc).hidden === true &&
@@ -9544,6 +9566,28 @@ console.log('\nconfig.html — linea-viva: el aviso de una linea sin atender')
     const txt = caja(doc).textContent
     ok('linea-viva: un motivo desconocido igual dice la linea y no muestra codigos',
       /\+15550000001 lleva 12 min/.test(txt) && !/otro-motivo|raro/.test(txt), txt)
+  }
+  {
+    // lv3-auditoria: una linea que no se pudo leer, la salud entera que no llega, y el tick
+    // que arranca pero no termina entero.
+    const L3 = 'pn:15550000003'
+    const lineas = { [L1]: { desde: hace(12), motivo: 'sin-salud', respaldo: 'ok' },
+      [L2]: { desde: hace(15), motivo: 'salud-ilegible', respaldo: null },
+      [L3]: { desde: hace(9), motivo: 'tick-incompleto', respaldo: 'busy' } }
+    const es = await montar('config.html', { workerBeat: latido(lineas) }, 'es-419')
+    const en = await montar('config.html', { workerBeat: latido(lineas) }, 'en-US')
+    const pt = await montar('config.html', { workerBeat: latido(lineas) }, 'pt-BR')
+    await espera()
+    const filas = (d) => [...caja(d).querySelectorAll('.alert')].map((f) => f.textContent)
+    ok('lv3: la linea que no se pudo leer y la salud que no llega dicen por que, en cada idioma',
+      /no se pudo revisar el estado de esta linea/i.test(filas(es.doc)[0]) &&
+      /no puede revisar el estado de las lineas/.test(filas(es.doc)[1]) &&
+      /could not be checked/.test(filas(en.doc)[0]) && /cannot check the state of the lines/.test(filas(en.doc)[1]) &&
+      /nao foi possivel verificar o estado desta linha/i.test(filas(pt.doc)[0]) &&
+      /nao consegue verificar o estado das linhas/.test(filas(pt.doc)[1]) &&
+      /arranca pero no termina/.test(filas(es.doc)[2]) && /starts but does not finish/.test(filas(en.doc)[2]) &&
+      /comeca mas nao termina/.test(filas(pt.doc)[2]),
+      JSON.stringify([filas(es.doc), filas(en.doc), filas(pt.doc)]))
   }
 }
 

@@ -128,3 +128,34 @@ Refusal codes of `caso propuesta --chat` (exit 2, JSON on stderr):
   after the send; the draft itself is approved by the owner (notice or board).
 - Each commit was checked on its own index snapshot with this feature's check-casos
   sections; the full suites ran on the final state.
+
+## Cross-line and borrador (owner)
+
+Later rule (ordenes-del-dueno): the OWNER's own order (`caso_del_dueno`, by WhatsApp id)
+goes further than the rule above. A Super admin's keeps the same line and `responder`; a
+customer still gets `E_DEST_ROLE`, and only the owner (or a Super admin of the same chat)
+can order `caso atender <id> --pedido <case>`.
+
+- Another linked line: when no chat of the case's line matches, the owner's reference is
+  looked up on the other active lines. The proposal stores `chat` and `linea` (both part of
+  the version); delivery (tick, `si N`, board) goes out through `linea`, the fixed floor and
+  Jev use the destination's levels on that line, and the case and its "Sent to <chat>"
+  confirmation stay on the case's line. A line that is not linked now is still
+  `E_DEST_LINE`.
+- `borrador`: accepted for the owner without changing the chat's mode. The tick never sends
+  it; the owner is notified (`borrador`, `other_chat`) and his approval (`si N` or the
+  board) sends it as a draft plus `--approve`, like any reply in a borrador chat. `off`,
+  `observar` or a chat outside the scope stay `E_DEST_MODE`, and the detail says how to
+  enable it (panel, or `wa-scope mode "<jid>" responder --line <line>`).
+- Never silent: the `E_DEST_AMBIGUOUS` detail names each candidate with its jid and line
+  (the error contract stays `error` + `detail`), and the case file, AGENTS.md and the skill tell the agent to answer every refusal in the
+  case's own chat.
+- `caso destinos` for the owner also lists borrador chats and chats of the other linked
+  lines, each row with its `line` and `mode`.
+- Owner decision (c): the owner's own order to another chat (same line, another linked line)
+  does not wait for a second `si N`. The rule signs it in the tick (`frenos_de_regla` no
+  longer adds `other_chat` when `caso_del_dueno`), and `caso resultado --chat` sends it at
+  once. The fixed floor, Jev and the destination's levels and mode apply exactly as before:
+  what they hold still waits for the owner. A destination in borrador still waits for his
+  signature (the tick never sends a borrador chat). A Super admin's reply to another chat
+  keeps waiting for the owner's approval (`other_chat`).

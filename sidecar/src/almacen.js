@@ -711,13 +711,15 @@ class Almacen {
    *  cambiar de numero es cambiar de cajon, no mudar el contenido. Devuelve si hubo
    *  cambio y cual era la anterior, para que el sidecar lo pueda decir. */
   activarLinea (cuenta) {
-    const antes = this.lineaActiva()
-    // La principal entra al conjunto de activas (`lineasActivas`) en el MISMO lugar que la
-    // de antes: es la misma linea del plugin con otro numero, no una mas.
-    this.anotarActivas(reemplazada(this.lineasActivas(), antes, cuenta))
-    if (antes === cuenta) return { cambio: false, antes }
-    this.anotarMeta('linea_activa', cuenta)
-    return { cambio: true, antes }
+    return this.exclusiva(() => {
+      const antes = this.lineaActiva()
+      // La principal entra al conjunto de activas (`lineasActivas`) en el MISMO lugar que
+      // la de antes: es la misma linea del plugin con otro numero, no una mas.
+      this.anotarActivas(reemplazada(this.lineasActivas(), antes, cuenta))
+      if (antes === cuenta) return { cambio: false, antes }
+      this.anotarMeta('linea_activa', cuenta)
+      return { cambio: true, antes }
+    })
   }
 
   /** Las lineas vinculadas AHORA, en orden: la principal y las que se le sumaron (varias
@@ -742,22 +744,62 @@ class Almacen {
    *  que es de la principal. `antes` es el numero que esa misma linea tenia, si se
    *  re-vinculo con otro: ese sale, porque ya no esta vinculado. */
   sumarLinea (cuenta, { antes = null } = {}) {
-    const actuales = this.lineasActivas()
-    const nueva = !actuales.includes(cuenta)
-    this.anotarActivas(reemplazada(actuales, antes, cuenta))
-    return { nueva }
+    return this.exclusiva(() => {
+      const actuales = this.lineasActivas()
+      const nueva = !actuales.includes(cuenta)
+      this.anotarActivas(reemplazada(actuales, antes, cuenta))
+      return { nueva }
+    })
   }
 
   /** Saca una linea del conjunto al desvincularla. Si era la principal, la principal
    *  pasa a la primera que queda; si no queda ninguna, `linea_activa` se conserva: un
    *  lector sin linea anotada lee TODAS, y eso es mezclar lo de un numero con otro. */
   retirarLinea (cuenta) {
-    const actuales = this.lineasActivas()
-    if (!actuales.includes(cuenta)) return { retirada: false }
-    const quedan = actuales.filter((c) => c !== cuenta)
-    this.anotarActivas(quedan)
-    if (this.lineaActiva() === cuenta && quedan.length) this.anotarMeta('linea_activa', quedan[0])
-    return { retirada: true }
+    return this.exclusiva(() => {
+      const actuales = this.lineasActivas()
+      if (!actuales.includes(cuenta)) return { retirada: false }
+      const quedan = actuales.filter((c) => c !== cuenta)
+      this.anotarActivas(quedan)
+      if (this.lineaActiva() === cuenta && quedan.length) this.anotarMeta('linea_activa', quedan[0])
+      // Su sidecar ya se apago, pero su latido sigue fresco unos segundos: desconectada, los
+      // lectores no la cuentan como una linea viva fuera de la lista (`lineas_vivas`).
+      this.anotarMeta(`sidecar_conectado@${cuenta}`, '0')
+      return { retirada: true }
+    })
+  }
+
+  /** Pone `cuenta` en el conjunto de activas si no esta: la secundaria al final, la
+   *  principal primera y con `linea_activa`. Lo corre el latido de cada segundo, asi que
+   *  primero solo lee, y escribe (atomico) unicamente si falta. Devuelve si la puso. */
+  asegurarLinea (cuenta, { principal = false } = {}) {
+    if (!cuenta || this.lineasActivas().includes(cuenta)) return false
+    return this.exclusiva(() => {
+      const actuales = this.lineasActivas()
+      if (actuales.includes(cuenta)) return false
+      this.anotarActivas(principal ? [cuenta, ...actuales] : [...actuales, cuenta])
+      if (principal && this.lineaActiva() !== cuenta) this.anotarMeta('linea_activa', cuenta)
+      return true
+    })
+  }
+
+  /** Corre `fn` —un leer-cambiar-escribir de `store_meta`— con el almacen tomado para
+   *  escribir desde la lectura. Cada sidecar es otro proceso sobre el mismo archivo: al
+   *  reiniciar Orca arrancan juntos, y sin esto el que escribe ultimo borraba la linea
+   *  del otro del conjunto de activas (linea-fuera-de-lista). `begin immediate` toma el
+   *  candado ANTES de leer; el otro espera (`busy_timeout`) y lee lo ya escrito. Dentro de
+   *  una transaccion abierta (un `lote`) ya esta tomado: no se abre otra. */
+  exclusiva (fn) {
+    if (this.con.isTransaction === true) return fn()
+    this.con.exec('begin immediate')
+    try {
+      const r = fn()
+      this.con.exec('commit')
+      return r
+    } catch (error) {
+      try { this.con.exec('rollback') } catch { /* nada abierto */ }
+      throw error
+    }
   }
 
   anotarActivas (lista) {
