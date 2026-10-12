@@ -2115,6 +2115,15 @@ console.log('\nconfig.html: el latido del worker')
   ok('con worker vivo el boton de reintentar el sync sigue encendido',
     vivo.doc.getElementById('sync-retry').disabled === false)
 
+  // El worker late cada 20 s: uno de hace 60 s (un latido perdido y una llamada lenta a la
+  // CLI de Orca) sigue siendo un worker vivo, no "dejo de responder".
+  const lento = await montar('config.html', { workerBeat: {
+    at: new Date(Date.now() - 60000).toISOString() }, health: { ok: true } }, 'es-419')
+  const a4 = lento.doc.getElementById('alert')
+  ok('un latido de hace 60 s no marca al plugin como ido',
+    (a4.hidden || !/dejo de responder/.test(a4.textContent)) &&
+    lento.doc.getElementById('sync-retry').disabled === false, a4.textContent.slice(0, 120))
+
   // Y el caso que hace que esto valga: un host que RECHAZA la lectura no es un worker
   // ausente. No saber no es saber que no esta.
   const rechazo = await montar('config.html', { health: { ok: true } }, 'es-419',
