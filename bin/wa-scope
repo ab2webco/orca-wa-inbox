@@ -14459,8 +14459,10 @@ def cmd_lineas_salud(con, a):
     (`sin_juzgar_hace_s`, null sin ninguno), y el ultimo latido del sidecar
     (`latido_hace_s`). Una linea viva que no esta anotada en el almacen lleva ademas
     `"fuera_de_lista": true` (linea-fuera-de-lista): se atiende igual, pero es un incidente.
-    Sin almacen o sin lineas, `lineas` vacia. Sale 0 aunque una linea este parada: decidir
-    que hacer es de quien lee."""
+    Una linea que no se pudo leer (una base tomada, un dato roto) sale con `cuenta`,
+    `principal` y su `error` corto, y las demas con lo suyo: el fallo de una no deja sin
+    salud a todas (lv3-auditoria, 1). Sin almacen o sin lineas, `lineas` vacia. Sale 0
+    aunque una linea este parada: decidir que hacer es de quien lee."""
     ahora_s = time.time()
     filas = []
     try:
@@ -14471,17 +14473,21 @@ def cmd_lineas_salud(con, a):
         try:
             anotadas = wa_store.lineas_anotadas(fuente)
             for n, cuenta in enumerate(wa_store.lineas_activas(fuente)):
-                # El de ESA linea (V8): el global lo late cualquiera, y con dos lineas la
-                # viva hacia ver viva a la caida.
-                latido = wa_store.ultimo_latido(fuente, cuenta)
-                tick = con.execute("select value from settings where key=?",
-                                   (rastro("tick_at", cuenta),)).fetchone()
-                sin = sin_juzgar_de_linea(con, fuente, cuenta, ahora_s)
-                fila = {"cuenta": cuenta, "principal": n == 0,
-                        "tick_hace_s": edad_s(tick["value"] if tick else None, ahora_s),
-                        "sin_juzgar": len(sin),
-                        "sin_juzgar_hace_s": edad_s(min(sin) if sin else None, ahora_s),
-                        "latido_hace_s": edad_s(latido, ahora_s)}
+                try:
+                    # El de ESA linea (V8): el global lo late cualquiera, y con dos lineas la
+                    # viva hacia ver viva a la caida.
+                    latido = wa_store.ultimo_latido(fuente, cuenta)
+                    tick = con.execute("select value from settings where key=?",
+                                       (rastro("tick_at", cuenta),)).fetchone()
+                    sin = sin_juzgar_de_linea(con, fuente, cuenta, ahora_s)
+                    fila = {"cuenta": cuenta, "principal": n == 0,
+                            "tick_hace_s": edad_s(tick["value"] if tick else None, ahora_s),
+                            "sin_juzgar": len(sin),
+                            "sin_juzgar_hace_s": edad_s(min(sin) if sin else None, ahora_s),
+                            "latido_hace_s": edad_s(latido, ahora_s)}
+                except Exception as exc:
+                    fila = {"cuenta": cuenta, "principal": n == 0,
+                            "error": (str(exc) or type(exc).__name__)[:200]}
                 if cuenta not in anotadas:
                     fila["fuera_de_lista"] = True
                 filas.append(fila)

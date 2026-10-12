@@ -428,6 +428,10 @@ export const LINEA_QUIETA_S = 180
 // en `dispatching` desde hace mas de 10 es un incidente.
 export const ATASCO_REVISION_MS = 5 * 60 * 1000
 export const ATASCO_MS = 10 * 60 * 1000
+// Cuantas vueltas seguidas sin salud (`lineas-salud` que falla o no da JSON) son un
+// incidente: sin salud no se sabe que linea atender, y el dueno se entera a los ~10 min,
+// el mismo plazo que una linea sin atender (lv3-auditoria, 1).
+export const SALUD_FALLAS_INCIDENTE = 10
 const DETALLE_MAX = 300
 
 /** Una falla, como queda en la bitacora: codigos y el detalle corto, nunca el stdout. */
@@ -442,7 +446,9 @@ const esNumero = (v) => typeof v === 'number' && Number.isFinite(v)
 /** Las lineas de `wa-scope lineas-salud` que nadie esta atendiendo, y por que. Pura.
  *  `fuera-de-lista` manda sobre todo: la linea late conectada pero no esta anotada en el
  *  almacen (dos sidecars que la anotaron a la vez), y eso es la causa de lo demas.
- *  `sin-juzgar` manda sobre `sin-tick`: es lo que el dueno ve, mensajes sin respuesta. */
+ *  `sin-salud` es una linea que no se pudo leer (trae `error`): no se sabe si se atiende,
+ *  asi que se atiende. `sin-juzgar` manda sobre `sin-tick`: es lo que el dueno ve,
+ *  mensajes sin respuesta. */
 export function lineasSinAtender (salud) {
   const lineas = salud && typeof salud === 'object' && Array.isArray(salud.lineas) ? salud.lineas : []
   const salida = []
@@ -450,6 +456,8 @@ export function lineasSinAtender (salud) {
     if (!l || typeof l !== 'object' || typeof l.cuenta !== 'string' || !LINEA_RE.test(l.cuenta)) continue
     if (l.fuera_de_lista === true) {
       salida.push({ cuenta: l.cuenta, motivo: 'fuera-de-lista', haceS: null })
+    } else if (typeof l.error === 'string') {
+      salida.push({ cuenta: l.cuenta, motivo: 'sin-salud', haceS: null })
     } else if (esNumero(l.sin_juzgar) && l.sin_juzgar > 0 && esNumero(l.sin_juzgar_hace_s) &&
         l.sin_juzgar_hace_s > LINEA_QUIETA_S) {
       salida.push({ cuenta: l.cuenta, motivo: 'sin-juzgar', haceS: l.sin_juzgar_hace_s })
@@ -523,9 +531,12 @@ export function crearRespaldoTick ({ correr, herramienta, anotar = async () => {
     Array.isArray(manifiesto.contributes.automations) ? manifiesto.contributes.automations : [])) {
     if (a && typeof a.id === 'string' && typeof a.title === 'string') titulos[a.id] = a.title
   }
-  // clave (cuenta, o DESPACHO) -> { motivo, desdeS, vistoMs, sanas, avisado, id }
+  // clave (cuenta, DESPACHO o SALUD) -> { motivo, desdeS, vistoMs, sanas, avisado, id }
   const incidentes = new Map()
   let lineasActivas = []
+  // Las vueltas seguidas sin salud, y desde cuando (s): la primera de la racha.
+  let fallasSalud = 0
+  let saludFallaDesdeS = null
   let cadenaAvisos = Promise.resolve()
 
   const fallo = (cuenta, que, error, extra) =>
@@ -596,12 +607,16 @@ export function crearRespaldoTick ({ correr, herramienta, anotar = async () => {
 
   /** Los avisos van en fila y sin esperarlos: un `wa-send` lento no frena la vuelta. */
   function encolarAviso (clave, inc, tipo) {
-    const aviso = { tipo, clave, cuenta: clave === DESPACHO ? null : clave, motivo: inc.motivo,
-      desdeS: inc.desdeS, respaldo: clave === DESPACHO ? null : (respaldo[clave] ?? null),
+    const aviso = { tipo, clave, cuenta: deTodas(clave) ? null : clave, motivo: inc.motivo,
+      desdeS: inc.desdeS, respaldo: deTodas(clave) ? null : (respaldo[clave] ?? null),
       automatizaciones: inc.automatizaciones || [], lineas: [...lineasActivas],
       ahoraMs: ahora(), id: `${inc.id}${tipo === 'recuperada' ? '-ok' : ''}` }
     cadenaAvisos = cadenaAvisos.then(() => avisar(aviso)).catch(() => {})
   }
+  // Las claves que no son de una linea: se avisan en cuanto se abren (para verse ya
+  // llevan su plazo) y el latido las lleva en cada linea que no tiene un incidente propio.
+  const deTodas = (clave) => clave === DESPACHO || clave === SALUD
+
   function cerrar (clave) {
     const inc = incidentes.get(clave)
     incidentes.delete(clave)
@@ -615,7 +630,7 @@ export function crearRespaldoTick ({ correr, herramienta, anotar = async () => {
         id: `linea-viva-${clave.replace(/[^A-Za-z0-9]+/g, '')}-${Math.round(ahoraMs / 1000)}` }
       incidentes.set(clave, inc)
       // El respaldo de un incidente anterior no dice nada de este.
-      if (clave !== DESPACHO && !enVuelo.has(clave)) delete respaldo[clave]
+      if (!deTodas(clave) && !enVuelo.has(clave)) delete respaldo[clave]
     }
     inc.motivo = motivo
     inc.desdeS = Math.min(inc.desdeS, desdeS)
@@ -641,8 +656,26 @@ export function crearRespaldoTick ({ correr, herramienta, anotar = async () => {
     }
     // Una linea que ya no esta (desvinculada) no tiene nada que recuperar.
     for (const clave of [...incidentes.keys()]) {
-      if (clave !== DESPACHO && !activas.includes(clave)) incidentes.delete(clave)
+      if (!deTodas(clave) && !activas.includes(clave)) incidentes.delete(clave)
     }
+  }
+
+  /** La salud de esta vuelta: una que no llega suma a la racha, y la racha larga es un
+   *  incidente; una que llega la corta, y dos seguidas cierran el incidente. */
+  function seguirSalud (salud) {
+    if (salud) {
+      fallasSalud = 0
+      saludFallaDesdeS = null
+      const inc = incidentes.get(SALUD)
+      if (inc) {
+        inc.sanas += 1
+        if (inc.sanas >= VUELTAS_SANAS) cerrar(SALUD)
+      }
+      return
+    }
+    fallasSalud += 1
+    if (saludFallaDesdeS === null) saludFallaDesdeS = Math.round(ahora() / 1000)
+    if (fallasSalud >= SALUD_FALLAS_INCIDENTE) abrir(SALUD, 'salud-ilegible', saludFallaDesdeS)
   }
 
   function seguirDespacho () {
@@ -659,7 +692,7 @@ export function crearRespaldoTick ({ correr, herramienta, anotar = async () => {
     const ahoraMs = ahora()
     for (const [clave, inc] of incidentes) {
       if (inc.avisado || inc.sanas > 0) continue
-      if (clave !== DESPACHO && ahoraMs - inc.vistoMs < avisoMs) continue
+      if (!deTodas(clave) && ahoraMs - inc.vistoMs < avisoMs) continue
       inc.avisado = true
       encolarAviso(clave, inc, 'incidente')
     }
@@ -669,8 +702,10 @@ export function crearRespaldoTick ({ correr, herramienta, anotar = async () => {
     if (detenido()) return { salud: null, pendientes: [], lanzadas: [], revisado: false }
     const salud = await leerSalud()
     const pendientes = salud ? lineasSinAtender(salud) : []
-    // Sin salud no se sabe nada de las lineas: sus incidentes quedan como estaban.
+    // Sin salud no se sabe nada de las lineas: sus incidentes quedan como estaban, y la
+    // racha sin salud es la que avisa.
     if (salud) seguirLineas(salud, pendientes)
+    seguirSalud(salud)
     const lanzadas = pendientes.filter((p) => lanzarTick(p.cuenta)).map((p) => p.cuenta)
     let revisado = false
     if (!detenido() && (revisadoMs === null || ahora() - revisadoMs >= ATASCO_REVISION_MS)) {
@@ -689,14 +724,16 @@ export function crearRespaldoTick ({ correr, herramienta, anotar = async () => {
   function estado () {
     const salida = {}
     for (const [clave, inc] of incidentes) {
-      if (clave === DESPACHO || inc.sanas > 0) continue
+      if (deTodas(clave) || inc.sanas > 0) continue
       salida[clave] = { desde: inc.desdeS, motivo: inc.motivo, respaldo: respaldo[clave] ?? null }
     }
-    const despacho = incidentes.get(DESPACHO)
-    if (despacho) {
+    // Sin salud no se sabe de ninguna: manda sobre el atasco de Orca.
+    for (const clave of [SALUD, DESPACHO]) {
+      const deTodasInc = incidentes.get(clave)
+      if (!deTodasInc || deTodasInc.sanas > 0) continue
       for (const cuenta of lineasActivas) {
         if (!salida[cuenta]) {
-          salida[cuenta] = { desde: despacho.desdeS, motivo: despacho.motivo,
+          salida[cuenta] = { desde: deTodasInc.desdeS, motivo: deTodasInc.motivo,
             respaldo: respaldo[cuenta] ?? null }
         }
       }
@@ -729,6 +766,8 @@ export const INCIDENTE_AVISO_MS = 10 * 60 * 1000
 const VUELTAS_SANAS = 2
 // La clave del incidente de Orca, que no es de una linea: es de todas.
 const DESPACHO = '*despacho'
+// Y la de la salud que no se pudo leer en varias vueltas seguidas: tampoco es de una.
+const SALUD = '*salud'
 
 // Los avisos al dueno, en el idioma que tenia el panel cuando eligio su numero
 // (`approvalLang`). Los codigos del worker se vuelven frases aca y en ningun otro lado.
@@ -744,8 +783,13 @@ const TEXTOS_INCIDENTE = Object.freeze({
     'despacho-atascado': 'WhatsApp Inbox: la automatizacion {auto} de Orca lleva {min} min atascada ' +
       'sin arrancar. Mientras tanto el plugin atiende las lineas por su cuenta. Reiniciar Orca ' +
       'suele destrabarla.',
+    'sin-salud': 'WhatsApp Inbox: no se pudo revisar el estado de la linea {num} durante {min} min. ' +
+      '{respaldo}',
+    'salud-ilegible': 'WhatsApp Inbox: el plugin no puede revisar el estado de las lineas desde hace ' +
+      '{min} min, y no sabe si alguna quedo sin atender. Reiniciar Orca suele corregirlo.',
     recuperada: 'WhatsApp Inbox: la linea {num} vuelve a atenderse.',
     'recuperada-despacho': 'WhatsApp Inbox: Orca vuelve a arrancar la automatizacion {auto}.',
+    'recuperada-salud': 'WhatsApp Inbox: el plugin vuelve a ver el estado de las lineas.',
     ok: 'El respaldo del plugin la esta atendiendo.',
     busy: 'Otra revision la tiene ocupada; el respaldo lo sigue intentando.',
     failed: 'El respaldo del plugin no pudo atenderla.',
@@ -762,8 +806,13 @@ const TEXTOS_INCIDENTE = Object.freeze({
     'despacho-atascado': 'WhatsApp Inbox: the Orca automation {auto} has been stuck without ' +
       'starting for {min} min. Meanwhile the plugin attends the lines on its own. Restarting ' +
       'Orca usually clears it.',
+    'sin-salud': 'WhatsApp Inbox: the state of line {num} could not be checked for {min} min. ' +
+      '{respaldo}',
+    'salud-ilegible': 'WhatsApp Inbox: the plugin cannot check the state of the lines for {min} ' +
+      'min, so it cannot tell whether one is unattended. Restarting Orca usually fixes it.',
     recuperada: 'WhatsApp Inbox: line {num} is being attended again.',
     'recuperada-despacho': 'WhatsApp Inbox: Orca is starting the automation {auto} again.',
+    'recuperada-salud': 'WhatsApp Inbox: the plugin can check the state of the lines again.',
     ok: 'The plugin backup is handling it.',
     busy: 'Another check has it busy; the backup keeps trying.',
     failed: 'The plugin backup could not attend it.',
@@ -780,8 +829,13 @@ const TEXTOS_INCIDENTE = Object.freeze({
     'despacho-atascado': 'WhatsApp Inbox: a automacao {auto} do Orca esta travada sem iniciar ha ' +
       '{min} min. Enquanto isso o plugin cuida das linhas por conta propria. Reiniciar o Orca ' +
       'costuma destrava-la.',
+    'sin-salud': 'WhatsApp Inbox: nao foi possivel verificar o estado da linha {num} ha {min} min. ' +
+      '{respaldo}',
+    'salud-ilegible': 'WhatsApp Inbox: o plugin nao consegue verificar o estado das linhas ha {min} ' +
+      'min, e nao sabe se alguma ficou sem atendimento. Reiniciar o Orca costuma corrigir.',
     recuperada: 'WhatsApp Inbox: a linha {num} voltou a ser atendida.',
     'recuperada-despacho': 'WhatsApp Inbox: o Orca voltou a iniciar a automacao {auto}.',
+    'recuperada-salud': 'WhatsApp Inbox: o plugin voltou a verificar o estado das linhas.',
     ok: 'O backup do plugin esta atendendo.',
     busy: 'Outra revisao a mantem ocupada; o backup continua tentando.',
     failed: 'O backup do plugin nao conseguiu cuidar dela.',
@@ -796,7 +850,8 @@ export function textoDeIncidente (idioma, aviso) {
   const tx = TEXTOS_INCIDENTE[idioma] || TEXTOS_INCIDENTE.en
   const despacho = aviso.motivo === 'despacho-atascado'
   const clave = aviso.tipo === 'recuperada'
-    ? (despacho ? 'recuperada-despacho' : 'recuperada')
+    ? (despacho ? 'recuperada-despacho'
+        : aviso.motivo === 'salud-ilegible' ? 'recuperada-salud' : 'recuperada')
     : (tx[aviso.motivo] ? aviso.motivo : 'sin-tick')
   const ahoraMs = esNumero(aviso.ahoraMs) ? aviso.ahoraMs : Date.now()
   const min = Math.max(1, Math.floor((ahoraMs / 1000 - (aviso.desdeS ?? ahoraMs / 1000)) / 60))

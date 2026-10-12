@@ -14057,6 +14057,39 @@ with tempfile.TemporaryDirectory() as home:
        f"{p.returncode} {p.stdout[:200]} {p.stderr[-300:]}")
 
 
+# ── Una linea que no se puede leer no tumba la salud de todas (lv3-auditoria, 1) ─────────
+# La salud recorria todas las lineas sin atrapar nada: un "database is locked" en una
+# dejaba al worker sin el JSON entero, y sin el ninguna linea tenia respaldo ni incidente.
+# Ahora la linea que no se pudo leer sale con su error corto y las demas, con lo suyo.
+print("\nla salud de una linea que no se puede leer (lv3-auditoria)")
+if NODE:
+    with tempfile.TemporaryDirectory() as home:
+        llegan(home, A, [msg(SOPORTE, "HL1", "@duenio no abre el login", 5, mencion=True)])
+        llegan(home, SEGUNDA, [msg(SOPORTE, "HL2", "@duenio no llega la factura", 5,
+                                   mencion=True)], activar=False)
+        suma_linea(home, SEGUNDA)
+        js(home, "set", SOPORTE, "--provider", "ninguno", "--mode", "borrador")
+        bloqueo = sqlite3.connect(pathlib.Path(home) / ".wa-inbox" / "scope.db", timeout=1)
+        bloqueo.execute("begin exclusive")
+        try:
+            p, r = lineas_salud(home)
+        finally:
+            bloqueo.rollback()
+            bloqueo.close()
+        filas = (r or {}).get("lineas") or []
+        ok("con scope.db tomada la salud igual sale: 0 y UN objeto con todas las lineas",
+           p.returncode == 0 and [(f.get("cuenta"), f.get("principal")) for f in filas]
+           == [(A, True), (SEGUNDA, False)], f"{p.returncode} {p.stdout[:300]} {p.stderr[-300:]}")
+        ok("cada linea que no se pudo leer lo dice con su error corto, sin inventar numeros",
+           len(filas) == 2 and all(set(f) == {"cuenta", "principal", "error"}
+                                   and "locked" in f["error"] and len(f["error"]) <= 200
+                                   for f in filas), f"{filas}")
+        filas = (lineas_salud(home)[1] or {}).get("lineas") or []
+        ok("suelta la base, cada linea vuelve con lo suyo y sin error",
+           len(filas) == 2 and all("error" not in f and "tick_hace_s" in f for f in filas),
+           f"{filas}")
+
+
 # ── Una linea viva fuera de la lista (linea-fuera-de-lista) ──────────────────────────────
 # Visto en vivo: al reiniciar Orca los dos sidecars anotaron su linea a la vez y uno borro
 # la del otro de `lineas_activas`. La segunda linea siguio conectada y latiendo, capturando,
