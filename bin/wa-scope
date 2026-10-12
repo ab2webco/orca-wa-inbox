@@ -13332,7 +13332,16 @@ def cabeza_del_caso(con, caso, del_dueno=None, operador=None, de_casos=True):
         lineas.append(f"- Reply to another chat: allowed (the owner or a Super admin of this "
                       f"chat asked). When he asks to report to another chat, propose with "
                       f"`caso propuesta {caso['case_id']} ... --chat <jid>`; if he does not name "
-                      f"it, `caso destinos {caso['case_id']}` lists the candidates")
+                      f"it, `caso destinos {caso['case_id']}` lists the candidates"
+                      + (". The owner's own order also reaches a chat of another linked line "
+                         "(it goes out through that line) and a chat in borrador"
+                         if del_dueno else ""))
+        # Nunca en silencio (ordenes-del-dueno): una negativa vuelve a quien lo pidio.
+        lineas.append(f"- If the plugin refuses the destination (E_DEST_*, exit 2), never drop "
+                      f"the order: propose a reply in THIS chat (no --chat) saying in plain words "
+                      f"why it cannot go and what would make it possible (the detail says how "
+                      f"to enable a chat); with E_DEST_AMBIGUOUS, name the candidates of its "
+                      f"detail (name and line) and ask which one")
     else:
         lineas.append("- Reply to another chat: no (a customer's case: the reply goes to "
                       "this chat only)")

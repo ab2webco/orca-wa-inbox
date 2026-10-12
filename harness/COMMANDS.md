@@ -47,8 +47,11 @@ board, and anyone else gets `E_NOT_OWNER`.
 
 In a case of the owner or of a Super admin, `caso propuesta ... --chat <jid>` sends the
 reply (or a job's final reply) to another chat of the same line in responder, always after
-the owner's approval. A customer's case is refused with `E_DEST_ROLE`; the other refusals
-are `E_DEST_MODE`, `E_DEST_LINE`, `E_DEST_NOT_FOUND` and `E_DEST_AMBIGUOUS`.
+the owner's approval. The owner's own order also reaches a chat of another linked line
+(it goes out through that line) or one in borrador. A customer's case is refused with
+`E_DEST_ROLE`; the other refusals are `E_DEST_MODE` (the detail says how to enable the
+chat), `E_DEST_LINE`, `E_DEST_NOT_FOUND` and `E_DEST_AMBIGUOUS` (the detail names the candidates,
+each with its line). Every refusal goes back to whoever asked, in the case's own chat.
 
 The project agent does the same from its result, when the owner (or that Super admin) asks
 it to report to another chat: `caso resultado <id> --estado resuelto ... --chat <jid>

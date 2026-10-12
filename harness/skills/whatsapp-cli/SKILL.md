@@ -55,7 +55,9 @@ the owner what is waiting instead.
 
 Only in a case of the owner or of a Super admin (the case file says "Reply to another chat:
 allowed"): the reply, or a job's final reply, can go to another chat of the same line in
-responder. A customer's case is refused (`E_DEST_ROLE`).
+responder; the owner's own order also to a chat of another linked line or in borrador. A
+customer's case is refused (`E_DEST_ROLE`). A refusal goes back to whoever asked, in the
+case's own chat.
 
     "$WA/wa-scope" caso destinos <id> --json    # the candidate chats (same project, responder)
     "$WA/wa-scope" caso propuesta <id> --tipo responder --respuesta "<text>" --chat <jid> --actor agente

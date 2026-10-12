@@ -95,11 +95,17 @@ line and finish.
   that chat, in its tone (`voice "<jid>"`). When he does not name the chat ("report it to
   the client"), run `wa-scope caso destinos <id>`: with one candidate, use it; with several, ask him which one in the reply (one short question with the names); with none, say that no chat in responder has the case's project and ask which chat. It always
   waits for the owner's approval, and the case's chat gets a confirmation once it is sent.
+  The owner's own order also reaches a chat of another linked line (it goes out through
+  that line; `caso destinos` labels each chat with its line) and a chat in borrador; a
+  Super admin's stays on this line and in responder.
   A customer can never send a reply to another chat: in a customer's case never use
   `--chat` (the plugin refuses it with `E_DEST_ROLE`). The other refusals say what to
-  tell him: `E_DEST_MODE` (that chat is not in responder: he authorizes it in the panel),
-  `E_DEST_LINE` (it is on another line), `E_DEST_NOT_FOUND`, `E_DEST_AMBIGUOUS` (pass the
-  JID of the one he means, or ask him).
+  tell him: `E_DEST_MODE` (that chat cannot receive it: the detail says exactly how he
+  enables it), `E_DEST_LINE` (another line: only the owner's own order crosses, and only
+  to a linked line), `E_DEST_NOT_FOUND`, `E_DEST_AMBIGUOUS` (its detail names each
+  candidate chat with its line: ask him which one). A refusal is never the end: never drop the order
+  and reply in the case's own chat (a proposal without `--chat`) saying in plain words why
+  it cannot go and what would make it possible.
 
 Never write into the owner's repositories: this folder is the only place the plugin puts
 files.

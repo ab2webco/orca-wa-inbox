@@ -17146,6 +17146,17 @@ if NODE:
             js(home, "caso", "unir", mezcla, cliente, "--actor", "agente")
             ok("un caso donde escribio un cliente junto a la Super admin tampoco",
                error_de(propone_a(home, mezcla, "Facturacion")) == "E_DEST_ROLE")
+            # Nunca en silencio: el archivo del caso le dice al agente que conteste la negativa.
+            ws = carga_wa_scope(home)
+            con = ws.db()
+            try:
+                cabeza = "\n".join(ws.cabeza_del_caso(con, ws.caso_de(con, int(dueno))))
+            finally:
+                con.close()
+            ok("el archivo del caso del dueno manda contestar cada negativa en su chat",
+               "E_DEST" in cabeza and "never drop" in cabeza.lower(), cabeza)
+            ok("y le dice que su orden cruza de linea y vale sobre un chat en borrador",
+               "another linked line" in cabeza and "borrador" in cabeza, cabeza)
         finally:
             os.environ.clear()
             os.environ.update(env_antes)
