@@ -500,10 +500,16 @@ def columna_cita(con, prefijo="m"):
     return f"{prefijo}.cita_id" if tiene else "null"
 
 
-def inbox(con, dias, limite, ventana, solo="todos", linea=None):
-    """Lo que le hablo a usted y todavia no contesto."""
+def inbox(con, dias, limite, ventana, solo="todos", linea=None, stanzas=None):
+    """Lo que le hablo a usted y todavia no contesto. Con `stanzas`, esos mensajes y nada
+    mas, sin mirar la ventana de `dias`: lo atrasado que retoma ingest (sin-responder) se
+    lee con la misma forma que la bandeja."""
     corte = int(time.time()) - dias * 86400
     donde, args = filtro_linea(linea)
+    if stanzas is not None:
+        corte = 0
+        donde += f" and m.stanza_id in ({','.join('?' * len(stanzas))})"
+        args = args + list(stanzas)
     if solo == "grupos":
         donde += " and c.is_group = 1"
     elif solo == "directos":

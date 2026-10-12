@@ -4586,6 +4586,9 @@ def trabajo_espera_al_dueno(con, caso):
     scope = merged_scope(con).get(caso["chat_jid"]) or {}
     if scope.get("mode") not in MODOS_SIN_CLIC:
         motivos.append("mode")
+    # Un pedido de hace dias no corre solo, aunque sea del dueno (sin-responder).
+    if es_rezago(con, caso["case_id"]):
+        motivos.append(REZAGO_FRENO)
     # El proyecto efectivo del caso, el mismo que usaria el despacho (proyectos-por-chat,
     # M4): sin ninguno espera (`no_project`); fuera de los proyectos aceptados del chat, o
     # con un `repo` que no lo nombra, tambien (`outside_project`).
@@ -4662,6 +4665,9 @@ def frenos_de_regla(con, caso):
         al_dueno.append("project_question")
     if destino:
         al_dueno.append(OTRO_CHAT)
+    # Lo que retoma lo atrasado de un chat lo firma el dueno, nunca la regla (sin-responder).
+    if caso.get("case_id") is not None and es_rezago(con, caso["case_id"]):
+        al_dueno.append(REZAGO_FRENO)
     return al_dueno, al_agente
 
 
@@ -5025,6 +5031,9 @@ def avance_frena(con, caso):
     None. Se mira al pedirlo y otra vez al mandarlo: entre los dos el dueno pudo cambiar el
     chat o el caso pudo moverse."""
     cid = caso["case_id"]
+    if es_rezago(con, cid):
+        return ("E_CATCH_UP", f"case #{cid} picks up earlier pending topics: its one message is "
+                              f"a proposal the owner approves, and it sends no updates")
     fila = merged_scope(con).get(caso["chat_jid"]) or {}
     modo = primer_modo(fila, merged_settings(con, linea_del_caso(caso)))[0]
     if modo not in MODOS_AGENTE_PRIMERO:
@@ -5175,7 +5184,7 @@ def instrucciones_primer_mensaje(con, caso, actor):
     siempre (el acuse no lo escribe el agente) ya va en la cabeza del caso."""
     fila = merged_scope(con).get(caso["chat_jid"]) or {}
     pm = primer_mensaje_de(fila, merged_settings(con, linea_del_caso(caso)))
-    if not pm["beta"]:
+    if not pm["beta"] or es_rezago(con, caso["case_id"]):
         return []
     cid, wa = caso["case_id"], ruta_wa_scope()
     lineas = [
@@ -6169,7 +6178,8 @@ def cmd_caso_estado(con, a):
 EXTENSIONES_AUDIO = (".opus", ".ogg", ".oga", ".mp3", ".m4a", ".aac", ".wav", ".amr")
 # Lo que ingest reporta, en este orden. `casos` va aparte: son los ids tocados.
 CONTEOS_INGEST = ("vistos", "nuevos", "casos_creados", "unidos", "cerrados", "dudosos",
-                  "sin_caso", "ignorados", "anteriores", "audios_diferidos", "respuestas")
+                  "sin_caso", "ignorados", "anteriores", "audios_diferidos", "respuestas",
+                  "rezago_casos", "rezago_atendidos")
 # La prioridad de un caso que ingest clasifica. No la inventa: ni el dueno ni un veredicto
 # cacheado dicen cuan urgente es, y `none` es la unica que no afirma nada.
 PRIORIDAD_INGEST = "none"
@@ -6197,6 +6207,12 @@ SIN_AGENTE = {
     # credencial: en un grupo con mucho movimiento, cada linea suelta despertando al agente
     # es una corrida por charla. Un pedido, o una mencion, si lo despierta.
     "grupo_no_dirigido": "una linea de un grupo que no es para el asistente y no pide nada",
+    # Lo atrasado de un chat que ya se atendio de otra forma (sin-responder): salio un mensaje
+    # de la linea despues, un caso mas nuevo del chat lo cubre, o cita algo ya resuelto. No se
+    # le escribe nada al cliente.
+    "rezago_contestado": "ya atendido: salio un mensaje despues en el chat",
+    "rezago_cubierto": "ya atendido: lo cubre un caso mas nuevo del mismo chat",
+    "rezago_resuelto": "ya atendido: cita algo de un caso ya resuelto",
 }
 # Las clases de Jev que son un pedido (o lo que merece una respuesta): lo que despierta al
 # agente aunque el mensaje no vaya dirigido a el.
@@ -7967,6 +7983,216 @@ def cmd_doctor(con, a):
     return None
 
 
+# ── Lo atrasado de cada chat (sin-responder) ────────────────────────────────────────────
+# Visto en vivo: 31 mensajes de clientes, de hace tres dias a hace ocho horas, que nadie
+# juzgo ni contesto: la linea estuvo dias sin atenderse y lo de antes de la ventana
+# (`inbox_days`) se perdia. Decision del dueno (2026-10-12): no se vence, no se le deja como
+# tarjetas para ordenar, y no se contesta mensaje por mensaje. Lo atrasado que ya se atendio
+# (salio un mensaje de la linea despues, un caso mas nuevo del chat lo cubrio, o cita algo de
+# un caso ya resuelto) se cierra con su motivo y al cliente no le sale nada. Lo que sigue
+# abierto se retoma en UN caso por chat, juzgado como UNA rafaga: su respuesta es UN mensaje
+# que retoma los temas pendientes, sin acuse ni avances, y lo firma el dueno (`catch_up`).
+# El evento con que nace el caso que retoma lo atrasado: es lo que lo distingue despues.
+REZAGO_EVENTO = "retoma pendientes:"
+# Por que la regla del dueno no firma sola lo que sale de ese caso.
+REZAGO_FRENO = "catch_up"
+# Cuantos chats atrasados retoma una corrida: un atraso grande se reparte en varias, del chat
+# que mas espera al que menos, y cada chat entra entero.
+TOPE_REZAGO_CHATS = 5
+# Los motivos con que se cierra lo atrasado que ya se atendio: reglas de `SIN_AGENTE`, que la
+# tarjeta cerrada dice en el idioma del panel. El cubierto nombra el caso que lo cubre.
+REZAGO_CONTESTADO = motivo_sin_agente("rezago_contestado")
+REZAGO_CUBIERTO = motivo_sin_agente("rezago_cubierto") + " (#{n})"
+REZAGO_YA_RESUELTO = motivo_sin_agente("rezago_resuelto")
+# Como empieza el mensaje que retoma lo pendiente, en el ejemplo que lee el agente.
+EJEMPLO_REZAGO = "Retomando los temas pendientes:"
+# Lo que el archivo del caso le dice al agente sobre ese mensaje (en ingles, como el resto del
+# archivo). Las reglas de redaccion son del dueno: nada de fallas ni disculpas, y nada que
+# juzgue el trabajo ya hecho; lo abierto es un seguimiento.
+REGLAS_REZAGO = (
+    "These messages arrived earlier and nobody answered them. Some topics may already be "
+    "settled: read the recent conversation first (`wa-read chat`) and leave out anything "
+    "already answered or handled.",
+    "Write ONE short message for this chat that picks up the topics still open, like a "
+    "start-of-week roundup, in the chat's language and its configured tone (`voice`). For "
+    f"example, in Spanish it can open with \"{EJEMPLO_REZAGO}\". Do not answer message by "
+    "message and do not repeat greetings.",
+    "Keep it short, concrete and about the open topics only, neutral and professional.",
+    "Never say or imply that the bot, the system or the service failed, was down, did not "
+    "work or caused a delay, and never apologize for a failure.",
+    "Never say or imply that the work already done for the customer does not work, failed, "
+    "is broken, has to be redone, or was wrong or useless. Unless the customer explicitly "
+    "reported a defect in this thread, present each open topic as a pending follow-up, "
+    "without judging past work.",
+    "Leave it as a `responder` proposal (`caso propuesta`): the owner approves it before it "
+    "goes out, never the rule. Never send updates (`caso avance`) on this case.",
+)
+
+
+def seccion_de_rezago(con, caso):
+    """Las lineas del archivo del caso que retoma lo atrasado de su chat; nada en otro."""
+    if not es_rezago(con, caso["case_id"]):
+        return []
+    return ["", "## Pending topics from earlier (catch-up)",
+            *[f"- {r}" for r in REGLAS_REZAGO]]
+
+
+def es_rezago(con, case_id):
+    """Si el caso nacio retomando lo atrasado de su chat (sin-responder)."""
+    return con.execute("select 1 from caso_evento where case_id=? and de is null and "
+                       "a='recibido' and detalle like ? limit 1",
+                       (case_id, f"{REZAGO_EVENTO}%")).fetchone() is not None
+
+
+def rezago_reparte(con, fuente, cuenta, chat, filas):
+    """(atendidos, abiertos) de lo atrasado de un chat: `atendidos` es {motivo: [stanza]} de
+    lo que ya se atendio de otra forma, y `abiertos` las filas que siguen esperando."""
+    mia = fuente.execute("select max(ts) from mensaje where account=? and chat_jid=? and "
+                         "from_me=1 and revocado=0", (cuenta, chat)).fetchone()[0] or 0
+    nuevo = con.execute("select case_id, created_at from caso where account=? and chat_jid=? "
+                        "order by created_at desc, case_id desc limit 1",
+                        (cuenta, chat)).fetchone()
+    nuevo_ts = sello_a_epoch(nuevo["created_at"]) if nuevo else None
+    citas = sorted({f["cita_id"] for f in filas if f.get("cita_id")})
+    resueltas = set()
+    if citas:
+        resueltas = {r["stanza_id"] for r in con.execute(
+            f"select m.stanza_id from caso_mensaje m join caso c on c.case_id=m.case_id where "
+            f"m.account=? and c.etapa in ('respondido','cerrado') and m.stanza_id in "
+            f"({','.join('?' * len(citas))})", (cuenta, *citas))}
+    atendidos, abiertos = {}, []
+    for f in filas:
+        if f["ts"] <= mia:
+            motivo = REZAGO_CONTESTADO
+        elif nuevo_ts is not None and f["ts"] <= nuevo_ts:
+            motivo = REZAGO_CUBIERTO.format(n=nuevo["case_id"])
+        elif f.get("cita_id") in resueltas:
+            motivo = REZAGO_YA_RESUELTO
+        else:
+            abiertos.append(f)
+            continue
+        atendidos.setdefault(motivo, []).append(f["stanza_id"])
+    return atendidos, abiertos
+
+
+def rezago_cierra(con, chat, stanzas, actor, motivo, juicio=None):
+    """Lo atrasado que no pide nada: un caso cerrado con su motivo, que el dueno ve en el
+    tablero, y nada al cliente. Devuelve cuantos mensajes cerro."""
+    caso_toma(con)
+    try:
+        stanzas = [s for s in stanzas if not caso_de_mensaje(con, s)]
+        if not stanzas:
+            con.rollback()
+            return 0
+        case_id = caso_nuevo(con, chat, "automatizacion", stanzas=stanzas,
+                             detalle=f"{REZAGO_EVENTO} {len(stanzas)} mensajes de antes")
+        caso = caso_de(con, case_id)
+        caso_valida(caso, "cerrado", motivo)
+        caso_mover(con, caso, "cerrado", actor, motivo)
+        if juicio:
+            caso_marca_jev(con, case_id, juicio, stanzas[0])
+        con.commit()
+    except BaseException:
+        con.rollback()
+        CANCELACIONES.clear()
+        raise
+    return len(stanzas)
+
+
+def rezago_abre(con, chat, items, veredicto):
+    """Lo atrasado que sigue abierto: UN caso con todos sus mensajes, clasificado con el
+    veredicto de la rafaga, sin acuse ni saludo. Devuelve el id, o None si ya tenian caso."""
+    caso_toma(con)
+    try:
+        items = [m for m in items if not caso_de_mensaje(con, m["stanza_id"])]
+        if not items:
+            con.rollback()
+            return None
+        stanzas = [m["stanza_id"] for m in items]
+        case_id = caso_nuevo(con, chat, "automatizacion", stanzas=stanzas,
+                             detalle=f"{REZAGO_EVENTO} {len(stanzas)} mensajes sin respuesta "
+                                     f"desde {items[0].get('date') or '-'}")
+        caso_enruta(con, case_id, SEPARADOR_RAFAGA.join(
+            (m.get("text") or "").strip() for m in items if (m.get("text") or "").strip()), chat)
+        if veredicto and veredicto.get("accion") == "clasificar":
+            caso_clasifica(con, case_id, veredicto)
+        if veredicto and veredicto.get("jev"):
+            caso_marca_jev(con, case_id, veredicto["jev"], stanzas[0])
+        for m in items:
+            caso_marca_regla(con, case_id, piso_de_entrada(m), m["stanza_id"])
+        con.commit()
+    except BaseException:
+        con.rollback()
+        CANCELACIONES.clear()
+        raise
+    return case_id
+
+
+def ingest_rezago(con, cuenta, leidos, scope, decisiones, prepara, horas, total, casos):
+    """Lo atrasado de la linea: lo que nadie juzgo (`pendientes_de_linea`) y la lectura de
+    esta corrida no trajo, de a lo mas TOPE_REZAGO_CHATS chats, el que mas espera primero.
+    Lo ya atendido se cierra con su motivo; lo abierto de cada chat es UNA rafaga, juzgada en
+    el orden de siempre (lo que marco el dueno, las reglas deterministas, Jev) y retomada en
+    UN caso. Lo que nada pudo juzgar (Jev sin contestar en una linea suelta de un grupo)
+    queda como estaba: lo sigue contando la salud, y la alerta de la linea lo dice."""
+    try:
+        fuente = wa_store.abrir()
+    except wa_store.SinFuente:
+        return
+    try:
+        por_chat = {}
+        for f in pendientes_de_linea(con, fuente, cuenta, time.time()):
+            if f["stanza_id"] not in leidos:
+                por_chat.setdefault(f["chat_jid"], []).append(f)
+        for chat in sorted(por_chat, key=lambda c: por_chat[c][0]["ts"])[:TOPE_REZAGO_CHATS]:
+            entrada = scope.get(chat)
+            if not entrada or entrada.get("mode") == "off":
+                continue
+            atendidos, abiertos = rezago_reparte(con, fuente, cuenta, chat, por_chat[chat])
+            for motivo, stanzas in atendidos.items():
+                total["rezago_atendidos"] += rezago_cierra(con, chat, stanzas,
+                                                           "automatizacion", motivo)
+            if not abiertos:
+                continue
+            leidas = wa_store.inbox(fuente, 0, len(abiertos), 5, "todos", cuenta,
+                                    stanzas=[f["stanza_id"] for f in abiertos])
+            items = [prepara(m, entrada) for m in reversed(leidas)]
+            ignorados = [m["stanza_id"] for m in items
+                         if (decisiones.get(m["stanza_id"]) or {}).get("decision") == "ignore"]
+            if ignorados:
+                total["rezago_atendidos"] += rezago_cierra(con, chat, ignorados, "dueno",
+                                                           "ignorado por el dueno")
+            items = [m for m in items if m["stanza_id"] not in ignorados]
+            if not items:
+                continue
+            # Los audios se transcriben como siempre; uno que pasa el tope de la corrida
+            # entra igual, sin texto: el caso es UNO y no se parte en dos corridas.
+            hechos = {m["stanza_id"]: m for m in transcribe_nuevos(con, items, horas, total)}
+            items = [hechos.get(m["stanza_id"], m) for m in items]
+            base = mensaje_de_rafaga(items) if len(items) > 1 else items[0]
+            veredicto = veredicto_de(base, None, con)
+            if veredicto and veredicto.get("accion") == "cerrar":
+                total["rezago_atendidos"] += rezago_cierra(
+                    con, chat, [m["stanza_id"] for m in items], veredicto["actor"],
+                    veredicto.get("motivo") or motivo_sin_agente("jev_skip"),
+                    veredicto.get("jev"))
+                continue
+            if veredicto is None and base.get("kind") == "grupo":
+                if jev_cacheado(con, base) is None:
+                    # Nadie lo juzgo (Jev no contesto): sigue pendiente y a la vista.
+                    continue
+                total["rezago_atendidos"] += rezago_cierra(
+                    con, chat, [m["stanza_id"] for m in items], "jev",
+                    motivo_sin_agente("grupo_no_dirigido"), jev_cacheado(con, base))
+                continue
+            case_id = rezago_abre(con, chat, items, veredicto)
+            if case_id is not None:
+                total["rezago_casos"] += 1
+                casos.add(case_id)
+    finally:
+        fuente.close()
+
+
 def cmd_ingest(con, a):
     """Los mensajes nuevos de las conversaciones autorizadas pasan a casos.
 
@@ -8015,6 +8241,23 @@ def cmd_ingest(con, a):
     rol_de = roles_de_entrada(con)
     numero = numero_aprobacion()
     tono_global = ajustes_auto.get("tone") or DEFAULT_CONFIG["tone"]
+
+    def prepara(m, entrada):
+        return dict(
+            m, modo=entrada.get("mode"),
+            rol=rol_de(m),
+            # Lo que Jev necesita del chat para juzgar (T22.5): como escribe el asistente
+            # ahi y que hace, tal como el dueno lo configuro.
+            tono=(entrada.get("tone") or "").strip() or tono_global,
+            instrucciones=(entrada.get("instructions") or "").strip() or None,
+            # En los modos del agente (Beta) el pedido nuevo tambien se reconoce: el primer
+            # mensaje lo escribe el agente aunque el acuse fijo este apagado.
+            primer=primer_modo(entrada, ajustes_auto)[0],
+            auto_acuse=(auto_ajuste(entrada, ajustes_auto, "acuse")[0]
+                        or primer_modo(entrada, ajustes_auto)[0] in MODOS_AGENTE_PRIMERO),
+            auto_saludo=auto_ajuste(entrada, ajustes_auto, "saludo")[0],
+            sticker_suelto=(m.get("media_type") == "sticker" and not (m.get("text") or "").strip()))
+
     abren, sueltos = [], []
     # Del mas viejo al mas nuevo: el inbox viene al reves, y el primero de un pedido es
     # el que abre el caso.
@@ -8040,20 +8283,7 @@ def cmd_ingest(con, a):
             if atiende_respuesta(con, m):
                 total["respuestas"] += 1
                 continue
-        nuevos.append(dict(
-            m, modo=entrada.get("mode"),
-            rol=rol_de(m),
-            # Lo que Jev necesita del chat para juzgar (T22.5): como escribe el asistente
-            # ahi y que hace, tal como el dueno lo configuro.
-            tono=(entrada.get("tone") or "").strip() or tono_global,
-            instrucciones=(entrada.get("instructions") or "").strip() or None,
-            # En los modos del agente (Beta) el pedido nuevo tambien se reconoce: el primer
-            # mensaje lo escribe el agente aunque el acuse fijo este apagado.
-            primer=primer_modo(entrada, ajustes_auto)[0],
-            auto_acuse=(auto_ajuste(entrada, ajustes_auto, "acuse")[0]
-                        or primer_modo(entrada, ajustes_auto)[0] in MODOS_AGENTE_PRIMERO),
-            auto_saludo=auto_ajuste(entrada, ajustes_auto, "saludo")[0],
-            sticker_suelto=(m.get("media_type") == "sticker" and not (m.get("text") or "").strip())))
+        nuevos.append(prepara(m, entrada))
     nuevos = transcribe_nuevos(con, nuevos, horas, total)
     # Lo que ya tiene decision del dueno o juicio del agente se resuelve solo; el resto,
     # junto con lo que llego pegado en el mismo chat, se juzga como una rafaga.
@@ -8089,6 +8319,15 @@ def cmd_ingest(con, a):
             if veredicto and veredicto.get("accion") == "cerrar":
                 # El resto de una rafaga que no pide nada se suma a ese mismo caso cerrado.
                 veredicto.setdefault("al_caso", case_id)
+    # Lo atrasado de cada chat (sin-responder): lo de antes de la ventana que nadie juzgo.
+    # Una falla aca no deshace lo de arriba, que ya quedo: se dice y lo cuenta la salud.
+    try:
+        ingest_rezago(con, cuenta, {m.get("stanza_id") for m in mensajes}, scope,
+                      decisiones, prepara, horas, total, casos)
+    except (sqlite3.Error, OSError) as exc:
+        if con.in_transaction:
+            con.rollback()
+        print(f"wa-scope: catch-up skipped: {exc}", file=sys.stderr)
     # Lo que Jev dejo con una credencial no pasa por el agente: va al dueno ya.
     casos_credencial_a_decision(con)
     # La confirmacion de lo que el dueno contesto sale ya, no al minuto siguiente: esta
@@ -10030,7 +10269,8 @@ MOTIVOS_AVISO = {
            "project_question": "la pregunta de proyecto es suya",
            "mode": "el chat no responde solo", "stale": "la propuesta tiene mas de un dia",
            "exceptions": "el caso trae excepciones", "no_instructions": "no trae instrucciones",
-           "other_chat": "va a otro chat y lo aprueba usted"},
+           "other_chat": "va a otro chat y lo aprueba usted",
+           "catch_up": "retoma temas pendientes de antes y lo aprueba usted"},
     "en": {"money": "it mentions money", "credential": "it names a credential",
            "commitment": "it commits to a date", "jev": "Jev held it",
            "jev-unavailable": "Jev did not answer", "secret": "it carries a secret",
@@ -10046,7 +10286,8 @@ MOTIVOS_AVISO = {
            "mode": "the chat does not answer on its own",
            "stale": "the proposal is more than a day old",
            "exceptions": "the case carries exceptions", "no_instructions": "it has no instructions",
-           "other_chat": "it goes to another chat and you approve it"},
+           "other_chat": "it goes to another chat and you approve it",
+           "catch_up": "it picks up earlier pending topics and you approve it"},
 }
 # Lo que dice cada aviso, en el tono del panel (de usted). `{n}` es el numero del caso.
 TEXTOS_AVISO = {
@@ -13176,6 +13417,10 @@ def cabeza_del_caso(con, caso, del_dueno=None, operador=None, de_casos=True):
         lineas.append("- Reply to another chat: no (a customer's case: the reply goes to "
                       "this chat only)")
     modo = primer_modo(chat, merged_settings(con, linea_del_caso(caso)))[0]
+    if es_rezago(con, cid):
+        lineas.append("- First message: none on this case: it picks up earlier pending topics "
+                      "in one message the owner approves (see below)")
+        return lineas + instrucciones_del_chat(chat)
     lineas.append(f"- First message: first_reply_mode {modo} (Beta): you write it, see "
                   f"\"First message and updates\" below" if modo in MODOS_AGENTE_PRIMERO else
                   f"- First message: first_reply_mode {modo}: the plugin sends the fixed "
@@ -13285,8 +13530,8 @@ def seccion_de_linea(caso):
 def archivo_de_caso(con, caso):
     """El archivo del caso para el agente de casos, en ingles."""
     cid = caso["case_id"]
-    cola = (seccion_de_linea(caso) + seccion_de_pregunta(con, caso)
-            + historia_del_caso(con, caso)
+    cola = (seccion_de_linea(caso) + seccion_de_rezago(con, caso)
+            + seccion_de_pregunta(con, caso) + historia_del_caso(con, caso)
             + instrucciones_primer_mensaje(con, caso, "agente")) + [
         "", "## The whole record, if you need it",
         f"{ruta_wa_scope()} caso ver {cid} --json",
@@ -14400,43 +14645,63 @@ def edad_s(desde, ahora_s):
         return None
 
 
-def sin_juzgar_de_linea(con, fuente, cuenta, ahora_s):
-    """Los `ts` de lo que llego a la linea y nadie juzgo: entrante, no revocado, de la
-    ventana de casos, en una conversacion autorizada y no `off` de ESA linea, sin fila en
-    `caso_mensaje` ni veredicto en `juicio` (el suyo, o el de la rafaga que lo incluye).
+def corte_sin_juzgar(con, cuenta, ahora_s):
+    """Desde cuando un mensaje que nadie juzgo sigue siendo de alguien (sin-responder), en
+    epoch: la linea base de ingest de la linea (la que fijaria su primera corrida, si todavia
+    no corrio: lo de antes de estrenarla no se importa) y nunca antes de lo que guarda el
+    almacen (`capture_days`). Ni `inbox_days` ni `case_window_hours` lo acortan: visto en
+    vivo, una linea que estuvo dias sin atenderse perdia todo lo anterior a la ventana, sin
+    caso, sin respuesta y sin que la alerta lo viera."""
+    base = base_ingest_guardada(con, cuenta)
+    if base is None:
+        base = ahora_s - ventana_casos(con, cuenta) * 3600
+    dias = wa_store.entero(wa_store.ajustes(cuenta), "capture_days")
+    return max(base, ahora_s - dias * 86400)
+
+
+def pendientes_de_linea(con, fuente, cuenta, ahora_s):
+    """Lo que llego a la linea y nadie juzgo, del mas viejo al mas nuevo: entrante, no
+    revocado, desde `corte_sin_juzgar`, en una conversacion autorizada y no `off` de ESA
+    linea, sin fila en `caso_mensaje` ni veredicto en `juicio` (el suyo, o el de la rafaga
+    que lo incluye). Filas con `chat_jid`, `stanza_id`, `ts` y `cita_id`. Es la misma regla
+    para la salud y para lo atrasado que retoma ingest.
 
     No cuenta lo que ingest no juzga a proposito: lo de antes de su linea base (o de la de
-    una autorizacion que siguio a un directo), las respuestas del dueno a un aviso, y una
+    una autorizacion que siguio a un directo), las respuestas del dueno a un aviso, una
     linea suelta de un grupo sin Jev en la linea (sin Jev queda sin caso, y no es una linea
-    parada)."""
+    parada), y un sticker suelto de un grupo (la regla lo cierra sin caso ni juicio)."""
     scope = merged_scope(con, cuenta)
     autorizados = {jid for jid, e in scope.items() if e.get("mode") != "off"}
     if not autorizados:
         return []
-    horas = ventana_casos(con, cuenta)
-    dias = wa_store.entero(wa_store.ajustes(cuenta), "inbox_days")
-    desde = max(ahora_s - horas * 3600, ahora_s - dias * 86400,
-                base_ingest_guardada(con, cuenta) or 0)
+    desde = corte_sin_juzgar(con, cuenta, ahora_s)
     bases = bases_lid(con, cuenta)
     con_jev = bool(jev_en_linea(cuenta) and wa_jev.llave())
     marcas = ",".join("?" * len(autorizados))
     filas = fuente.execute(
-        "select m.chat_jid, m.stanza_id, m.ts, m.menciona_me, m.cita_me, c.is_group "
+        f"select m.chat_jid, m.stanza_id, m.ts, m.menciona_me, m.cita_me, c.is_group, "
+        f"m.media_type, m.body, {wa_store.columna_cita(fuente)} cita_id "
         "from mensaje m join chat c on c.account = m.account and c.chat_jid = m.chat_jid "
         "where m.account = ? and m.from_me = 0 and m.revocado = 0 and m.ts >= ? "
-        f"and m.chat_jid in ({marcas})", (cuenta, int(desde), *sorted(autorizados))).fetchall()
+        f"and m.chat_jid in ({marcas}) order by m.ts, m.rowid",
+        (cuenta, int(desde), *sorted(autorizados))).fetchall()
     candidatos = [f for f in filas if f["ts"] >= bases.get(f["chat_jid"], 0)
-                  and (con_jev or wa_store.clase_de(f) != "grupo")]
+                  and (wa_store.clase_de(f) != "grupo"
+                       or (con_jev and not (f["media_type"] == "sticker"
+                                            and not (f["body"] or "").strip())))]
     if not candidatos:
         return []
     stanzas = sorted({f["stanza_id"] for f in candidatos})
-    de_ellos = ",".join("?" * len(stanzas))
-    juzgados = {r["stanza_id"] for r in con.execute(
-        f"select stanza_id from caso_mensaje where account=? and stanza_id in ({de_ellos}) "
-        f"union select stanza_id from aviso where tipo='respuesta' and account=? and "
-        f"stanza_id in ({de_ellos})", (cuenta, *stanzas, cuenta, *stanzas))}
+    juzgados = set()
+    for i in range(0, len(stanzas), 400):
+        parte = stanzas[i:i + 400]
+        de_ellos = ",".join("?" * len(parte))
+        juzgados.update(r["stanza_id"] for r in con.execute(
+            f"select stanza_id from caso_mensaje where account=? and stanza_id in ({de_ellos}) "
+            f"union select stanza_id from aviso where tipo='respuesta' and account=? and "
+            f"stanza_id in ({de_ellos})", (cuenta, *parte, cuenta, *parte)))
     # Jev juzga una rafaga bajo su primer mensaje: los demas van en `rafaga`. Un veredicto
-    # se escribe despues de que llego su mensaje: los de antes de la ventana no hacen falta.
+    # se escribe despues de que llego su mensaje: los de antes del corte no hacen falta.
     for r in con.execute(f"select stanza_id, rafaga from juicio where account=? and "
                          f"chat_jid in ({marcas}) and at >= ?",
                          (cuenta, *sorted(autorizados),
@@ -14448,7 +14713,13 @@ def sin_juzgar_de_linea(con, fuente, cuenta, ahora_s):
             rafaga = []
         if isinstance(rafaga, list):
             juzgados.update(s for s in rafaga if isinstance(s, str))
-    return [f["ts"] for f in candidatos if f["stanza_id"] not in juzgados]
+    return [{k: f[k] for k in ("chat_jid", "stanza_id", "ts", "cita_id")}
+            for f in candidatos if f["stanza_id"] not in juzgados]
+
+
+def sin_juzgar_de_linea(con, fuente, cuenta, ahora_s):
+    """Los `ts` de lo que llego a la linea y nadie juzgo (`pendientes_de_linea`)."""
+    return [f["ts"] for f in pendientes_de_linea(con, fuente, cuenta, ahora_s)]
 
 
 def cmd_lineas_salud(con, a):
