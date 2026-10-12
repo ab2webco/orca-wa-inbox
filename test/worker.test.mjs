@@ -864,6 +864,87 @@ console.log('\nworker: lv3-auditoria — la salud que no se lee')
   }
 }
 
+// ───────── lv3-auditoria: los contenedores de linea, con el candado del storage ─────────
+// El host guarda storage.json leyendo el archivo, cambiando una clave y escribiendo el
+// archivo entero, sin el candado de wa-scope. El worker relee y reescribe por el host los
+// contenedores de cada linea (`alcancePorLinea`, `ajustesPorLinea`): un sync o un tick que
+// escribia en medio se perdia, o pisaba lo del worker. Ahora el worker los escribe con el
+// candado que le presta `wa-scope storage-lock`.
+console.log('\nworker: lv3-auditoria — los contenedores de linea, con el candado del storage')
+{
+  const { conCandadoDelStorage } = await import('../main.mjs')
+  const CANDADO = [
+    '#!/bin/sh',
+    'D="$(dirname "$0")"',
+    'case "$1" in',
+    '  storage-lock) echo tomado >> "$D/candado.txt"; echo \'{"locked": true}\';',
+    '    cat > /dev/null; echo suelto >> "$D/candado.txt" ;;',
+    '  *) echo \'[{"synced": true, "destinos": []}]\' ;;',
+    'esac', ''].join('\n')
+  const estadoCandado = (dir) => existsSync(join(dir, 'candado.txt'))
+    ? readFileSync(join(dir, 'candado.txt'), 'utf8').trim().split('\n') : []
+
+  {
+    const dir = herramientas('candado-unidad', CANDADO)
+    let durante = null
+    const r = await conCandadoDelStorage(join(dir, 'wa-scope'), async () => {
+      durante = estadoCandado(dir)
+      return 'hecho'
+    })
+    ok('lv3: lo que se escribe corre con el candado tomado, y devuelve lo suyo',
+      r === 'hecho' && JSON.stringify(durante) === JSON.stringify(['tomado']), JSON.stringify(durante))
+    ok('lv3: y al terminar el candado se suelta',
+      await hasta(() => estadoCandado(dir).at(-1) === 'suelto', 5000), JSON.stringify(estadoCandado(dir)))
+  }
+  {
+    const dir = herramientas('candado-falla', CANDADO)
+    let error = null
+    try {
+      await conCandadoDelStorage(join(dir, 'wa-scope'), async () => { throw new Error('host caido') })
+    } catch (e) { error = e }
+    ok('lv3: si la escritura falla, la falla sube y el candado igual se suelta',
+      error?.message === 'host caido' && await hasta(() => estadoCandado(dir).at(-1) === 'suelto', 5000),
+      JSON.stringify([error?.message, estadoCandado(dir)]))
+  }
+  {
+    // Un wa-scope de antes (no conoce `storage-lock`) o que no esta: se escribe igual, como
+    // antes, y no se espera al plazo entero.
+    const viejo = herramientas('candado-viejo', '#!/bin/sh\necho \'[]\'\n')
+    const inicio = Date.now()
+    const r1 = await conCandadoDelStorage(join(viejo, 'wa-scope'), async () => 'sin candado')
+    const r2 = await conCandadoDelStorage(join(RAIZ, 'no-existe', 'wa-scope'), async () => 'sin herramienta')
+    ok('lv3: sin el candado se escribe igual, sin esperar el plazo',
+      r1 === 'sin candado' && r2 === 'sin herramienta' && Date.now() - inicio < 5000,
+      JSON.stringify([r1, r2, Date.now() - inicio]))
+  }
+  {
+    // El camino de verdad: guardar una conversacion de otra linea desde el panel.
+    const dir = herramientas('candado-alcance', CANDADO)
+    const orca = hostFalso(dir, { chats: [], alcancePorLinea: { 'pn:15550000002': {} } })
+    const llamar = orca.host.call
+    const conCandado = []
+    orca.host.call = async (action, params) => {
+      if (action === 'storage.set' && params.key === 'alcancePorLinea') {
+        conCandado.push(estadoCandado(dir).at(-1) === 'tomado')
+      }
+      return llamar(action, params)
+    }
+    const { apagar } = await arranca(orca)
+    orca.store.scopeRequest = { id: 'guarda-linea', action: 'guardar', jid: '9@g.us',
+      linea: 'pn:15550000002', at: new Date().toISOString(),
+      entrada: { chatName: 'Soporte B', mode: 'borrador' } }
+    await hasta(() => orca.store.scopeResult?.requestId === 'guarda-linea', 15000)
+    ok('lv3: la conversacion de otra linea se guarda con el candado del storage tomado',
+      orca.store.scopeResult?.ok === true &&
+      orca.store.alcancePorLinea?.['pn:15550000002']?.['9@g.us']?.mode === 'borrador' &&
+      JSON.stringify(conCandado) === JSON.stringify([true]),
+      JSON.stringify([orca.store.scopeResult, conCandado]))
+    ok('lv3: y despues lo suelta', await hasta(() => estadoCandado(dir).at(-1) === 'suelto', 5000),
+      JSON.stringify(estadoCandado(dir)))
+    apagar()
+  }
+}
+
 // ───────── el sync deja escrito que fallo, y por que ─────────
 console.log('\nworker: el sync que falla lo dice')
 {

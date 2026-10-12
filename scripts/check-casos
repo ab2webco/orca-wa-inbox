@@ -17143,6 +17143,51 @@ if NODE:
         os.environ.clear()
         os.environ.update(env_lv6)
 
+# ── El candado del storage, para el worker (lv3-auditoria, 7) ────────────────────────────
+# El host de Orca guarda storage.json leyendo el archivo, cambiando una clave y escribiendo
+# el archivo entero, sin el candado de wa-scope. El worker lee y escribe los contenedores de
+# cada linea (`ajustesPorLinea`, `alcancePorLinea`) por el host: un sync o un tick que
+# escribia en medio se perdia, o pisaba lo del worker. `storage-lock` le presta el candado:
+# lo toma, dice `{"locked": true}` y lo tiene hasta que el worker cierra su entrada (o un
+# plazo, para que un worker colgado no frene a nadie).
+print("\nel candado del storage, para el worker (lv3-auditoria)")
+with tempfile.TemporaryDirectory() as home:
+    env = dict(os.environ, HOME=str(home), XDG_CONFIG_HOME=str(pathlib.Path(home) / ".config"),
+               APPDATA=str(pathlib.Path(home) / "AppData" / "Roaming"),
+               ORCA_CLI_COMMAND=SIN_ORCA)
+    hijo = subprocess.Popen([str(WA_SCOPE), "storage-lock", "--json"], env=env,
+                            stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE, text=True)
+    try:
+        primera = hijo.stdout.readline()
+        ruta = pathlib.Path(home) / ".wa-inbox" / "storage.lock"
+        ruta.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            ajeno = toma_candado(ruta)
+            ajeno.close()
+            tomado = False
+        except OSError:
+            tomado = True
+        ok("dice que lo tiene, y mientras tanto nadie mas lo toma",
+           _json_o_nada_prueba(primera) == {"locked": True} and tomado,
+           f"{primera!r} {tomado}")
+        hijo.stdin.close()
+        codigo = hijo.wait(timeout=30)
+        try:
+            libre = toma_candado(ruta)
+            libre.close()
+            soltado = True
+        except OSError:
+            soltado = False
+        ok("al cerrar la entrada lo suelta y sale 0", codigo == 0 and soltado,
+           f"{codigo} {soltado} {hijo.stderr.read()[-300:]}")
+        ok("y no crea la base de casos: solo presta el candado",
+           not (pathlib.Path(home) / ".wa-inbox" / "scope.db").exists())
+    finally:
+        if hijo.poll() is None:
+            hijo.kill()
+            hijo.wait()
+
 print(f"\n{pruebas - len(fallos)}/{pruebas} en verde")
 if fallos:
     sys.exit(1)

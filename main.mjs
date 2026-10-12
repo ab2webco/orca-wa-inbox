@@ -284,6 +284,75 @@ function run(cmd, args, { timeoutMs = 20000, env = null } = {}) {
   })
 }
 
+// ── El candado del storage (lv3-auditoria, 7) ─────────────────────────────────────────
+// El host guarda storage.json leyendo el archivo, cambiando una clave y escribiendo el
+// archivo entero; wa-scope lo escribe con su propio candado (`storage.lock`), que el host no
+// conoce. Lo que el worker relee y reescribe por el host -los contenedores de cada linea-
+// se perdia si un sync o un tick escribia entre la lectura y la escritura, o pisaba lo que
+// el worker acababa de guardar. `wa-scope storage-lock` le presta ese candado al worker.
+const CANDADO_STORAGE_PLAZO_MS = 10 * 1000
+const CANDADO_STORAGE_CORTE_MS = 5 * 1000
+
+/** Corre `escribir` con el candado del storage tomado por `waScope storage-lock`, y lo
+ *  suelta al terminar, salga bien o mal. Sin el candado -un wa-scope de antes que no lo
+ *  conoce, uno que no esta, o que no contesta a tiempo- se escribe igual, como antes:
+ *  dejar sin guardar lo que el dueno guardo es peor que la carrera que el candado evita. */
+export async function conCandadoDelStorage (waScope, escribir,
+  { plazoMs = CANDADO_STORAGE_PLAZO_MS } = {}) {
+  const hijo = await tomarCandadoDelStorage(waScope, plazoMs)
+  try {
+    return await escribir()
+  } finally {
+    if (hijo) soltarCandadoDelStorage(hijo)
+  }
+}
+
+/** El proceso que tiene el candado, o null si no se pudo tomar. Nunca rechaza. */
+function tomarCandadoDelStorage (waScope, plazoMs) {
+  return new Promise((resolve) => {
+    let hijo = null
+    let resuelto = false
+    let timer = null
+    const fin = (valor) => {
+      if (resuelto) return
+      resuelto = true
+      clearTimeout(timer)
+      if (!valor && hijo) soltarCandadoDelStorage(hijo)
+      resolve(valor)
+    }
+    try {
+      hijo = spawn(waScope, ['storage-lock', '--json'],
+        { stdio: ['pipe', 'pipe', 'ignore'], env: ENV_HERRAMIENTAS || process.env, windowsHide: true })
+    } catch {
+      resolve(null)
+      return
+    }
+    timer = setTimeout(() => fin(null), plazoMs)
+    let leido = ''
+    hijo.stdout.setEncoding('utf8')
+    hijo.stdout.on('data', (parte) => {
+      leido += parte
+      if (!leido.includes('\n')) return
+      let tomado = false
+      try { tomado = JSON.parse(leido.split('\n')[0])?.locked === true } catch { tomado = false }
+      fin(tomado ? hijo : null)
+    })
+    hijo.stdin.on('error', () => {})
+    hijo.on('error', () => fin(null))
+    hijo.on('exit', () => fin(null))
+  })
+}
+
+/** Suelta el candado: cerrar la entrada es la senal. Si no sale solo, se corta. */
+function soltarCandadoDelStorage (hijo) {
+  try { hijo.stdin.end() } catch { /* ya cerrado */ }
+  if (hijo.exitCode !== null || hijo.signalCode !== null) return
+  const corte = setTimeout(() => { try { hijo.kill() } catch { /* ya salio */ } },
+    CANDADO_STORAGE_CORTE_MS)
+  if (typeof corte.unref === 'function') corte.unref()
+  hijo.once('exit', () => clearTimeout(corte))
+}
+
 async function runJson(cmd, args) {
   const { stdout, code } = await run(cmd, args)
   try {
@@ -2027,6 +2096,10 @@ export default function activate(orca) {
   let detenido = false
 
   const dirHerramientas = async () => (await settings()).toolsDir || TOOLS
+  // Lo que relee y reescribe un contenedor de linea, con el candado del storage que tienen
+  // tambien el sync y el tick (lv3-auditoria, 7).
+  const conCandado = async (escribir) =>
+    conCandadoDelStorage(join(await dirHerramientas(), 'wa-scope'), escribir)
 
   // La entrada de los casos. El directorio de herramientas lo deja resuelto
   // `arrancarSidecar`, que ya lee los ajustes: preguntarlo en cada ingesta seria una
@@ -2396,8 +2469,10 @@ export default function activate(orca) {
     }
     // Se relee justo antes de escribir: el panel pudo guardar algo de esta linea mientras
     // se leia la raiz, y eso manda sobre la copia.
-    const nuevo = sembrarAjustesDeLinea(await leerSeguro(AJUSTES_POR_LINEA_KEY), cuenta, raiz)
-    if (nuevo) await orca.host.call('storage.set', { key: AJUSTES_POR_LINEA_KEY, value: nuevo })
+    await conCandado(async () => {
+      const nuevo = sembrarAjustesDeLinea(await leerSeguro(AJUSTES_POR_LINEA_KEY), cuenta, raiz)
+      if (nuevo) await orca.host.call('storage.set', { key: AJUSTES_POR_LINEA_KEY, value: nuevo })
+    })
     sembradas.add(cuenta)
   }
 
@@ -2419,11 +2494,11 @@ export default function activate(orca) {
     if (!linea || linea === cuentaPrincipal()) {
       return orca.host.call('storage.set', { key, value })
     }
-    const escribir = cadenaAjustes.catch(() => {}).then(async () => {
+    const escribir = cadenaAjustes.catch(() => {}).then(() => conCandado(async () => {
       const r = await orca.host.call('storage.get', { key: AJUSTES_POR_LINEA_KEY })
       const nuevo = conAjusteDeLinea(r?.value, linea, key, value)
       await orca.host.call('storage.set', { key: AJUSTES_POR_LINEA_KEY, value: nuevo })
-    })
+    }))
     cadenaAjustes = escribir.catch(() => {})
     return escribir
   }
@@ -2926,24 +3001,26 @@ export default function activate(orca) {
     }
 
     if (linea) {
-      const leido = await orca.host.call('storage.get', { key: ALCANCE_POR_LINEA_KEY })
-        .catch((error) => {
-          orca.log(`storage.get alcancePorLinea failed: ${error.message}`)
-          return null
-        })
-      // Sin poder leer no se escribe: guardar sobre `{}` borraria las demas lineas.
-      if (!leido || !leido.value || typeof leido.value !== 'object') {
-        return { ok: false, code: SCOPE_VEREDICTO.ENTRADA_INVALIDA, detail: 'scope unreadable' }
-      }
-      const todo = { ...leido.value }
-      const deLaLinea = { ...(todo[linea] && typeof todo[linea] === 'object' ? todo[linea] : {}) }
-      deLaLinea[jid] = { provider: 'ninguno', target: null,
-        ...previaDe(deLaLinea, jid, origen), ...limpia }
-      if (origen && origen !== jid) delete deLaLinea[origen]
-      todo[linea] = deLaLinea
-      await orca.host.call('storage.set', { key: ALCANCE_POR_LINEA_KEY, value: todo })
-      orca.log(`scope saved for one chat on another line (${Object.keys(deLaLinea).length} total)`)
-      return { ok: true, code: SCOPE_VEREDICTO.GUARDADO }
+      return conCandado(async () => {
+        const leido = await orca.host.call('storage.get', { key: ALCANCE_POR_LINEA_KEY })
+          .catch((error) => {
+            orca.log(`storage.get alcancePorLinea failed: ${error.message}`)
+            return null
+          })
+        // Sin poder leer no se escribe: guardar sobre `{}` borraria las demas lineas.
+        if (!leido || !leido.value || typeof leido.value !== 'object') {
+          return { ok: false, code: SCOPE_VEREDICTO.ENTRADA_INVALIDA, detail: 'scope unreadable' }
+        }
+        const todo = { ...leido.value }
+        const deLaLinea = { ...(todo[linea] && typeof todo[linea] === 'object' ? todo[linea] : {}) }
+        deLaLinea[jid] = { provider: 'ninguno', target: null,
+          ...previaDe(deLaLinea, jid, origen), ...limpia }
+        if (origen && origen !== jid) delete deLaLinea[origen]
+        todo[linea] = deLaLinea
+        await orca.host.call('storage.set', { key: ALCANCE_POR_LINEA_KEY, value: todo })
+        orca.log(`scope saved for one chat on another line (${Object.keys(deLaLinea).length} total)`)
+        return { ok: true, code: SCOPE_VEREDICTO.GUARDADO }
+      })
     }
 
     const actual = await scope()
@@ -3218,7 +3295,7 @@ export default function activate(orca) {
    *  cadena que la siembra: dos escrituras del contenedor a la vez se borrarian una a la
    *  otra. Lo de las otras lineas y las claves que no se conocen quedan como estaban. */
   function escribirAjusteDeLinea (cuenta, clave, valor) {
-    const hecho = cadenaAjustes.then(async () => {
+    const hecho = cadenaAjustes.then(() => conCandado(async () => {
       const actual = (await orca.host.call('storage.get', { key: AJUSTES_POR_LINEA_KEY }))?.value
       const todo = actual && typeof actual === 'object' && !Array.isArray(actual) ? { ...actual } : {}
       const previos = todo[cuenta]
@@ -3227,7 +3304,7 @@ export default function activate(orca) {
       propios[clave] = valor
       todo[cuenta] = propios
       await orca.host.call('storage.set', { key: AJUSTES_POR_LINEA_KEY, value: todo })
-    })
+    }))
     // La cadena nunca queda rechazada: la siembra que venga despues tiene que correr igual.
     cadenaAjustes = hecho.catch(() => {})
     return hecho

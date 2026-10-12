@@ -34,7 +34,7 @@ it written in the chat" about a message that is not there.
 Task service per conversation: plane, linear, github — or `ninguno` when that
 conversation opens no cards and the agent only reads, summarizes or replies.
 """
-import argparse, datetime, hashlib, json, os, pathlib, re, shlex, shutil, sqlite3, subprocess, sys, tempfile, time, unicodedata
+import argparse, datetime, hashlib, json, os, pathlib, re, shlex, shutil, sqlite3, subprocess, sys, tempfile, threading, time, unicodedata
 
 # El modulo vive al lado, y esto se carga tanto como script como importado
 # por ruta desde los chequeos: sin esto el segundo caso no lo encuentra.
@@ -840,6 +840,33 @@ def plugin_store_modifica(cambia, crear=True):
     finally:
         candado.close()
     return escritos
+
+
+# Lo mas que `storage-lock` presta el candado: un worker colgado no puede frenar para
+# siempre el sync y el tick, que escriben el storage con el mismo candado.
+CANDADO_PRESTADO_S = 20
+
+
+def cmd_storage_lock(con, a):
+    """`storage-lock`: el candado del storage, prestado al worker (lv3-auditoria, 7).
+
+    El host de Orca escribe storage.json leyendo el archivo, cambiando una clave y
+    escribiendo el archivo entero, sin este candado. Lo que el worker lee y reescribe por el
+    host -los contenedores de cada linea, `ajustesPorLinea` y `alcancePorLinea`- se perdia
+    si un sync o un tick escribia en medio, o pisaba lo que el worker acababa de guardar.
+    Con el candado tomado aca, ninguna escritura de wa-scope cae entre su lectura y su
+    escritura. Lo tiene hasta que el worker cierra la entrada (o muere), y como mucho
+    `CANDADO_PRESTADO_S`."""
+    os.makedirs(os.path.dirname(DB), exist_ok=True)
+    candado = candado_de_archivo(os.path.join(os.path.dirname(DB), "storage.lock"))
+    try:
+        print(json.dumps({"locked": True}), flush=True)
+        espera = threading.Thread(target=sys.stdin.read, daemon=True)
+        espera.start()
+        espera.join(CANDADO_PRESTADO_S)
+    finally:
+        candado.close()
+    return None
 
 
 def alcance_sin_pisar(scope, leido, fresco, cuenta):
@@ -1788,7 +1815,7 @@ def db():
 
 # Lo que abre la base en solo lectura: lo que corre cada minuto para mirar, y no puede
 # escribir ni una fila (ni el esquema, ni las migraciones, ni la re-clave de `db`).
-SOLO_LECTURA = ("lineas-salud",)
+SOLO_LECTURA = ("lineas-salud", "storage-lock")
 
 
 def db_lectura():
@@ -14952,6 +14979,12 @@ def main():
                                  "{at, lineas}. Read only: no Jev, no network, no Orca "
                                  "CLI; exits 0 even when a line is stalled")
     s.set_defaults(fn=cmd_lineas_salud)
+
+    s = add("storage-lock", help="take the lock of the panel storage, print {\"locked\": true} "
+                                 "and hold it until stdin closes (at most "
+                                 f"{CANDADO_PRESTADO_S} s): the worker writes the per-line "
+                                 "containers under it")
+    s.set_defaults(fn=cmd_storage_lock)
 
     s = add("sync",help="runs ingest, then pushes registry, name and activity to the "
                          "plugin panel")
