@@ -52,7 +52,9 @@ Ninguna llamada de la CLI las quita: se sueltan desde Orca, en Ajustes → Resum
   **sale con 1 cuando ningún caso necesita lenguaje o cuando el tick se encarga** (corrió
   hace menos de 3 minutos y su último lanzamiento no falló por `sin-cli`, `sin-espacio` o
   `sin-prompt`, lo único que el cron sí arregla). Orca marca la corrida `skipped_precheck`
-  y no crea su espacio: con el precheck en 0 crea uno por corrida aunque después falle. Si
+  y no crea su espacio: con el precheck en 0 crea uno por corrida aunque después falle. Con
+  varias líneas, una que revienta no se confunde con una sin trabajo: los casos de las demás
+  salen igual (0), y sin casos sale con 2 y nombra la línea rota por stderr. Si
   su agente llega con otro trabajando, se frena en el `lock`. El primer paso del agente
   sigue con `pending --needs-agent`, sin `--precheck`.
 - **La cuenta de Claude del bot.** Ajustes, pestaña Agente, guarda `botClaudeAccount`: el

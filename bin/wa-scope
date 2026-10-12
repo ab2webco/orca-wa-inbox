@@ -14407,6 +14407,10 @@ def pendiente_agente(con, precheck=False):
     tambien 1 callado mientras el tick se encarga del agente."""
     casos = casos_para_agente(con)
     if not casos or (precheck and tick_se_encarga(con)):
+        # El hijo de `por_cada_linea` dice su JSON tambien sin trabajo: un 1 sin JSON es una
+        # linea que revento, no una al dia (lv3-auditoria, 4).
+        if os.environ.get(REPARTO_ENV):
+            print(json.dumps({"needs_agent": 0, "cases": []}))
         sys.exit(1)
     print(json.dumps({"needs_agent": len(casos), "cases": casos}, ensure_ascii=False))
     sys.exit(0)
@@ -14545,6 +14549,9 @@ DE_TODAS = ("orca-aviso",)
 # de otra. `owner` es el chat al que avisan las skills: el de la linea que el dueno eligio
 # para eso en el panel (todo-por-linea, P7), y sin eleccion el de la principal.
 DE_LA_PRINCIPAL = ("owner",)
+# La marca que `por_cada_linea` pone a sus hijos de `pending --needs-agent`: con ella el hijo
+# dice su JSON tambien sin trabajo (lv3-auditoria, 4). Sin ella, el 1 callado de siempre.
+REPARTO_ENV = "WA_INBOX_REPARTO"
 
 
 def fija_linea(a):
@@ -14599,31 +14606,39 @@ def por_cada_linea(a):
     hijos = {}
     for linea in lineas:
         env = dict(os.environ, **{wa_store.LINEA_ENV: linea})
+        if agente:
+            env[REPARTO_ENV] = "1"
         # Lo que corre en todas las lineas ignora la linea heredada (`fija_linea`): a cada
         # hijo se la nombra con `--line`, o volveria a repartirse.
         nombrada = [f"--line={linea}"] if a.cmd in DE_TODAS else []
         hijos[linea] = subprocess.Popen([sys.executable, os.path.abspath(__file__),
                                          *sys.argv[1:], *nombrada], env=env,
-                                        stdout=subprocess.PIPE, text=True)
-    salidas = {linea: (h.communicate()[0], h.returncode) for linea, h in hijos.items()}
+                                        stdout=subprocess.PIPE,
+                                        stderr=subprocess.PIPE if agente else None, text=True)
+    salidas = {linea: h.communicate() + (h.returncode,) for linea, h in hijos.items()}
     if agente:
         # Hay trabajo para el agente si lo hay en alguna linea; cada caso es de su linea, y
-        # `caso` con su id corre en ella (`fija_linea`).
-        casos = []
-        for texto, codigo in salidas.values():
-            leido = _json_o_nada(texto) if codigo == 0 else None
-            casos += (leido or {}).get("cases") or [] if isinstance(leido, dict) else []
+        # `caso` con su id corre en ella (`fija_linea`). Una linea que revento no frena los
+        # casos de las demas, pero se dice, y sin casos no sale como "sin trabajo".
+        for _, error, _ in salidas.values():
+            if error:
+                sys.stderr.write(error)
+        casos, fallas = junta_pendientes({linea: (texto, codigo, error)
+                                          for linea, (texto, error, codigo) in salidas.items()})
+        for linea, codigo, detalle in fallas:
+            print(f"wa-scope: pending on {linea} failed (exit {codigo}): {detalle}",
+                  file=sys.stderr)
         if not casos:
-            sys.exit(1)
+            sys.exit(2 if fallas else 1)
         print(json.dumps({"needs_agent": len(casos), "cases": casos}, ensure_ascii=False))
         return True
     if a.cmd == "tick":
         print(json.dumps(junta_ticks({linea: _json_o_nada(texto)
-                                      for linea, (texto, _) in salidas.items()}),
+                                      for linea, (texto, _, _) in salidas.items()}),
                          ensure_ascii=False))
     else:
         filas = []
-        for linea, (texto, _) in salidas.items():
+        for linea, (texto, _, _) in salidas.items():
             leido = _json_o_nada(texto)
             for fila in leido if isinstance(leido, list) else []:
                 filas.append(dict(fila, account=linea) if isinstance(fila, dict) else fila)
@@ -14632,10 +14647,27 @@ def por_cada_linea(a):
         else:
             for f in filas:
                 print(" | ".join(f"{v}" for v in f.values() if v not in (None, "")))
-    peor = max(codigo for _, codigo in salidas.values())
+    peor = max(codigo for _, _, codigo in salidas.values())
     if peor:
         sys.exit(peor)
     return True
+
+
+def junta_pendientes(por_linea):
+    """(casos, fallas) de los hijos de `pending --needs-agent`, `{linea: (stdout, codigo,
+    stderr)}`. Un hijo sano siempre dice su JSON: 0 con sus casos, o 1 con la lista vacia
+    (`REPARTO_ENV`). Lo demas -un 1 sin JSON, un 0 sin JSON, otro codigo- es una linea que
+    revento: `(linea, codigo, ultima linea de su stderr)`."""
+    casos, fallas = [], []
+    for linea, (texto, codigo, error) in por_linea.items():
+        leido = _json_o_nada(texto)
+        lista = leido.get("cases") if isinstance(leido, dict) else None
+        if codigo in (0, 1) and isinstance(lista, list) and (codigo == 0 or not lista):
+            casos += lista
+            continue
+        ultima = next((l.strip() for l in reversed((error or "").splitlines()) if l.strip()), "")
+        fallas.append((linea, codigo, ultima[:200] or "no JSON"))
+    return casos, fallas
 
 
 def _json_o_nada(texto):

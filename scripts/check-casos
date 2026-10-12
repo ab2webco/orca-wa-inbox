@@ -17008,6 +17008,54 @@ if NODE:
            p.returncode == 0 and corrida(datos) == "running" and corrida(datos, SEGUNDA) == "failed",
            f"{p.stderr[-300:]} {json.dumps(datos)[:400]}")
 
+# ── Una linea que revienta en `pending --needs-agent` no es "sin trabajo" (lv3-auditoria, 4) ──
+# Con varias lineas, `pending --needs-agent` corre un proceso por linea y junta los casos.
+# Solo leia el de las que salian 0: "sin trabajo" sale 1, y un traceback tambien. Una linea
+# rota se veia como una linea al dia. Ahora cada hijo dice su JSON tambien sin trabajo, y
+# el que sale distinto de 0 sin JSON es una falla: se dice por stderr, los casos de las
+# demas salen igual, y sin casos sale 2 (Orca salta la corrida con cualquier codigo
+# distinto de 0; el 2 deja ver que no fue "sin trabajo").
+print("\nuna linea rota en pending --needs-agent no es sin trabajo (lv3-auditoria)")
+if NODE:
+    with tempfile.TemporaryDirectory() as home:
+        llegan(home, A, [msg(SOPORTE, "PN1", "@duenio no abre el login", 5, mencion=True)])
+        llegan(home, SEGUNDA, [msg(SOPORTE, "PN2", "@duenio no llega la factura", 5,
+                                   mencion=True)], activar=False)
+        suma_linea(home, SEGUNDA)
+        p = corre(home, "pending", "--needs-agent")
+        ok("con dos lineas sin trabajo, sigue saliendo 1 y callado",
+           p.returncode == 1 and not p.stdout.strip(), f"{p.returncode} {p.stdout[:200]} "
+           f"{p.stderr[-300:]}")
+        p = corre(home, "pending", "--needs-agent",
+                  extra={"WA_INBOX_LINEA": SEGUNDA, "WA_INBOX_REPARTO": "1"})
+        ok("el hijo de una linea sin trabajo sale 1 pero dice su JSON, con la lista vacia",
+           p.returncode == 1 and _json_o_nada_prueba(p.stdout) == {"needs_agent": 0, "cases": []},
+           f"{p.returncode} {p.stdout[:200]} {p.stderr[-300:]}")
+        p = corre(home, "pending", "--needs-agent", extra={"WA_INBOX_LINEA": SEGUNDA})
+        ok("sin ser hijo del reparto, la linea sin trabajo sigue callada",
+           p.returncode == 1 and not p.stdout.strip(), f"{p.returncode} {p.stdout[:200]}")
+
+        ws = carga_wa_scope(home)
+        vacia = json.dumps({"needs_agent": 0, "cases": []})
+        traza = "Traceback (most recent call last):\n  ...\nRuntimeError: una linea rota\n"
+        casos, fallas = ws.junta_pendientes({
+            A: (json.dumps({"needs_agent": 2, "cases": [3, 5]}), 0, ""),
+            SEGUNDA: ("", 1, traza)})
+        ok("una linea con casos y otra rota: salen los casos, y la rota es una falla con su "
+           "codigo y la ultima linea de su error",
+           casos == [3, 5] and fallas == [(SEGUNDA, 1, "RuntimeError: una linea rota")],
+           f"{casos} {fallas}")
+        casos, fallas = ws.junta_pendientes({A: (vacia, 1, ""), SEGUNDA: ("", 1, traza)})
+        ok("sin casos en ninguna, la rota igual es una falla: no se confunde con sin trabajo",
+           casos == [] and [f[0] for f in fallas] == [SEGUNDA], f"{casos} {fallas}")
+        casos, fallas = ws.junta_pendientes({A: (vacia, 1, ""), SEGUNDA: (vacia, 1, "")})
+        ok("dos lineas sin trabajo no son ninguna falla", casos == [] and fallas == [],
+           f"{casos} {fallas}")
+        casos, fallas = ws.junta_pendientes({A: ("no soy json", 0, ""), SEGUNDA: (vacia, 9, "")})
+        ok("un 0 sin JSON, o un codigo que no es 0 ni 1, tambien son fallas",
+           casos == [] and sorted(f[0] for f in fallas) == sorted([A, SEGUNDA]),
+           f"{casos} {fallas}")
+
 print(f"\n{pruebas - len(fallos)}/{pruebas} en verde")
 if fallos:
     sys.exit(1)
