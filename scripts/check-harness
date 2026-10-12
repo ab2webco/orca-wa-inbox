@@ -531,6 +531,15 @@ def main() -> int:
     if faltan:
         fallos.append(f"{SKILL_AVISOS}  no dice {', '.join(faltan)}")
     comprobaciones += 1
+    # El resumen de lo que terminaron (recap-terminados): el agente que termino una tarea larga
+    # deja UNA linea de lo que hizo, antes de parar, en la seccion de avisar. Sin esta regla el
+    # resumen dice donde y cuantas veces, y no que.
+    notificar = plano_avisos.split("## Notify him", 1)[-1].split("## Ask and wait", 1)[0]
+    if '"$WA/wa-scope" recap' not in notificar or "--json" not in notificar.split("recap", 1)[-1]:
+        fallos.append(f"{SKILL_AVISOS}  la seccion de avisar no manda dejar, al terminar una tarea "
+                      'larga, `"$WA/wa-scope" recap "<una linea>" --json` (el resumen de los que '
+                      "terminaron lo muestra)")
+    comprobaciones += 1
     if "never message anyone but the owner" in plano_avisos.lower():
         fallos.append(f"{SKILL_AVISOS}  sigue diciendo que solo se le escribe al dueno: los "
                       "agentes concluyen que no pueden enviar a un chat registrado")
