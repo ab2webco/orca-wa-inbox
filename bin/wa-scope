@@ -10336,7 +10336,7 @@ TEXTOS_AVISO = {
            "corregido": "Caso {n}: su correccion va al agente, que propone de nuevo.",
            "corrige_listo": "Caso {n} ya trae el resultado del proyecto: conteste si {n} o no {n}, "
                             "o corrijalo en el tablero.",
-           "vencido": "El aviso del caso {n} se vencio: decidalo en el tablero.",
+           "decidido": "Caso {n}: ese aviso ya se habia decidido, asi que no se hizo nada.",
            "cambio": "El caso {n} cambio desde el aviso: le llega uno nuevo si sigue esperando.",
            "no_se_pudo": "Caso {n}: no se pudo ({x}). Mirelo en el tablero.",
            "sin_confirmar": "Caso {n}: no pude confirmar su respuesta; mirelo en el tablero.",
@@ -10381,7 +10381,7 @@ TEXTOS_AVISO = {
            "corregido": "Case {n}: your correction goes to the agent, which proposes again.",
            "corrige_listo": "Case {n} already has the project's result: answer yes {n} or no {n}, "
                             "or correct it on the board.",
-           "vencido": "The notice for case {n} expired: decide it on the board.",
+           "decidido": "Case {n}: that notice was already settled, so nothing was done.",
            "cambio": "Case {n} changed since the notice: you get a new one if it still waits.",
            "no_se_pudo": "Case {n}: it could not be done ({x}). Check the board.",
            "sin_confirmar": "Case {n}: I could not confirm your answer; check the board.",
@@ -10927,25 +10927,39 @@ def envia_avisos(con, resumen=None, inicio=None):
 
 
 def avisos_vigentes(con):
-    """Los avisos de aprobacion que todavia se pueden contestar: enviados, sin contestar,
-    dentro de `approval_hours`, y con el caso todavia en la version que avisaron. Los de esta
-    linea y los de otra que salieron por esta (linea-viva V6): el dueno contesta donde le
-    llego. Un aviso y su recordatorio (linea-viva-2, W4) son UNA propuesta: queda el mas
-    nuevo."""
+    """Los avisos de aprobacion que un `si` o un `no` a secas (sin numero y sin citar un
+    aviso) puede contestar: abiertos (`aviso_estado`) y enviados dentro de `approval_hours`.
+    La edad cuenta solo aca: a secas, el dueno contesta lo que acaba de leer; uno viejo lo
+    contesta con su numero o citandolo, y eso vale siempre. Los de esta linea y los de otra
+    que salieron por esta (linea-viva V6): el dueno contesta donde le llego. Un aviso y su
+    recordatorio (linea-viva-2, W4) son UNA propuesta: queda el mas nuevo."""
     horas = horas_aprobacion(con)
     salida = {}
     for f in con.execute("select * from aviso where tipo='aprobacion' and (account=? or "
                          "sale_por=?) and estado='enviado' order by at, rowid",
                          (cuenta_activa(), cuenta_activa())).fetchall():
-        if aviso_estado(con, f, horas) is None:
+        if (aviso_estado(con, f) is None
+                and edad_de(f["enviado_at"] or f["at"]) <= horas * 3600):
             salida[(f["case_id"], f["version"])] = f
     return list(salida.values())
 
 
-def aviso_estado(con, aviso, horas):
-    """Por que ese aviso ya no vale (`vencido` | `cambio`), o None si vale."""
-    if edad_de(aviso["enviado_at"] or aviso["at"]) > horas * 3600:
-        return "vencido"
+def aviso_estado(con, aviso):
+    """Por que ese aviso ya no se contesta (`decidido` | `cambio`), o None si sigue abierto.
+
+    La edad no cuenta (decision del dueno, 2026-10-12): el `si N`, el `no N` o la respuesta
+    que cita el aviso valen aunque el aviso sea viejo; `approval_hours` solo dice cuanto
+    espera un aviso para salir y cuando se recuerda. `decidido`: ya se contesto, el caso se
+    cerro, o esa version ya se aprobo o ya salio. `cambio`: el caso tiene otra propuesta o
+    ya no espera esa decision por otra razon."""
+    caso = con.execute("select etapa, propuesta_version, propuesta_aprobada from caso where "
+                       "case_id=?", (aviso["case_id"],)).fetchone()
+    if aviso["estado"] == "contestado" or (caso and (
+            caso["etapa"] == "cerrado"
+            or (caso["propuesta_version"] == aviso["version"]
+                and (caso["propuesta_aprobada"] == aviso["version"]
+                     or caso["etapa"] == "respondido")))):
+        return "decidido"
     if aviso["estado"] != "enviado" or version_superada(con, aviso):
         return "cambio"
     return None
@@ -11029,7 +11043,7 @@ def atiende_respuesta(con, m, relevado=None):
     texto = tx["sin_confirmar"].format(n=n)
     tomo_aviso = False
     try:
-        porque = aviso_estado(con, aviso, horas_aprobacion(con))
+        porque = aviso_estado(con, aviso)
         # Despues se toma el aviso: dos respuestas distintas (si en un proceso, no en otro)
         # pueden haberlo visto vigente las dos, y decide solo la primera que lo toma. Lo
         # mismo entre un aviso y su recordatorio: uno tomado frena al otro.

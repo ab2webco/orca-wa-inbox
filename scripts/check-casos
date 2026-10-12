@@ -8751,7 +8751,8 @@ if NODE:
                "wa_approved" in codigos[dinero] and "wa_rejected" in codigos[cierra]
                and "wa_correction" in codigos[corrige], f"{codigos}")
 
-            # Vencido y superado: no hacen nada, salvo decirlo en una linea.
+            # Un aviso viejo que sigue abierto: el `si N` del dueno vale igual (decision del
+            # dueno, 2026-10-12). La edad no vence una respuesta suya.
             llegan(home, A, [msg(PERSONA, "T5", PEDIDO, 16)])
             viejo, _ = propuesta_lista(home, "T5", texto="Listo, son $10.")
             tick(home)
@@ -8763,12 +8764,22 @@ if NODE:
             con.close()
             llegan(home, A, [msg(DUENO_DM, "R4", f"si {viejo}", 1, de=DUENO_LID)])
             ingiere(home)
-            ok("un aviso vencido no aprueba nada",
-               js(home, "caso", "ver", viejo)[0]["etapa"] == "decision"
-               and not js(home, "caso", "ver", viejo)[0]["aprobada"])
-            ok("y se dice en una linea", any(f"caso {viejo}" in a["body"].lower()
-                                             and "venci" in a["body"].lower()
-                                             for a in al_dueno(home)), f"{al_dueno(home)[-1:]}")
+            ok("`si N` aprueba un aviso viejo que sigue abierto",
+               js(home, "caso", "ver", viejo)[0]["etapa"] == "respondido"
+               and js(home, "caso", "ver", viejo)[0]["aprobada"],
+               f"{js(home, 'caso', 'ver', viejo)[0]['etapa']} {al_dueno(home)[-1:]}")
+            tick(home)
+            ok("y le confirma que salio", any(f"Caso {viejo} aprobado" in a["body"]
+                                              for a in al_dueno(home)), f"{al_dueno(home)[-1:]}")
+            # El mismo aviso, ya decidido: se le dice en una linea, nunca silencio.
+            llegan(home, A, [msg(DUENO_DM, "R4B", f"si {viejo}", 1, de=DUENO_LID)])
+            ingiere(home)
+            tick(home)
+            ok("un `si N` sobre un aviso ya decidido le dice que ya estaba decidido",
+               any(f"Caso {viejo}" in a["body"] and "ya se habia decidido" in a["body"]
+                   for a in al_dueno(home)), f"{al_dueno(home)[-1:]}")
+            ok("y no abre un caso",
+               cuenta(home, "select count(*) from caso_mensaje where stanza_id='R4B'") == 0)
 
             llegan(home, A, [msg(PERSONA, "T6", PEDIDO, 14)])
             superado, _ = propuesta_lista(home, "T6", texto="Listo, son $20.")
@@ -13764,6 +13775,24 @@ if NODE:
             ok("`si` citando algo que no es un aviso, con un solo vivo, lo aprueba como siempre",
                etapa_y_aprobada(home, tres) == ("respondido", True),
                f"{etapa_y_aprobada(home, tres)}")
+
+            # Citar un aviso viejo que sigue abierto: su `no` vale igual (decision del dueno,
+            # 2026-10-12).
+            llegan(home, A, [msg(PERSONA, "W6P4", PEDIDO, 27)])
+            cuatro, _ = propuesta_lista(home, "W6P4", texto="Listo, el arreglo cuesta $95.")
+            tick(home)
+            cita_vieja = stanza_del_aviso(home, cuatro)
+            con = db_de(home)
+            con.execute("update aviso set at=datetime('now','localtime','-30 hours'), "
+                        "enviado_at=datetime('now','localtime','-30 hours') where case_id=?",
+                        (int(cuatro),))
+            con.commit()
+            con.close()
+            llegan(home, A, [msg(DUENO_DM, "W6R5", "no", 1, de=DUENO_LID, cita_id=cita_vieja)])
+            ingiere(home)
+            ok("`no` citando un aviso viejo que sigue abierto cierra ese caso",
+               bool(cita_vieja) and etapa_y_aprobada(home, cuatro) == ("cerrado", False),
+               f"{cita_vieja} {etapa_y_aprobada(home, cuatro)}")
         finally:
             sidecar.cerrar()
 
