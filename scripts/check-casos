@@ -13034,7 +13034,8 @@ try:
     # O4: el aviso de "termino", desde el tick, despues de la espera.
     with tempfile.TemporaryDirectory() as home:
         ahora_ms = int(time.time() * 1000)
-        ws, con, enviados, falsa = prepara_orca(home, finished="on", finishedDelaySeconds="30")
+        ws, con, enviados, falsa = prepara_orca(home, finished="on", finishedDelaySeconds="30",
+                                                finishedDigestMinutes="0")
         base = {"worktreeId": WT_ALFA, "agentType": "codex", "workingAt": ahora_ms - 600000}
         pon_paneles(home, {
             "pA": dict(base, state="done", at=ahora_ms - 60000, finished=True),
@@ -13062,6 +13063,264 @@ try:
         ws.tick_orca(con, {})
         ws.envia_avisos(con)
         ok("O4: con el aviso apagado no sale", len(enviados) == 2)
+        con.close()
+
+    # R2 (resumen-terminados): con el resumen encendido (60 minutos de fabrica) los "termino"
+    # no salen de a uno: se juntan y sale UN resumen por ventana, solo si algo termino.
+    WT_BETA = "repo-b::/srv/ejemplo/beta-demo"
+
+    def prepara_resumen(home, idioma="es", **campos):
+        ws, con, enviados, falsa = prepara_orca(home, idioma, finished="on",
+                                                finishedDelaySeconds="30", **campos)
+        falsa.worktrees.append({"worktreeId": WT_BETA, "repoId": "repo-b", "repo": "beta-demo",
+                                "path": "/srv/ejemplo/beta-demo", "branch": "main",
+                                "displayName": "beta-demo", "comment": "", "isArchived": False})
+        reloj = [time.time()]
+        ws.ahora_orca_s = lambda: reloj[0]
+        return ws, con, enviados, falsa, reloj
+
+    def vuelta(ws, con):
+        ws.tick_orca(con, {})
+        ws.envia_avisos(con)
+
+    def turnos(reloj, **por_panel):
+        """`{panel: (worktree, hace_segundos)}` -> los paneles de Orca, ya terminados."""
+        return {p: {"state": "done", "finished": True, "worktreeId": w, "agentType": "claude",
+                    "at": int((reloj[0] - hace) * 1000)} for p, (w, hace) in por_panel.items()}
+
+    def filas_de(con, estado):
+        return con.execute("select req_id, texto from aviso where tipo='orca' and estado=? "
+                           "order by rowid", (estado,)).fetchall()
+
+    with tempfile.TemporaryDirectory() as home:
+        ws, con, enviados, falsa, reloj = prepara_resumen(home)
+        ok("R2: el resumen viene en 60 minutos de fabrica", ws.ajustes_orca(con)["resumen_min"] == 60,
+           f"{ws.ajustes_orca(con)}")
+        pon_paneles(home, turnos(reloj, pA=(WT_ALFA, 120), pB=(WT_ALFA, 90), pC=(WT_BETA, 100)))
+        vuelta(ws, con)
+        ok("R2: los que terminan dentro de la ventana no salen de a uno", enviados == [],
+           f"{enviados}")
+        ok("R2: quedan anotados para el resumen, uno por turno",
+           len(filas_de(con, "acumulado")) == 3, f"{estados_orca(con)}")
+        vuelta(ws, con)
+        vuelta(ws, con)
+        ok("R2: otro tick en la misma ventana no cuenta dos veces el mismo turno (panel + at)",
+           enviados == [] and len(filas_de(con, "acumulado")) == 3, f"{estados_orca(con)}")
+        pon_paneles(home, dict(turnos(reloj, pA=(WT_ALFA, 35), pB=(WT_ALFA, 90),
+                                      pC=(WT_BETA, 100)),
+                               pD=turnos(reloj, pD=(WT_ALFA, 40))["pD"]))
+        vuelta(ws, con)
+        ok("R2: el mismo panel que vuelve a terminar es otro turno (otro `at`); uno nuevo, tambien",
+           len(filas_de(con, "acumulado")) == 5, f"{estados_orca(con)}")
+        ok("R2: dentro de la ventana, ni una llamada de avisos al numero",
+           not any(e["req"].startswith("aviso-o-termino-") for e in enviados), f"{enviados}")
+        reloj[0] += 3600
+        vuelta(ws, con)
+        t = enviados[0]["texto"] if enviados else ""
+        ok("R2: al abrirse la ventana siguiente sale UN resumen", len(enviados) == 1
+           and enviados[0]["req"].startswith("aviso-o-terminados-")
+           and enviados[0]["chat"] == DUENO_DM, f"{enviados}")
+        ok("R2: una linea por proyecto, con cuantas veces termino",
+           "alfa-demo · Pagos nuevos x4" in t and "beta-demo x1" in t
+           and t.index("alfa-demo") < t.index("beta-demo"), t)
+        ok("R2: texto fijo: ni agente, ni ruta, ni nota, ni nada que el agente haya escrito",
+           "/srv" not in t and "NOTA" not in t and "claude" not in t and "codex" not in t
+           and "termin" in t and "5" in t, t)
+        ok("R2: lo reportado queda cerrado", len(filas_de(con, "resumido")) == 5
+           and filas_de(con, "acumulado") == [], f"{estados_orca(con)}")
+        ok("R2: el id es determinista por ventana (linea, intervalo y ventana)",
+           enviados[0]["req"] == ws.id_orca("terminados", f"60:{ws.ventana_digest(60, reloj[0])}")
+           and ws.id_orca("terminados", "60:7") == ws.id_orca("terminados", "60:7")
+           and ws.id_orca("terminados", "60:7") != ws.id_orca("terminados", "60:8"))
+        vuelta(ws, con)
+        vuelta(ws, con)
+        ok("R2: dos ticks en la ventana del resumen no lo repiten", len(enviados) == 1,
+           f"{len(enviados)}")
+        reloj[0] += 3600
+        vuelta(ws, con)
+        reloj[0] += 3600
+        vuelta(ws, con)
+        ok("R2: sin nada nuevo no sale resumen vacio, y lo ya reportado no vuelve (el panel sigue "
+           "en done)", len(enviados) == 1, f"{len(enviados)}")
+        pon_paneles(home, turnos(reloj, pZ=(WT_ALFA, 100)))
+        vuelta(ws, con)
+        reloj[0] += 3600
+        vuelta(ws, con)
+        t = enviados[-1]["texto"] if enviados else ""
+        ok("R2: la ventana siguiente con un turno nuevo, un resumen nuevo con solo ese",
+           len(enviados) == 2 and "alfa-demo · Pagos nuevos x1" in t and "x4" not in t,
+           f"{enviados}")
+        con.close()
+
+    # R2: el rango de lo que cuenta. La espera sigue mandando; lo viejo ya no es de esta ventana.
+    with tempfile.TemporaryDirectory() as home:
+        ws, con, enviados, falsa, reloj = prepara_resumen(home, finishedDigestMinutes="120")
+        pon_paneles(home, turnos(reloj, p1=(WT_ALFA, 10), p2=(WT_ALFA, 40 * 60),
+                                 p3=(WT_ALFA, 119 * 60), p4=(WT_ALFA, 3 * 3600)))
+        vuelta(ws, con)
+        ok("R2: con el resumen cada 120 minutos vale un turno de hasta el intervalo (no los 15 "
+           "minutos del aviso suelto), pero no el que termino antes de la espera ni el de hace "
+           "horas", len(filas_de(con, "acumulado")) == 2, f"{estados_orca(con)}")
+        con.close()
+    with tempfile.TemporaryDirectory() as home:
+        ws, con, enviados, falsa, reloj = prepara_resumen(home, finishedDigestMinutes="10")
+        pon_paneles(home, turnos(reloj, p1=(WT_ALFA, 14 * 60), p2=(WT_ALFA, 20 * 60)))
+        vuelta(ws, con)
+        ok("R2: con un intervalo corto sigue valiendo el piso de 15 minutos",
+           len(filas_de(con, "acumulado")) == 1, f"{estados_orca(con)}")
+        con.close()
+
+    # R2: horas de silencio. El resumen espera adentro (no queda `retenido`, que el resumen del
+    # silencio contaria como un agente mas) y sale UNA vez al terminar.
+    with tempfile.TemporaryDirectory() as home:
+        ws, con, enviados, falsa, reloj = prepara_resumen(home, waiting="on", quietStart="22:00",
+                                                          quietEnd="07:00")
+        ws.hora_local = lambda: 23 * 60
+        pon_paneles(home, turnos(reloj, pA=(WT_ALFA, 100), pB=(WT_BETA, 100)))
+        vuelta(ws, con)
+        reloj[0] += 3600
+        vuelta(ws, con)
+        ok("R2: en silencio el resumen no sale, ni se retiene como un aviso mas",
+           enviados == [] and len(filas_de(con, "acumulado")) == 2
+           and filas_de(con, "retenido") == [], f"{estados_orca(con)}")
+        orca_aviso(ws, con, "tab-9:p9")
+        ws.hora_local = lambda: 8 * 60
+        vuelta(ws, con)
+        terminados = [e for e in enviados if e["req"].startswith("aviso-o-terminados-")]
+        resumenes = [e for e in enviados if e["req"].startswith("aviso-o-resumen-")]
+        ok("R2: al terminar el silencio sale el resumen de los que terminaron, una vez, y el del "
+           "silencio cuenta solo lo suyo", len(terminados) == 1 and len(resumenes) == 1
+           and "alfa-demo" in terminados[0]["texto"] and "beta-demo" in terminados[0]["texto"]
+           and "terminaron: " not in resumenes[0]["texto"], f"{enviados}")
+        vuelta(ws, con)
+        ok("R2: y otro tick no repite ninguno", len(enviados) == 2, f"{len(enviados)}")
+        con.close()
+
+    # R2: el tope por hora. El resumen cuenta como un aviso, y si la hora esta llena espera.
+    with tempfile.TemporaryDirectory() as home:
+        ws, con, enviados, falsa, reloj = prepara_resumen(home, waiting="on", hourlyCap="1")
+        orca_aviso(ws, con, "tab-1:p1")
+        pon_paneles(home, turnos(reloj, pA=(WT_ALFA, 100)))
+        vuelta(ws, con)
+        reloj[0] += 3600
+        vuelta(ws, con)
+        ok("R2: con la hora llena el resumen espera, no queda `excedido`",
+           len(enviados) == 1 and len(filas_de(con, "acumulado")) == 1
+           and filas_de(con, "excedido") == [], f"{estados_orca(con)}")
+        hace = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(time.time() - 2 * 3600))
+        con.execute("update aviso set at=? where estado='enviado'", (hace,))
+        con.commit()
+        vuelta(ws, con)
+        ok("R2: con lugar en la hora sale", len(enviados) == 2
+           and enviados[-1]["req"].startswith("aviso-o-terminados-"), f"{enviados}")
+        orca_aviso(ws, con, "tab-2:p2")
+        ok("R2: y cuenta como un aviso del tope", estados_orca(con)[-1] == "excedido",
+           f"{estados_orca(con)}")
+        con.close()
+
+    # R2: con 0 vuelve el aviso de siempre; lo que ya se junto sale de una vez.
+    with tempfile.TemporaryDirectory() as home:
+        ws, con, enviados, falsa, reloj = prepara_resumen(home)
+        pon_paneles(home, turnos(reloj, pA=(WT_ALFA, 100), pB=(WT_BETA, 100)))
+        vuelta(ws, con)
+        ok("R2: antes de apagar el resumen no salio nada", enviados == [])
+        pon_orca(home, finishedDigestMinutes="0")
+        vuelta(ws, con)
+        ok("R2: con 0 lo ya juntado sale de una vez, en un resumen",
+           len(enviados) == 1 and enviados[0]["req"].startswith("aviso-o-terminados-")
+           and "x1" in enviados[0]["texto"], f"{enviados}")
+        pon_paneles(home, turnos(reloj, pN=(WT_ALFA, 100)))
+        vuelta(ws, con)
+        ok("R2: con 0 cada turno sale suelto, como siempre",
+           len(enviados) == 2 and enviados[1]["req"].startswith("aviso-o-termino-"),
+           f"{enviados}")
+        con.close()
+
+    # R2: apagar el aviso de "termino" descarta lo juntado; otro numero tampoco lo recibe.
+    with tempfile.TemporaryDirectory() as home:
+        ws, con, enviados, falsa, reloj = prepara_resumen(home, waiting="on")
+        pon_paneles(home, turnos(reloj, pA=(WT_ALFA, 100)))
+        vuelta(ws, con)
+        pon_orca(home, finished="off")
+        reloj[0] += 3600
+        vuelta(ws, con)
+        pon_orca(home, finished="on")
+        reloj[0] += 3600
+        vuelta(ws, con)
+        ok("R2: con el aviso apagado lo juntado no sale despues, cuando ya no es cierto",
+           enviados == [] and filas_de(con, "acumulado") == []
+           and len(filas_de(con, "fallido")) == 1, f"{enviados} {estados_orca(con)}")
+        con.close()
+    with tempfile.TemporaryDirectory() as home:
+        ws, con, enviados, falsa, reloj = prepara_resumen(home)
+        pon_paneles(home, turnos(reloj, pA=(WT_ALFA, 100)))
+        vuelta(ws, con)
+        pon_duenos(home, DUENO_LID, OTRO_LID)
+        pon_aprobacion(home, OTRO_LID, "es")
+        ws2 = carga_wa_scope(home)
+        ws2.tick_envia, ws2.orca_json = ws.tick_envia, ws.orca_json
+        ws2.orca_cli_path, ws2.hora_local = ws.orca_cli_path, ws.hora_local
+        ws2.ahora_orca_s = lambda: reloj[0] + 3600
+        ws2.tick_orca(con, {})
+        ws2.envia_avisos(con)
+        ok("R2: lo juntado para un numero que ya no es el de aprobacion no sale",
+           enviados == [] and filas_de(con, "acumulado") == [], f"{enviados} {estados_orca(con)}")
+        con.close()
+
+    # R2: nombres. Sin nombre en Orca, o con forma de secreto, el proyecto es "otros agentes";
+    # son muchos proyectos, los primeros y "y N mas"; en cada idioma.
+    with tempfile.TemporaryDirectory() as home:
+        ws, con, enviados, falsa, reloj = prepara_resumen(home)
+        falsa.worktrees[0]["displayName"] = "token ghp_abcdefghijklmnopqrstuvwxyz0123456789"
+        pon_paneles(home, turnos(reloj, pA=(WT_ALFA, 100), pB=("repo-z::/srv/ejemplo/otro", 100),
+                                 pC=(WT_BETA, 100)))
+        vuelta(ws, con)
+        reloj[0] += 3600
+        vuelta(ws, con)
+        t = enviados[0]["texto"] if enviados else ""
+        ok("R2: un nombre con forma de secreto no viaja y el sin nombre se junta en otros agentes",
+           "ghp_" not in t and "otros agentes x2" in t and "beta-demo x1" in t and "/srv" not in t,
+           t)
+        con.close()
+    with tempfile.TemporaryDirectory() as home:
+        ws, con, enviados, falsa, reloj = prepara_resumen(home)
+        for n in range(14):
+            falsa.worktrees.append({"worktreeId": f"repo-{n}::/srv/ejemplo/p{n}",
+                                    "repo": f"proyecto-{n:02d}", "displayName": f"proyecto-{n:02d}"})
+        pon_paneles(home, turnos(reloj, **{f"p{n}": (f"repo-{n}::/srv/ejemplo/p{n}", 100)
+                                           for n in range(14)}))
+        vuelta(ws, con)
+        reloj[0] += 3600
+        vuelta(ws, con)
+        t = enviados[0]["texto"] if enviados else ""
+        ok("R2: con muchos proyectos salen los primeros y cuantos faltan",
+           t.count("\n- ") == 11 and "- y 4 mas" in t and "(14)" in t, t)
+        con.close()
+    for idioma, frase, otros in (("en", "since the last summary", "other agents"),
+                                 ("pt", "desde o ultimo resumo", "outros agentes")):
+        with tempfile.TemporaryDirectory() as home:
+            ws, con, enviados, falsa, reloj = prepara_resumen(home, idioma)
+            pon_paneles(home, turnos(reloj, pA=(WT_ALFA, 100), pB=("repo-z::/srv/x", 100)))
+            vuelta(ws, con)
+            reloj[0] += 3600
+            vuelta(ws, con)
+            t = enviados[0]["texto"] if enviados else ""
+            ok(f"R2: en {idioma}", frase in t and "alfa-demo" in t and otros in t, t)
+            con.close()
+
+    # R2: cada linea junta y cuenta lo suyo: la ventana vive en la linea, no en la raiz.
+    with tempfile.TemporaryDirectory() as home:
+        ws, con, enviados, falsa, reloj = prepara_resumen(home)
+        clave = ws.desde_digest()
+        pon_paneles(home, turnos(reloj, pA=(WT_ALFA, 100)))
+        vuelta(ws, con)
+        ok("R2: la marca de la ventana se guarda y es de la linea",
+           con.execute("select 1 from settings where key=?", (clave,)).fetchone() is not None
+           and clave == "orca_digest_ventana", clave)
+        pon_orca(home, finished="off")
+        vuelta(ws, con)
+        ok("R2: apagado el aviso la marca se borra",
+           con.execute("select 1 from settings where key=?", (clave,)).fetchone() is None)
         con.close()
 
     # O5: las automatizaciones que fallaron, con la marca de agua.
@@ -14809,8 +15068,10 @@ if NODE:
                jsl(home, SEGUNDA, "config", "orca_notice_waiting")[0]["value"] == "off")
 
             # El tick de cada linea corre los avisos de Orca de esa linea.
-            orca_de_linea(home, None, finished="on", finishedDelaySeconds="30")
-            orca_de_linea(home, SEGUNDA, finished="on", finishedDelaySeconds="30")
+            orca_de_linea(home, None, finished="on", finishedDelaySeconds="30",
+                          finishedDigestMinutes="0")
+            orca_de_linea(home, SEGUNDA, finished="on", finishedDelaySeconds="30",
+                          finishedDigestMinutes="0")
             ahora_ms = int(time.time() * 1000)
             datos = lee_storage(home)
             datos["orcaPanes"] = {"pT": {"state": "done", "at": ahora_ms - 60000, "finished": True,

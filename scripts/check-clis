@@ -142,6 +142,15 @@ AJUSTES = [
     (["config", "orca_finished_delay_s", "60"], True, "60"),
     (["config", "orca_finished_delay_s", "9"], False, "60"),
     (["config", "orca_finished_delay_s", "601"], False, "60"),
+    # El resumen de los "termino": minutos entre un resumen y el siguiente. Cero es el aviso
+    # de siempre, uno por cada termino; mas de un dia ya no es un resumen.
+    (["config", "orca_finished_digest_min", "30"], True, "30"),
+    (["config", "orca_finished_digest_min", "1441"], False, "30"),
+    (["config", "orca_finished_digest_min", "una hora"], False, "30"),
+    (["config", "orca_finished_digest_min", "-5"], False, "30"),
+    (["config", "orca_finished_digest_min", "0"], True, "0"),
+    (["config", "orca_finished_digest_min", "1440"], True, "1440"),
+    (["config", "orca_finished_digest_min", "45"], True, "45"),
 ]
 
 # Con que arranca la meta del primer contacto: 15 minutos, y se cambia en Ajustes.
@@ -151,11 +160,12 @@ DEFAULTS_INFORMES = {"sla_first_reply_minutes": "15"}
 DEFAULTS_ACUSE = {"ack_quiet_minutes": "30"}
 
 # Con que arrancan los avisos de Orca: todos apagados, sin horas de silencio, seis por hora
-# como mucho y 25 segundos antes de avisar que un agente termino.
+# como mucho, 25 segundos antes de avisar que un agente termino y un resumen de los "termino"
+# cada 60 minutos.
 DEFAULTS_ORCA = {"orca_notice_waiting": "off", "orca_notice_finished": "off",
                  "orca_notice_automation": "off", "orca_quiet_start": "",
                  "orca_quiet_end": "", "orca_notice_hourly_cap": "6",
-                 "orca_finished_delay_s": "25"}
+                 "orca_finished_delay_s": "25", "orca_finished_digest_min": "60"}
 
 # Con que arranca el primer mensaje en una instalacion nueva: el acuse fijo de siempre.
 # Los modos del agente son Beta y nadie entra a ellos sin elegirlos.
@@ -2638,11 +2648,11 @@ def revisa_ajustes(fallos: list) -> int:
         if espejo.get("firstReply") != primer:
             fallos.append(f"sync no le devolvio firstReply al panel: quedo "
                           f"{espejo.get('firstReply')!r} en vez de {primer!r}")
-        # Los avisos de Orca, igual: UNA clave con sus siete valores.
+        # Los avisos de Orca, igual: UNA clave con sus ocho valores.
         hechas += 1
         orca = {"waiting": "on", "finished": "on", "automationFailed": "on",
                 "quietStart": "22:00", "quietEnd": "06:45", "hourlyCap": "10",
-                "finishedDelaySeconds": "60"}
+                "finishedDelaySeconds": "60", "finishedDigestMinutes": "45"}
         if espejo.get("orcaNotices") != orca:
             fallos.append(f"sync no le devolvio orcaNotices al panel: quedo "
                           f"{espejo.get('orcaNotices')!r} en vez de {orca!r}")
@@ -2656,11 +2666,13 @@ def revisa_ajustes(fallos: list) -> int:
                                                     "everyMinutes": "-1", "max": "mil"},
                                      "orcaNotices": {"waiting": "si", "quietStart": "25:00",
                                                      "hourlyCap": "0",
-                                                     "finishedDelaySeconds": True}}),
+                                                     "finishedDelaySeconds": True,
+                                                     "finishedDigestMinutes": "1441"}}),
                          encoding="utf-8")
-        hechas += 4
+        hechas += 5
         for clave, esperado in (("orca_notice_waiting", "on"), ("orca_quiet_start", "22:00"),
-                                ("orca_notice_hourly_cap", "10"), ("orca_finished_delay_s", "60")):
+                                ("orca_notice_hourly_cap", "10"), ("orca_finished_delay_s", "60"),
+                                ("orca_finished_digest_min", "45")):
             quedo = valor(env, clave)
             if quedo != esperado:
                 fallos.append(f"basura del panel en {clave}: llego {quedo!r} en vez de "
@@ -2685,12 +2697,14 @@ def revisa_ajustes(fallos: list) -> int:
                                      # Las horas vacias del panel quitan el silencio del CLI.
                                      "orcaNotices": {"waiting": "off", "quietStart": "",
                                                      "quietEnd": "", "hourlyCap": 3,
-                                                     "finishedDelaySeconds": "30"}}),
+                                                     "finishedDelaySeconds": "30",
+                                                     "finishedDigestMinutes": "0"}}),
                          encoding="utf-8")
-        hechas += 5
+        hechas += 6
         for clave, esperado in (("orca_notice_waiting", "off"), ("orca_quiet_start", ""),
                                 ("orca_quiet_end", ""), ("orca_notice_hourly_cap", "3"),
-                                ("orca_finished_delay_s", "30")):
+                                ("orca_finished_delay_s", "30"),
+                                ("orca_finished_digest_min", "0")):
             quedo = valor(env, clave)
             if quedo != esperado:
                 fallos.append(f"el panel no le gano al CLI en {clave}: quedo {quedo!r}")

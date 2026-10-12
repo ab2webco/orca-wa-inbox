@@ -516,8 +516,13 @@ def main() -> int:
                           '"$WA/wa-read" wait --chat "$OWNER" --after', "--timeout",
                           "wait-timeout", "no-owner-chat", "owner-chat-not-authorized",
                           "never send a credential", "keep it short",
-                          "never message anyone but the owner", "cannot approve",
-                          "send-approve-not-owner",
+                          "cannot approve", "send-approve-not-owner",
+                          # Escribir a otro chat (puede-enviar): un chat registrado de la
+                          # linea, a pedido del dueno o de un admin / Super admin, y lo que
+                          # frena es el codigo de wa-send, no un "no puedo" del agente.
+                          "registered chat", "owner, an admin or a super admin",
+                          '"$WA/wa-scope" check', "--for responder", "send-denied",
+                          "never say you cannot send",
                           # La linea por la que avisa la elige el dueno (todo-por-linea, P7):
                           # sale de `owner --json` y viaja a cada envio y cada espera.
                           '"$WA/wa-scope" owner --json', '--line "$LINE" --send --json',
@@ -525,6 +530,15 @@ def main() -> int:
               if f.lower() not in plano_avisos.lower()]
     if faltan:
         fallos.append(f"{SKILL_AVISOS}  no dice {', '.join(faltan)}")
+    comprobaciones += 1
+    if "never message anyone but the owner" in plano_avisos.lower():
+        fallos.append(f"{SKILL_AVISOS}  sigue diciendo que solo se le escribe al dueno: los "
+                      "agentes concluyen que no pueden enviar a un chat registrado")
+    comprobaciones += 1
+    cli = (RAIZ / "harness/skills/whatsapp-cli/SKILL.md").read_text(encoding="utf-8")
+    if "never say you cannot send" not in plano(cli).lower():
+        fallos.append("harness/skills/whatsapp-cli/SKILL.md  no dice que la propuesta ES como el "
+                      "agente envia (nunca decir que no puede enviar)")
     comprobaciones += 1
     if re.search(r"\d{6,}(:\d+)?@(lid|s\.whatsapp\.net|g\.us)", texto_avisos):
         fallos.append(f"{SKILL_AVISOS}  trae un JID escrito: el chat sale de `wa-scope owner`")

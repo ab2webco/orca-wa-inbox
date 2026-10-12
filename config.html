@@ -929,7 +929,7 @@
 
         <!-- Los avisos de Orca por WhatsApp (avisos-orca): un agente de otro proyecto que espera,
              uno que termino y una automatizacion que fallo, al numero de aprobacion de arriba.
-             Apagados de fabrica. Los siete valores viajan en UNA clave, `orcaNotices`: cada clave
+             Apagados de fabrica. Los ocho valores viajan en UNA clave, `orcaNotices`: cada clave
              es un mensaje mas contra el cupo del host. -->
         <section class="card" id="orca-notices-card">
           <h2 id="orca-legend" data-t="orcaLegend"></h2>
@@ -951,6 +951,17 @@
           <div class="fr-num" id="orca-delay-row" hidden>
             <label for="orca-delay" data-t="orcaDelayLabel"></label>
             <input id="orca-delay" type="number" min="10" max="600" step="1" inputmode="numeric" />
+          </div>
+          <!-- El resumen de los "termino" (resumen-terminados): cada cuantos minutos sale UN
+               mensaje con la cuenta por proyecto; 0 es un mensaje por cada uno. Solo cuenta con
+               el interruptor de "termino" encendido, como la espera de arriba. -->
+          <div id="orca-digest-row" hidden>
+            <div class="fr-num">
+              <label for="orca-digest" data-t="orcaDigestLabel"></label>
+              <input id="orca-digest" type="number" min="0" max="1440" step="1" inputmode="numeric"
+                     aria-describedby="orca-digest-help" />
+            </div>
+            <p class="hint" id="orca-digest-help" data-t="orcaDigestHelp"></p>
           </div>
           <div class="switch-row">
             <button type="button" class="switch" id="orca-automation" role="switch"
@@ -1469,6 +1480,9 @@
           orcaWaitingLabel: 'Un agente espera su permiso o su respuesta, o se bloqueo',
           orcaFinishedLabel: 'Un agente termino lo que estaba haciendo',
           orcaDelayLabel: 'Esperar antes de avisar que termino (segundos)',
+          orcaDigestLabel: 'Resumen de los que terminaron, cada (minutos)',
+          orcaDigestHelp: 'En vez de un mensaje por cada agente que termina, un solo resumen con ' +
+            'la cuenta por proyecto, solo si algo termino. 0 = un mensaje por cada uno.',
           orcaAutomationLabel: 'Una automatizacion de Orca fallo',
           orcaQuietLabel: 'Horas de silencio',
           orcaQuietStart: 'Desde',
@@ -1479,6 +1493,7 @@
           orcaCapHelp: 'Pasado el tope, lo que siga se junta en un solo mensaje con la cuenta.',
           orcaCapRange: 'El tope es un numero entero de avisos, de 1 a 60.',
           orcaDelayRange: 'La espera es un numero entero de segundos, de 10 a 600.',
+          orcaDigestRange: 'El resumen es un numero entero de minutos, de 0 a 1440.',
           orcaQuietRange: 'Ponga las dos horas de silencio, distintas, o deje las dos vacias.',
           voiceLegend: 'Notas de voz',
           readingLegend: 'Lectura de WhatsApp',
@@ -2071,6 +2086,9 @@
           orcaWaitingLabel: 'An agent waits for your permission or your answer, or is blocked',
           orcaFinishedLabel: 'An agent finished what it was doing',
           orcaDelayLabel: 'Wait before saying it finished (seconds)',
+          orcaDigestLabel: 'Summary of the agents that finished, every (minutes)',
+          orcaDigestHelp: 'Instead of one message per agent that finishes, one summary with the ' +
+            'count per project, only if something finished. 0 = one message per finish.',
           orcaAutomationLabel: 'An Orca automation failed',
           orcaQuietLabel: 'Quiet hours',
           orcaQuietStart: 'From',
@@ -2081,6 +2099,7 @@
           orcaCapHelp: 'Past the cap, the rest is grouped into one message with the count.',
           orcaCapRange: 'The cap is a whole number of notices, from 1 to 60.',
           orcaDelayRange: 'The wait is a whole number of seconds, from 10 to 600.',
+          orcaDigestRange: 'The summary is a whole number of minutes, from 0 to 1440.',
           orcaQuietRange: 'Set both quiet hours, different from each other, or leave both empty.',
           voiceLegend: 'Voice notes',
           readingLegend: 'Reading WhatsApp',
@@ -2693,6 +2712,9 @@
         orcaWaitingLabel: 'Um agente espera a sua permissao ou a sua resposta, ou ficou bloqueado',
         orcaFinishedLabel: 'Um agente terminou o que estava fazendo',
         orcaDelayLabel: 'Esperar antes de avisar que terminou (segundos)',
+        orcaDigestLabel: 'Resumo dos que terminaram, a cada (minutos)',
+        orcaDigestHelp: 'Em vez de uma mensagem por cada agente que termina, um unico resumo com ' +
+          'a contagem por projeto, so se algo terminou. 0 = uma mensagem por cada um.',
         orcaAutomationLabel: 'Uma automacao do Orca falhou',
         orcaQuietLabel: 'Horario de silencio',
         orcaQuietStart: 'De',
@@ -2703,6 +2725,7 @@
         orcaCapHelp: 'Passado o limite, o resto e juntado em uma so mensagem com a contagem.',
         orcaCapRange: 'O limite e um numero inteiro de avisos, de 1 a 60.',
         orcaDelayRange: 'A espera e um numero inteiro de segundos, de 10 a 600.',
+        orcaDigestRange: 'O resumo e um numero inteiro de minutos, de 0 a 1440.',
         orcaQuietRange: 'Defina os dois horarios de silencio, diferentes, ou deixe os dois vazios.',
         voiceLegend: 'Notas de voz',
         readingLegend: 'Leitura do WhatsApp',
@@ -4111,13 +4134,15 @@
       // UNA clave, `orcaNotices`, en texto como el resto, con los mismos rangos que valida
       // wa-scope. Lo que falta o no sirve se pinta con el de fabrica: todo apagado.
       var ORCA_DEFECTO = { waiting: 'off', finished: 'off', automationFailed: 'off',
-        quietStart: '', quietEnd: '', hourlyCap: '6', finishedDelaySeconds: '25' }
+        quietStart: '', quietEnd: '', hourlyCap: '6', finishedDelaySeconds: '25',
+        finishedDigestMinutes: '60' }
       var ORCA_INTERRUPTORES = [['waiting', 'orca-waiting'], ['finished', 'orca-finished'],
         ['automationFailed', 'orca-automation']]
       var ORCA_CAMPOS = [['quietStart', 'orca-quiet-start'], ['quietEnd', 'orca-quiet-end'],
-        ['hourlyCap', 'orca-cap'], ['finishedDelaySeconds', 'orca-delay']]
+        ['hourlyCap', 'orca-cap'], ['finishedDelaySeconds', 'orca-delay'],
+        ['finishedDigestMinutes', 'orca-digest']]
       var ORCA_IDS = ['orca-waiting', 'orca-finished', 'orca-automation', 'orca-quiet-start',
-        'orca-quiet-end', 'orca-cap', 'orca-delay']
+        'orca-quiet-end', 'orca-cap', 'orca-delay', 'orca-digest']
       var HORA_ORCA = /^([01]\d|2[0-3]):[0-5]\d$/
       ORCA_IDS.forEach(ensuciar)
       ORCA_INTERRUPTORES.forEach(function (p) {
@@ -4143,9 +4168,11 @@
         })
         pintarOrcaVista()
       }
-      /** La espera del "termino" solo cuenta con ese aviso encendido. */
+      /** La espera y el resumen del "termino" solo cuentan con ese aviso encendido. */
       function pintarOrcaVista () {
-        el('orca-delay-row').hidden = el('orca-finished').getAttribute('aria-checked') !== 'true'
+        var apagado = el('orca-finished').getAttribute('aria-checked') !== 'true'
+        el('orca-delay-row').hidden = apagado
+        el('orca-digest-row').hidden = apagado
       }
       /** Sin numero de aprobacion guardado (y de confianza) no sale ningun aviso. */
       function pintarOrcaNumero () {
@@ -4175,6 +4202,10 @@
           return { mal: 'orcaDelayRange' }
         }
         salida.finishedDelaySeconds = String(Number(demora))
+        // Cero es valido: un mensaje por cada uno que termina, como antes del resumen.
+        var resumen = el('orca-digest').value.trim()
+        if (!/^\d+$/.test(resumen) || Number(resumen) > 1440) return { mal: 'orcaDigestRange' }
+        salida.finishedDigestMinutes = String(Number(resumen))
         return { valor: salida }
       }
       ORCA_INTERRUPTORES.forEach(function (p) { el(p[1]).setAttribute('aria-checked', 'false') })
