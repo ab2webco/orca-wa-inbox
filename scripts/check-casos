@@ -17000,6 +17000,29 @@ if NODE:
             ok("sin las instrucciones del primer mensaje: aca no hay acuse ni avances",
                "## First message and updates" not in texto)
 
+        # Lo que llega en vivo sigue el camino de siempre: nunca entra a un caso que retoma lo
+        # atrasado (decision del dueno, 2026-10-12). Ni el directo, ni la linea suelta del
+        # grupo, ni una union a mano.
+        rezago_grupo = (caso_de_stanza(home, "SR2") or {}).get("case_id")
+        llegan(home, A, [msg(PERSONA, "SR6", "y tambien necesito el certificado", 1),
+                         msg(SOPORTE, "SR7", "alguien vio el correo de ayer", 1)])
+        ingiere(home)
+        vivo = caso_de_stanza(home, "SR6")
+        ok("un mensaje en vivo no se suma al caso que retoma lo atrasado de su chat",
+           vivo is not None and vivo["case_id"] != cid1 and not es_de_rezago(home, "SR6"),
+           f"{vivo and vivo['case_id']} {cid1}")
+        ok("y el caso atrasado se queda con sus mensajes viejos y nada mas",
+           [r[0] for r in db_de(home).execute("select stanza_id from caso_mensaje where "
+                                              "case_id=?", (cid1,))] == ["SR1"])
+        suelta = caso_de_stanza(home, "SR7")
+        ok("una linea suelta del grupo en vivo tampoco se suma al caso atrasado del grupo",
+           rezago_grupo is not None and (suelta is None or suelta["case_id"] != rezago_grupo),
+           f"{suelta and suelta['case_id']} {rezago_grupo}")
+        if vivo:
+            p = corre(home, "caso", "unir", str(cid1), str(vivo["case_id"]), "--actor", "agente")
+            ok("y unir a mano lo de ahora al caso atrasado se niega",
+               p.returncode != 0 and "E_CATCH_UP" in p.stderr, f"{p.returncode} {p.stderr[-200:]}")
+
     # El texto fijo que se agrego: ni falla, ni disculpa, ni el trabajo hecho que no sirve.
     with tempfile.TemporaryDirectory() as home:
         ws = carga_wa_scope(home)
@@ -17146,6 +17169,53 @@ if NODE:
                    p.returncode != 0 and "catch_up" in p.stderr, f"{p.stderr[-200:]}")
             else:
                 ok("un trabajo de un caso atrasado espera al dueno", False, "sin caso")
+    finally:
+        falso.cerrar()
+        os.environ.clear()
+        os.environ.update(antes)
+
+    # Lo que llega MIENTRAS corre la entrada (Jev tarda en contestar lo de ahora): la lectura
+    # de esta corrida no lo trajo, pero es de ahora. No se junta con lo atrasado de su chat:
+    # lo toma la corrida siguiente, en su caso de siempre y con su acuse.
+    en_medio = {}
+
+    def jev_con_uno_en_medio(cuerpo):
+        juzga = (cuerpo["state"].get("message_to_evaluate") or {}).get("text") or ""
+        if "home" in en_medio and "el acceso del equipo nuevo" in juzga:
+            llegan(en_medio.pop("home"), A,
+                   [msg(PERSONA, "SM3", "hoy el portal no funciono", 0)])
+        return jev_y_borradores(cuerpo)
+
+    falso = JevFalso(jev_con_uno_en_medio)
+    antes = dict(os.environ)
+    os.environ["WA_INBOX_JEV_ENDPOINT"] = falso.url
+    try:
+        with tempfile.TemporaryDirectory() as home:
+            llave_del_plugin(home)
+            pon_llave(home)
+            llegan(home, A, [
+                msg(PERSONA, "SM1", "no me llega la factura del mes", 3 * DIA_MIN),
+                msg(SOPORTE, "SM2", "@duenio el acceso del equipo nuevo", 1, mencion=True)])
+            js(home, "agent", "Agente De Ejemplo")
+            js(home, "set", PERSONA, "--provider", "ninguno", "--mode", "responder")
+            js(home, "set", SOPORTE, "--provider", "ninguno", "--mode", "borrador")
+            js(home, "config", "inbox_days", "1")
+            base_de_ingest(home, A, 4)
+            en_medio["home"] = home
+            ingiere(home)
+            atrasado = caso_de_stanza(home, "SM1")
+            en_vivo = caso_de_stanza(home, "SM3")
+            ok("lo que llega mientras corre la entrada no entra al caso que retoma lo atrasado",
+               "home" not in en_medio and atrasado is not None and es_de_rezago(home, "SM1")
+               and (en_vivo is None or en_vivo["case_id"] != atrasado["case_id"]),
+               f"{en_medio} {atrasado and atrasado['case_id']} {en_vivo and en_vivo['case_id']}")
+            ingiere(home)
+            en_vivo = caso_de_stanza(home, "SM3")
+            ok("y la corrida siguiente le abre su caso de siempre, con su acuse",
+               en_vivo is not None and atrasado is not None
+               and en_vivo["case_id"] != atrasado["case_id"] and not es_de_rezago(home, "SM3")
+               and auto_de(home, en_vivo["case_id"]) is not None,
+               f"{en_vivo and en_vivo['case_id']} {en_vivo and auto_de(home, en_vivo['case_id'])}")
     finally:
         falso.cerrar()
         os.environ.clear()

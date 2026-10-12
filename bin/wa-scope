@@ -4159,12 +4159,14 @@ def pregunta_del_dueno(con, caso):
 def caso_espera_proyecto(con, chat, sender_jid):
     """El caso de la conversacion que espera la respuesta de ESTE remitente a una pregunta
     "A o B?" que se le hizo a el (`a` writer), ya enviada (el caso esta en respondido); o
-    None. Lo que escribe otro sigue el camino de siempre."""
+    None. Lo que escribe otro sigue el camino de siempre. Nunca uno que retoma lo atrasado
+    del chat: lo que llega ahora no se le suma."""
     quien = quien_escribe(sender_jid, chat)
     if not quien:
         return None
     for fila in con.execute("select * from caso where account=? and chat_jid=? and "
-                            "etapa='respondido' order by updated_at desc, case_id desc",
+                            f"etapa='respondido' and {sin_rezago_sql('caso')} "
+                            "order by updated_at desc, case_id desc",
                             (cuenta_activa(), chat)).fetchall():
         p = ruta_del_caso(fila).get("pregunta")
         if (isinstance(p, dict) and p.get("estado") == "abierta" and p.get("a") == "writer"
@@ -5309,6 +5311,11 @@ def cmd_caso_unir(con, a):
                              f"answers one conversation")
     if destino["etapa"] == "cerrado":
         caso_falla("E_STAGE", f"case #{a.destino} is cerrado: reopen it before joining into it")
+    # Un caso que retoma lo atrasado tiene solo lo de antes (decision del dueno, 2026-10-12):
+    # lo de ahora sigue en su caso, que se contesta a tiempo.
+    if es_rezago(con, a.destino) and not es_rezago(con, a.origen):
+        caso_falla("E_CATCH_UP", f"case #{a.destino} picks up earlier pending topics: it holds "
+                                 f"old messages only, and case #{a.origen} keeps its own flow")
     motivo = f"unido a {a.destino}"
     caso_valida(origen, "cerrado", motivo)
     cuenta = cuenta_activa()
@@ -5376,13 +5383,15 @@ def cmd_caso_asignar(con, a):
 
 def caso_abierto_de_chat(con, chat, horas, excluir=("cerrado",)):
     """El caso de la conversacion que se movio en las ultimas `horas` y no esta en una de
-    las etapas `excluir`, o None. El mas reciente si hay varios."""
+    las etapas `excluir`, o None. El mas reciente si hay varios. Nunca uno que retoma lo
+    atrasado del chat (`sin_rezago_sql`): lo que llega ahora no se le suma."""
     desde = time.strftime("%Y-%m-%d %H:%M:%S",
                           time.localtime(time.time() - horas * 3600))
     marcas = ",".join("?" * len(excluir))
     row = con.execute(
         f"select * from caso where account=? and chat_jid=? and etapa not in ({marcas}) "
-        "and updated_at >= ? order by updated_at desc, case_id desc limit 1",
+        f"and updated_at >= ? and {sin_rezago_sql('caso')} "
+        "order by updated_at desc, case_id desc limit 1",
         (cuenta_activa(), chat, *excluir, desde)).fetchone()
     return dict(row) if row else None
 
@@ -6981,11 +6990,12 @@ def con_respuesta(con, m, horas):
 def caso_de_rafaga_reciente(con, chat):
     """El caso del chat que se abrio o se reabrio hace menos de RAFAGA_S y sigue esperando
     (recibido, clasificado o decision), o None. Es lo que une un mensaje que llega solo,
-    en otra corrida, a lo que su rafaga ya abrio."""
+    en otra corrida, a lo que su rafaga ya abrio; nunca a un caso que retoma lo atrasado."""
     desde = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(time.time() - RAFAGA_S))
     fila = con.execute(
         "select c.* from caso c where c.account=? and c.chat_jid=? and c.etapa in "
-        "('recibido','clasificado','decision') and exists (select 1 from caso_evento e "
+        f"('recibido','clasificado','decision') and {sin_rezago_sql('c')} "
+        "and exists (select 1 from caso_evento e "
         "where e.case_id=c.case_id and e.a='recibido' and (e.de is null or e.de <> 'recibido') "
         "and e.at >= ?) order by c.updated_at desc, c.case_id desc limit 1",
         (cuenta_activa(), chat, desde)).fetchone()
@@ -8044,6 +8054,14 @@ def es_rezago(con, case_id):
                        (case_id, f"{REZAGO_EVENTO}%")).fetchone() is not None
 
 
+def sin_rezago_sql(alias):
+    """La condicion SQL (sobre la tabla `caso` llamada `alias`) que deja fuera los casos que
+    retoman lo atrasado de su chat: la misma regla que `es_rezago`. Lo que llega ahora nunca
+    se les suma (decision del dueno, 2026-10-12)."""
+    return (f"not exists (select 1 from caso_evento rz where rz.case_id = {alias}.case_id and "
+            f"rz.de is null and rz.a = 'recibido' and rz.detalle like '{REZAGO_EVENTO}%')")
+
+
 def rezago_reparte(con, fuente, cuenta, chat, filas):
     """(atendidos, abiertos) de lo atrasado de un chat: `atendidos` es {motivo: [stanza]} de
     lo que ya se atendio de otra forma, y `abiertos` las filas que siguen esperando."""
@@ -8129,8 +8147,9 @@ def rezago_abre(con, chat, items, veredicto):
 
 
 def ingest_rezago(con, cuenta, leidos, scope, decisiones, prepara, horas, total, casos):
-    """Lo atrasado de la linea: lo que nadie juzgo (`pendientes_de_linea`) y la lectura de
-    esta corrida no trajo, de a lo mas TOPE_REZAGO_CHATS chats, el que mas espera primero.
+    """Lo atrasado de la linea: lo que nadie juzgo (`pendientes_de_linea`), la lectura de
+    esta corrida no trajo y es de antes de la ventana de casos (`horas`), de a lo mas
+    TOPE_REZAGO_CHATS chats, el que mas espera primero.
     Lo ya atendido se cierra con su motivo; lo abierto de cada chat es UNA rafaga, juzgada en
     el orden de siempre (lo que marco el dueno, las reglas deterministas, Jev) y retomada en
     UN caso. Lo que nada pudo juzgar (Jev sin contestar en una linea suelta de un grupo)
@@ -8140,9 +8159,14 @@ def ingest_rezago(con, cuenta, leidos, scope, decisiones, prepara, horas, total,
     except wa_store.SinFuente:
         return
     try:
+        # Solo lo de antes de la ventana de casos (decision del dueno, 2026-10-12): lo de
+        # ahora es del flujo de siempre aunque esta corrida no lo haya leido (llego mientras
+        # corria, o la bandeja lo dejo fuera por su tope), y lo toma la corrida siguiente.
+        ahora = time.time()
+        vivo_desde = ahora - horas * 3600
         por_chat = {}
-        for f in pendientes_de_linea(con, fuente, cuenta, time.time()):
-            if f["stanza_id"] not in leidos:
+        for f in pendientes_de_linea(con, fuente, cuenta, ahora):
+            if f["stanza_id"] not in leidos and f["ts"] < vivo_desde:
                 por_chat.setdefault(f["chat_jid"], []).append(f)
         for chat in sorted(por_chat, key=lambda c: por_chat[c][0]["ts"])[:TOPE_REZAGO_CHATS]:
             entrada = scope.get(chat)
@@ -12540,10 +12564,12 @@ def casos_por_reintentar(con):
 
 def caso_espera_cliente(con, chat):
     """El caso de la conversacion que espera la respuesta del cliente a una pregunta del
-    agente del proyecto (su despacho `necesita`), ya enviada; o None."""
+    agente del proyecto (su despacho `necesita`), ya enviada; o None. Nunca uno que retoma
+    lo atrasado del chat: lo que llega ahora no se le suma."""
     row = con.execute(
         "select c.* from caso c join caso_despacho d on d.case_id = c.case_id where "
-        "c.account=? and c.chat_jid=? and c.etapa in ('respondido','trabajo') and "
+        f"c.account=? and c.chat_jid=? and {sin_rezago_sql('c')} and "
+        "c.etapa in ('respondido','trabajo') and "
         "(d.estado='esperando' or (d.estado in ('lanzando','activo') and d.resultado='necesita')) "
         "order by d.id desc limit 1", (cuenta_activa(), chat)).fetchone()
     return dict(row) if row else None
