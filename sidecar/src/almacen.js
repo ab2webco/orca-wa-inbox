@@ -766,6 +766,20 @@ class Almacen {
     })
   }
 
+  /** Pone `cuenta` en el conjunto de activas si no esta: la secundaria al final, la
+   *  principal primera y con `linea_activa`. Lo corre el latido de cada segundo, asi que
+   *  primero solo lee, y escribe (atomico) unicamente si falta. Devuelve si la puso. */
+  asegurarLinea (cuenta, { principal = false } = {}) {
+    if (!cuenta || this.lineasActivas().includes(cuenta)) return false
+    return this.exclusiva(() => {
+      const actuales = this.lineasActivas()
+      if (actuales.includes(cuenta)) return false
+      this.anotarActivas(principal ? [cuenta, ...actuales] : [...actuales, cuenta])
+      if (principal && this.lineaActiva() !== cuenta) this.anotarMeta('linea_activa', cuenta)
+      return true
+    })
+  }
+
   /** Corre `fn` —un leer-cambiar-escribir de `store_meta`— con el almacen tomado para
    *  escribir desde la lectura. Cada sidecar es otro proceso sobre el mismo archivo: al
    *  reiniciar Orca arrancan juntos, y sin esto el que escribe ultimo borraba la linea
