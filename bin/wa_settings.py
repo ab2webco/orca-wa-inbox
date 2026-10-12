@@ -521,7 +521,8 @@ PANEL_ORCA_CAMPOS = {"waiting": "orca_notice_waiting", "finished": "orca_notice_
                      "automationFailed": "orca_notice_automation",
                      "quietStart": "orca_quiet_start", "quietEnd": "orca_quiet_end",
                      "hourlyCap": "orca_notice_hourly_cap",
-                     "finishedDelaySeconds": "orca_finished_delay_s"}
+                     "finishedDelaySeconds": "orca_finished_delay_s",
+                     "finishedDigestMinutes": "orca_finished_digest_min"}
 # Las horas de silencio, en hora local de la maquina: `HH:MM` de 24 horas, o vacio. Vaciar
 # una es una eleccion (quita el silencio), no un valor que falta.
 CONFIG_HORAS = ("orca_quiet_start", "orca_quiet_end")
@@ -551,7 +552,8 @@ CONFIG_NUMERICOS = ("inbox_days", "lock_ttl_s", "sync_minutes",
                     "capture_max", "capture_days", "case_window_hours", "approval_hours",
                     "ack_fallback_minutes", "update_every_minutes", "updates_max",
                     "sla_first_reply_minutes", "project_question_hours",
-                    "ack_quiet_minutes", "orca_notice_hourly_cap", "orca_finished_delay_s")
+                    "ack_quiet_minutes", "orca_notice_hourly_cap", "orca_finished_delay_s",
+                    "orca_finished_digest_min")
 # Los numericos con un rango cerrado. Un respaldo de cero minutos es el acuse fijo de
 # siempre con otro nombre, y uno de un dia deja al cliente sin nada; un tope de avances
 # de cien es un cliente con el telefono sonando.
@@ -567,7 +569,10 @@ CONFIG_RANGOS = {"ack_fallback_minutes": (1, 60), "update_every_minutes": (1, 12
                  "orca_notice_hourly_cap": (1, 60),
                  # Menos de diez segundos avisa de cada pausa entre dos turnos; mas de diez
                  # minutos ya no es "termino", es una noticia vieja.
-                 "orca_finished_delay_s": (10, 600)}
+                 "orca_finished_delay_s": (10, 600),
+                 # Cada cuantos minutos sale UN resumen de los "termino"; cero es el aviso de
+                 # siempre, uno por cada uno. Mas de un dia ya no es un resumen.
+                 "orca_finished_digest_min": (0, 1440)}
 # Los numericos que ademas tienen que ser mayores que cero. Una ventana de agrupacion de
 # cero horas no agrupa nunca: abre una tarjeta por mensaje sin decir por que. Un aviso de
 # aprobacion que vence a las cero horas no se podria contestar nunca (T14).
