@@ -9816,11 +9816,41 @@ def tick_toma():
     """El candado del tick, o None si otro tick lo tiene. No espera: un tick que llega
     mientras otro envia no tiene nada que hacer que el otro no este haciendo.
 
-    Con varias lineas el candado es de cada una: la principal conserva el de siempre y
-    otra linea tiene el suyo, asi un tick ocupado (o colgado) en una no frena a otra."""
-    nombre = (CANDADO_TICK if es_linea_principal()
-              else f"tick-{re.sub(r'[^A-Za-z0-9]', '-', cuenta_activa())}.lock")
-    ruta = os.path.join(os.path.dirname(DB), nombre)
+    El candado es de cada linea, por su cuenta: un tick ocupado (o colgado) en una no frena
+    a otra. Siempre el de su cuenta, sea o no la principal: con el nombre segun quien era la
+    principal, desvincular la principal a mitad de un tick de otra linea dejaba al siguiente
+    tick de esa linea con otro candado, y corrian dos a la vez (lv3-auditoria, 5). La
+    principal toma ademas el de siempre (`tick.lock`), el que toma un tick de una version
+    anterior; `local` toma solo ese."""
+    cuenta = cuenta_activa()
+    nombres = [] if cuenta == CUENTA_LOCAL else [
+        f"tick-{re.sub(r'[^A-Za-z0-9]', '-', cuenta)}.lock"]
+    if es_linea_principal():
+        nombres.append(CANDADO_TICK)
+    tomados = []
+    for nombre in nombres:
+        fh = _toma_candado_tick(os.path.join(os.path.dirname(DB), nombre))
+        if fh is None:
+            for otro in tomados:
+                otro.close()
+            return None
+        tomados.append(fh)
+    return _Candados(tomados)
+
+
+class _Candados:
+    """Varios candados que se sueltan juntos, con el `close()` de uno solo."""
+
+    def __init__(self, archivos):
+        self.archivos = archivos
+
+    def close(self):
+        for fh in reversed(self.archivos):
+            fh.close()
+
+
+def _toma_candado_tick(ruta):
+    """Un candado de archivo sin esperar, o None si otro lo tiene."""
     os.makedirs(os.path.dirname(ruta), exist_ok=True)
     fh = open(ruta, "a+")
     try:

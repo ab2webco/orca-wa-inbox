@@ -17056,6 +17056,42 @@ if NODE:
            casos == [] and sorted(f[0] for f in fallas) == sorted([A, SEGUNDA]),
            f"{casos} {fallas}")
 
+# ── El candado del tick es de la linea, no de quien sea la principal (lv3-auditoria, 5) ──
+# La principal tomaba `tick.lock` y otra linea `tick-<cuenta>.lock`. Si la principal se
+# desvinculaba a mitad de un tick de la otra, el tick siguiente de esa linea (ahora la
+# principal) tomaba `tick.lock` y corria a la vez que el que seguia con el suyo. Ahora cada
+# linea toma el de su cuenta, siempre; la principal toma ademas `tick.lock`, el de antes,
+# para no correr a la vez que un tick de una version anterior.
+print("\nel candado del tick es de la linea (lv3-auditoria)")
+if NODE:
+    with tempfile.TemporaryDirectory() as home:
+        llegan(home, A, [msg(SOPORTE, "CL1", "@duenio no abre el login", 5, mencion=True)])
+        llegan(home, SEGUNDA, [msg(SOPORTE, "CL2", "@duenio no llega la factura", 5,
+                                   mencion=True)], activar=False)
+        suma_linea(home, SEGUNDA)
+        carpeta = pathlib.Path(home) / ".wa-inbox"
+        de_b = carpeta / f"tick-{SEGUNDA.replace(':', '-')}.lock"
+        candado = toma_candado(de_b)
+        try:
+            # La principal se desvincula: la otra pasa a ser la principal con su tick en curso.
+            anota_activas(home, [SEGUNDA], meta={"linea_activa": SEGUNDA})
+            p, r = tick(home, "--line", SEGUNDA)
+        finally:
+            candado.close()
+        ok("con el tick de la linea en curso, el siguiente sigue ocupado aunque ahora sea la "
+           "principal", isinstance(r, dict) and r.get("busy") is True,
+           f"{p.returncode} {p.stdout[:300]} {p.stderr[-300:]}")
+        candado = toma_candado(carpeta / "tick.lock")
+        try:
+            p, r = tick(home, "--line", SEGUNDA)
+        finally:
+            candado.close()
+        ok("y la principal respeta el candado de siempre, el de un tick de una version anterior",
+           isinstance(r, dict) and r.get("busy") is True, f"{p.stdout[:300]}")
+        p, r = tick(home, "--line", SEGUNDA)
+        ok("libres los dos, corre", isinstance(r, dict) and r.get("busy") is False,
+           f"{p.stdout[:300]} {p.stderr[-300:]}")
+
 print(f"\n{pruebas - len(fallos)}/{pruebas} en verde")
 if fallos:
     sys.exit(1)
