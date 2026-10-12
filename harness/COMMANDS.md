@@ -103,6 +103,7 @@ tell a customer about another case.
     "$WA/wa-scope" caso editar <id> --prioridad high --titulo "<title>" --actor agente
     "$WA/wa-scope" caso retirar <id> --motivo "<why>" --actor agente   # drop the proposal, keep the case
     "$WA/wa-scope" caso atender <id> --ahora --actor agente        # mark it and launch the case agent now
+    "$WA/wa-scope" caso atender <id> --ahora --pedido <this case> --actor agente  # the owner ordered it here
     "$WA/wa-scope" caso recordar <id> "<text>" --cuando "manana 9:00" --actor agente
     "$WA/wa-scope" caso recordar <id> --hasta 3d --actor agente     # snooze: out of the list and of the agent
     "$WA/wa-scope" caso recordatorios --json        # pending reminders; `caso recordar <id> --cancelar` drops them

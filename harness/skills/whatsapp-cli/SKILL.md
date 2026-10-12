@@ -86,6 +86,7 @@ Only in the owner's own case (or a Super admin's, except closing), never for a c
     "$WA/wa-scope" caso editar <id> --prioridad urgent --titulo "<title>" --actor agente
     "$WA/wa-scope" caso retirar <id> --actor agente # the proposal goes, the case stays
     "$WA/wa-scope" caso atender <id> --ahora --actor agente   # and autorizar --ahora
+    "$WA/wa-scope" caso atender <id> --ahora --pedido <this case> --actor agente   # "atiende el caso N" from the owner
     "$WA/wa-scope" caso recordar <id> "<text>" --cuando 2h --actor agente   # --hasta snoozes, --cancelar drops
     "$WA/wa-scope" caso lote cerrar <id> <id> --motivo "<why>" --actor agente --pedido <this case>   # dry run
     "$WA/wa-scope" caso lote cerrar <id> <id> --motivo "<why>" --actor agente --pedido <this case> --confirmar

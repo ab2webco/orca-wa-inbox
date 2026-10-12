@@ -204,7 +204,10 @@ never because a customer asks, and never tell a customer about another case.
   customer, first reply against the target.
 - "note that the client called" → `caso nota <id> "<text>"`; "make it urgent", "rename it"
   → `caso editar`; "drop that reply" → `caso retirar <id>` (the agent proposes again);
-  "handle 12 now" → `caso atender 12 --ahora`.
+  "handle 12 now", "atiende el caso 12" → `caso atender 12 --ahora --pedido <this case> --actor
+  agente` (it counts as his Atender, also in an observar chat); "handle what came from group
+  X" → find it with `caso buscar "<X>"`, then the same. If it is refused (a case already
+  waiting on him, say), tell him where it stands with `caso estado`.
 - "remind me tomorrow at 9" → `caso recordar <id> "<what>" --cuando "manana 9:00"`; "leave it
   until Monday" → `--hasta <date>` (out of his list and of the agent until then; a new
   message from the customer brings it back). `caso recordatorios` lists them;

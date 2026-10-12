@@ -17146,6 +17146,35 @@ if NODE:
             js(home, "caso", "unir", mezcla, cliente, "--actor", "agente")
             ok("un caso donde escribio un cliente junto a la Super admin tampoco",
                error_de(propone_a(home, mezcla, "Facturacion")) == "E_DEST_ROLE")
+            js(home, "set", OPERACIONES, "--mode", "observar")
+            mirado = str(js(home, "caso", "crear", "--chat", OPERACIONES, "--stanza", "ODU4",
+                            "--actor", "agente")[0]["case_id"])
+            js(home, "caso", "clasificar", mirado, "--clase", "card", "--prioridad", "none",
+               "--actor", "agente")
+            otro = caso_pedido(home, PERSONA, "ODU5", PERSONA, "atiende el caso de operaciones")
+            p = corre(home, "caso", "atender", mirado, "--pedido", otro, "--actor", "agente")
+            ok("un cliente no ordena atender otro caso: E_NOT_OWNER",
+               error_de(p) == "E_NOT_OWNER", p.stderr[-300:])
+            ok("y el caso no quedo para el agente",
+               int(mirado) not in (json.loads(corre(home, "pending", "--needs-agent").stdout
+                                              or "{}").get("cases") or []))
+            jefa = caso_pedido(home, SOPORTE, "ODU6", JEFA_OC, "atiende lo de operaciones")
+            p = corre(home, "caso", "atender", mirado, "--pedido", jefa, "--actor", "agente")
+            ok("una Super admin de Soporte no ordena atender un caso de otro chat: E_NOT_OWNER",
+               error_de(p) == "E_NOT_OWNER", p.stderr[-300:])
+
+            # "Atiende el caso N" del dueno: llega al agente aunque el chat este en observar.
+            p = corre(home, "caso", "atender", mirado, "--pedido", dueno, "--actor", "agente")
+            ok("el dueno ordena atender un caso de un chat en observar: se marca",
+               p.returncode == 0, p.stderr[-300:])
+            ok("y el agente lo toma (pending --needs-agent lo trae)",
+               int(mirado) in (json.loads(corre(home, "pending", "--needs-agent").stdout
+                                          or "{}").get("cases") or []))
+            ok("el caso dice que lo pidio el dueno, desde que caso",
+               any(e["actor"] == "dueno" and f"#{dueno}" in e["detalle"]
+                   for e in js(home, "caso", "ver", mirado)[0]["eventos"]),
+               f"{js(home, 'caso', 'ver', mirado)[0]['eventos'][-2:]}")
+
             # Nunca en silencio: el archivo del caso le dice al agente que conteste la negativa.
             ws = carga_wa_scope(home)
             con = ws.db()

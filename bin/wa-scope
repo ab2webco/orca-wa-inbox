@@ -3895,16 +3895,48 @@ def tick_recordatorios(con, resumen):
 def cmd_caso_atender(con, a):
     """El dueno pide que el agente atienda este caso en su proxima corrida (lo que era
     "Tomar" en la bandeja): lo marca `necesita_agente`, que es lo que mira
-    `pending --needs-agent`. Solo antes de que haya una propuesta."""
+    `pending --needs-agent`. Solo antes de que haya una propuesta.
+
+    `--pedido <caso>` (ordenes-del-dueno): el agente lo hace porque el dueno se lo ordeno en
+    ESE caso ("atiende el caso N"). Vale como el boton del dueno (tambien en un chat en
+    `observar`) solo si el pedido es suyo, por su id de WhatsApp; un Super admin, solo sobre un
+    caso de su misma conversacion. Nadie mas ordena nada (E_NOT_OWNER)."""
     caso_toma(con)
     caso = caso_de(con, a.id)
+    actor, detalle = a.actor, DETALLE_ATENDER
+    if getattr(a, "pedido", None) is not None:
+        pedido = orden_de_atender(con, a.pedido, caso)
+        actor, detalle = "dueno", f"{DETALLE_ATENDER} · {POR_ORDEN} #{pedido['case_id']}"
     if caso["etapa"] not in ETAPAS_ATENDER:
         caso_falla("E_STAGE", f"case #{a.id} is in {caso['etapa']}: only a case in "
-                              f"{' or '.join(ETAPAS_ATENDER)} can be handed to the agent")
-    caso_tocar(con, caso, a.actor, DETALLE_ATENDER,
+                              f"{' or '.join(ETAPAS_ATENDER)} can be handed to the agent. Tell "
+                              f"the owner where it stands (`caso estado {a.id}`)")
+    caso_tocar(con, caso, actor, detalle,
                necesita_agente=1)
     con.commit()
     return [lanza_si_ahora(con, a, caso_fila(con, caso_de(con, a.id)))]
+
+
+# El evento de "atender" que el dueno ordeno por WhatsApp desde otro caso (ordenes-del-dueno).
+POR_ORDEN = "ordered from case"
+
+
+def orden_de_atender(con, pedido_id, caso):
+    """El caso donde se ordeno atender `caso`, si la orden cuenta: del dueno (por su id de
+    WhatsApp, en cualquier linea), o de un Super admin de ESA misma conversacion. Si no, sale
+    con E_NOT_OWNER. El pedido se busca en todas las lineas: el dueno ordena desde la suya."""
+    fila = con.execute("select * from caso where case_id=?", (pedido_id,)).fetchone()
+    if not fila:
+        caso_falla("E_NOT_FOUND", f"no case #{pedido_id}")
+    pedido = dict(fila)
+    if caso_del_dueno(con, pedido):
+        return pedido
+    if (pedido["account"] == caso["account"] and pedido["chat_jid"] == caso["chat_jid"]
+            and caso_pide_como_dueno(con, pedido)):
+        return pedido
+    caso_falla("E_NOT_OWNER", f"case #{pedido_id} is not the owner's (nor a Super admin's of "
+                              f"case #{caso['case_id']}'s chat): only the owner orders the agent "
+                              f"to handle another case")
 
 
 def lanza_si_ahora(con, a, fila):
@@ -8522,7 +8554,7 @@ def que_del_evento(detalle, medios=None):
         return "project", []
     if d.startswith("autorizadas:"):
         return "authorized", []
-    if d == DETALLE_ATENDER:
+    if d == DETALLE_ATENDER or d.startswith(f"{DETALLE_ATENDER} · "):
         return "attend", []
     if "titulo y resumen nuevos" in d:
         return "retitled", []
@@ -14330,7 +14362,8 @@ DETALLE_ATENDER = "the owner asked the agent to handle it now"
 def atendido_por_dueno(con, case_id):
     """Si el dueno apreto Atender ahora en este caso."""
     return con.execute("select 1 from caso_evento where case_id=? and actor='dueno' and "
-                       "detalle=? limit 1", (case_id, DETALLE_ATENDER)).fetchone() is not None
+                       "(detalle=? or detalle like ?) limit 1",
+                       (case_id, DETALLE_ATENDER, f"{DETALLE_ATENDER} · %")).fetchone() is not None
 
 
 def casos_para_agente(con):
@@ -15107,6 +15140,11 @@ def main():
                    help="and launch the case agent now, like the board's Atender ahora "
                         "(`agente lanzar`): the output says `agent` launched | running | "
                         "failed | waiting | nothing")
+    c.add_argument("--pedido", type=int, metavar="CASE",
+                   help="the case where the owner ordered it (\"atiende el caso N\"): counts as "
+                        "his Atender, also in an observar chat. Only the owner's case (by "
+                        "WhatsApp id), or a Super admin's of the same chat; otherwise "
+                        "E_NOT_OWNER")
     c.set_defaults(fn=cmd_caso_atender)
 
     c = muta("autorizar", help="the owner waives the inbound exceptions of a case in decision: "
