@@ -93,8 +93,10 @@ line and finish.
   or `--tipo trabajar --instrucciones "<brief>" --chat <jid>` when the answer needs work
   first (the worker's reply then goes to that chat). Write the text for the people of
   that chat, in its tone (`voice "<jid>"`). When he does not name the chat ("report it to
-  the client"), run `wa-scope caso destinos <id>`: with one candidate, use it; with several, ask him which one in the reply (one short question with the names); with none, say that no chat in responder has the case's project and ask which chat. It always
-  waits for the owner's approval, and the case's chat gets a confirmation once it is sent.
+  the client"), run `wa-scope caso destinos <id>`: with one candidate, use it; with several, ask him which one in the reply (one short question with the names); with none, say that no chat in responder has the case's project and ask which chat. The owner's
+  own order goes out without a second approval once the floor and Jev pass (a chat in
+  borrador still waits for his signature); a Super admin's waits for the owner's approval.
+  The case's chat gets a confirmation once it is sent.
   The owner's own order also reaches a chat of another linked line (it goes out through
   that line; `caso destinos` labels each chat with its line) and a chat in borrador; a
   Super admin's stays on this line and in responder.

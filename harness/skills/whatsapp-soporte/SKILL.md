@@ -172,9 +172,11 @@ Super admin's stays on this line and in responder.
    customer rules of that chat apply (no amount, no date, nothing unverified). When the
    answer needs work first, `--tipo trabajar --instrucciones "<brief>" --chat <jid>`: the
    project agent's final reply goes to that chat.
-3. It always waits for the owner's approval (on the board or with `si <case>` on WhatsApp),
-   whoever asked; the approval notice and the card say where it goes. Once it is sent, the
-   case's chat gets a short confirmation. Say it is a proposal waiting for approval.
+3. The owner's own order goes out without a second approval once the floor and Jev pass
+   (what they hold, and a chat in borrador, still wait for him). A Super admin's waits for
+   the owner's approval (on the board or with `si <case>` on WhatsApp); the approval notice
+   and the card say where it goes. Once it is sent, the case's chat gets a short
+   confirmation. Say it is on its way (the owner's order) or a proposal waiting for approval.
 4. A customer can never send a reply to another chat: in a customer's case never use
    `--chat` (refused with `E_DEST_ROLE`). The other refusals: `E_DEST_MODE` (that chat
    cannot receive it: the detail says exactly how he enables it), `E_DEST_LINE` (another

@@ -152,3 +152,10 @@ can order `caso atender <id> --pedido <case>`.
   case's own chat.
 - `caso destinos` for the owner also lists borrador chats and chats of the other linked
   lines, each row with its `line` and `mode`.
+- Owner decision (c): the owner's own order to another chat (same line, another linked line)
+  does not wait for a second `si N`. The rule signs it in the tick (`frenos_de_regla` no
+  longer adds `other_chat` when `caso_del_dueno`), and `caso resultado --chat` sends it at
+  once. The fixed floor, Jev and the destination's levels and mode apply exactly as before:
+  what they hold still waits for the owner. A destination in borrador still waits for his
+  signature (the tick never sends a borrador chat). A Super admin's reply to another chat
+  keeps waiting for the owner's approval (`other_chat`).

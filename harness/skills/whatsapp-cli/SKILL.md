@@ -63,7 +63,9 @@ case's own chat.
     "$WA/wa-scope" caso propuesta <id> --tipo responder --respuesta "<text>" --chat <jid> --actor agente
     "$WA/wa-scope" caso resultado <id> --estado resuelto --respuesta "<text>" --resumen "<what was done>" --chat <jid> --actor trabajador   # the project agent
 
-Both wait for the owner's approval before anything goes to that chat.
+The owner's own order goes out without a second approval once the floor and Jev pass (a
+chat in borrador still waits for his signature); a Super admin's waits for the owner's
+approval before anything goes to that chat.
 
 Beta, only where `voice` says `first_reply_mode` is `model` or `model_with_ack_fallback`
 (see the `whatsapp-soporte` skill): the first message and the updates, sent by the plugin.

@@ -15257,35 +15257,37 @@ def eventos_de(home, cid):
     return [e["detalle"] for e in js(home, "caso", "ver", cid)[0]["eventos"]]
 
 
-print("\nrespuesta-otro-chat R2: la regla nunca firma una respuesta a otro chat")
+print("\nrespuesta-otro-chat R2: la regla no firma lo que un Super admin manda a otro chat")
+# Decision (c) del dueno: SU orden no espera un segundo `si N` (ver ordenes-del-dueno). Lo
+# que pide una Super admin a otro chat sigue esperando la firma del dueno.
 if NODE:
     with tempfile.TemporaryDirectory() as home:
         env_antes = dict(os.environ)
         prepara_otro_chat(home)
         sidecar = SidecarFalso(home)
         try:
-            dueno = caso_pedido(home, DUENO_DM, "OR1", DUENO_LID)
-            v = json.loads(propone_a(home, dueno, "Facturacion").stdout)[0]["propuesta_version"]
+            jefa = caso_pedido(home, SOPORTE, "OR1", JEFA_OC)
+            v = json.loads(propone_a(home, jefa, "Facturacion").stdout)[0]["propuesta_version"]
             tick(home)
-            ver = js(home, "caso", "ver", dueno)[0]
+            ver = js(home, "caso", "ver", jefa)[0]
             ok("el tick no la manda sola: espera al dueno",
                ver["etapa"] == "decision" and not ver["aprobada"]
                and envios_a(home, FACTURACION) == [], f"{ver['etapa']} {envios_a(home, FACTURACION)}")
             ok("y el caso dice por que: other_chat, una vez por version",
-               sum(1 for d in eventos_de(home, dueno)
+               sum(1 for d in eventos_de(home, jefa)
                    if d.startswith("respuesta espera al dueno:") and "other_chat" in d
-                   and d.endswith(v[:12])) == 1, f"{eventos_de(home, dueno)}")
+                   and d.endswith(v[:12])) == 1, f"{eventos_de(home, jefa)}")
             ok("regla aprobar a mano tambien se niega (E_EXCEPTION)",
-               error_de(corre(home, "caso", "aprobar", dueno, "--version", v,
+               error_de(corre(home, "caso", "aprobar", jefa, "--version", v,
                               "--actor", "regla")) == "E_EXCEPTION")
 
             pon_aprobacion(home, DUENO_LID)
             tick(home)
-            avisos = [a for a in al_dueno(home) if a["req_id"].startswith(f"aviso-{dueno}-")]
+            avisos = [a for a in al_dueno(home) if a["req_id"].startswith(f"aviso-{jefa}-")]
             cuerpo = avisos[0]["body"] if avisos else ""
             ok("el aviso al dueno dice a que chat va y el texto",
                len(avisos) == 1 and "Va a: Facturacion" in cuerpo
-               and "el reporte quedo bien" in cuerpo and f"si {dueno}" in cuerpo, cuerpo)
+               and "el reporte quedo bien" in cuerpo and f"si {jefa}" in cuerpo, cuerpo)
             ok("y por que espera, en palabras", "otro chat" in cuerpo, cuerpo)
 
             ws = carga_wa_scope(home)
@@ -15300,8 +15302,9 @@ if NODE:
             finally:
                 con.close()
             ok("en el chat del dueno el dinero no frena; hacia el cliente si (sus niveles)",
-               "money" not in propio and "money" in fuera and "other_chat" in fuera,
-               f"{propio} {fuera}")
+               "money" not in propio and "money" in fuera, f"{propio} {fuera}")
+            ok("y la orden del dueno no espera por ir a otro chat (decision c)",
+               "other_chat" not in fuera, f"{fuera}")
 
             otro = caso_pedido(home, DUENO_DM, "OR3", DUENO_LID)
             propone_a(home, otro, "Facturacion", "Otra conclusion distinta.")
@@ -15367,9 +15370,11 @@ if NODE:
                not any(e["req_id"] == f"caso-{dinero}-{v2[:12]}-ok"
                        for e in envios_a(home, DUENO_DM)))
 
-            # La aprobacion por WhatsApp (`si N`): sale al destino y la respuesta lo dice.
+            # La aprobacion por WhatsApp (`si N`) de lo que una Super admin mando a otro chat
+            # (la orden del dueno ya no la espera, decision c): sale al destino y la
+            # respuesta lo dice.
             pon_aprobacion(home, DUENO_LID)
-            whats = caso_pedido(home, DUENO_DM, "OS3", DUENO_LID, "y esto tambien al grupo")
+            whats = caso_pedido(home, SOPORTE, "OS3", JEFA_OC, "y esto tambien al grupo")
             v3 = json.loads(propone_a(home, whats, "Facturacion",
                                       "Le comparto la conclusion del informe de ventas.").stdout)[0]["propuesta_version"]
             tick(home)
@@ -15383,8 +15388,12 @@ if NODE:
             dichos = [e["body"] for e in envios_a(home, DUENO_DM)
                       if f"Caso {whats}" in e["body"] and "a Facturacion" in e["body"]
                       and "no salio" not in e["body"] and "Respuesta propuesta" not in e["body"]]
-            ok("y el dueno lee UNA vez que salio a Facturacion (su directo es el del caso)",
+            ok("y el dueno lee UNA vez que salio a Facturacion",
                len(dichos) == 1, f"{dichos}")
+            confirma = [e for e in envios_a(home, SOPORTE)
+                        if e["req_id"] == f"caso-{whats}-{v3[:12]}-ok"]
+            ok("y el chat de la Super admin recibe su confirmacion",
+               len(confirma) == 1 and "Facturacion" in confirma[0]["body"], f"{confirma}")
         finally:
             sidecar.cerrar()
             os.environ.clear()
@@ -15428,10 +15437,6 @@ if NODE:
             ok("la respuesta del resultado conserva el destino",
                r["propuesta"].get("chat") == FACTURACION
                and (r.get("destino") or {}).get("chat_jid") == FACTURACION, f"{r['propuesta']}")
-            ok("y no sale sola: espera al dueno, a ningun chat",
-               r["etapa"] == "listo" and envios_a(home, FACTURACION) == []
-               and not any("quedo corregida" in e["body"] for e in envios_a(home, DUENO_DM)),
-               f"{r.get('envio')}")
             con = ws.db()
             try:
                 historia = "\n".join(ws.historia_del_caso(con, ws.caso_de(con, int(dueno))))
@@ -15439,10 +15444,13 @@ if NODE:
                 con.close()
             ok("el archivo del caso dice a donde va la propuesta y como conservarlo",
                f"--chat {FACTURACION}" in historia and "Facturacion" in historia, historia)
-            js(home, "caso", "aprobar", dueno, "--version", r["propuesta_version"],
-               "--actor", "dueno")
+            ok("la orden del dueno sale al destino en el acto, sin otra firma (decision c)",
+               (r.get("envio") or {}).get("estado") == "enviado"
+               and [e["estado"] for e in envios_a(home, FACTURACION)] == ["enviado"]
+               and not any("quedo corregida" in e["body"] for e in envios_a(home, DUENO_DM)),
+               f"{r.get('envio')} {envios_a(home, FACTURACION)}")
             tick(home)
-            ok("firmada por el dueno, sale al destino",
+            ok("y otro tick no la repite",
                [e["estado"] for e in envios_a(home, FACTURACION)] == ["enviado"],
                f"{envios_a(home, FACTURACION)}")
 
@@ -15533,28 +15541,35 @@ if NODE:
             r = json.loads(p.stdout or "[{}]")[0] if p.returncode == 0 else {}
             ok("el agente del proyecto manda su resultado a otro chat con --chat",
                (r.get("propuesta") or {}).get("chat") == FACTURACION
-               and (r.get("destino") or {}).get("chat_jid") == FACTURACION
-               and r.get("etapa") == "listo", p.stderr.strip()[:300])
-            ok("y no sale solo: espera la firma del dueno",
-               envios_a(home, FACTURACION) == [] and not any(
-                   "quedo revisado" in e["body"] for e in envios_a(home, DUENO_DM)),
+               and (r.get("destino") or {}).get("chat_jid") == FACTURACION,
+               p.stderr.strip()[:300])
+            ok("la orden del dueno sale en el acto, sin otra firma (decision c)",
+               (r.get("envio") or {}).get("estado") == "enviado"
+               and [e["estado"] for e in envios_a(home, FACTURACION)] == ["enviado"]
+               and not any("quedo revisado" in e["body"] for e in envios_a(home, DUENO_DM)),
                f"{r.get('envio')} {envios_a(home, FACTURACION)}")
-            tick(home)
-            ok("ni el tick lo manda sin la firma",
-               envios_a(home, FACTURACION) == [] and js(home, "caso", "ver", dueno)[0]["etapa"]
-               == "listo", f"{envios_a(home, FACTURACION)}")
-            js(home, "caso", "aprobar", dueno, "--version", r["propuesta_version"],
-               "--actor", "dueno")
-            tick(home)
-            ok("firmado por el dueno, sale al otro chat",
-               [e["estado"] for e in envios_a(home, FACTURACION)] == ["enviado"],
-               f"{envios_a(home, FACTURACION)}")
 
             jefa = trabajo_aprobado(SOPORTE, "OX2", JEFA_OC, "revisa el reporte del grupo")
             pj = resultado_a(jefa, "Facturacion")
+            rj = json.loads(pj.stdout or "[{}]")[0] if pj.returncode == 0 else {}
             ok("el de una Super admin de la conversacion tambien puede",
-               pj.returncode == 0 and json.loads(pj.stdout)[0]["propuesta"].get("chat")
-               == FACTURACION, pj.stderr.strip()[:300])
+               (rj.get("propuesta") or {}).get("chat") == FACTURACION
+               and rj.get("etapa") == "listo", pj.stderr.strip()[:300])
+            ok("pero no sale solo: espera la firma del dueno",
+               len(envios_a(home, FACTURACION)) == 1 and not any(
+                   "quedo revisado" in e["body"] for e in envios_a(home, SOPORTE)),
+               f"{rj.get('envio')} {envios_a(home, FACTURACION)}")
+            tick(home)
+            ok("ni el tick lo manda sin la firma",
+               len(envios_a(home, FACTURACION)) == 1
+               and js(home, "caso", "ver", jefa)[0]["etapa"] == "listo",
+               f"{envios_a(home, FACTURACION)}")
+            js(home, "caso", "aprobar", jefa, "--version", rj["propuesta_version"],
+               "--actor", "dueno")
+            tick(home)
+            ok("firmado por el dueno, sale al otro chat",
+               [e["estado"] for e in envios_a(home, FACTURACION)] == ["enviado", "enviado"],
+               f"{envios_a(home, FACTURACION)}")
 
             cliente = trabajo_aprobado(PERSONA, "OX3", PERSONA, "revisa mi pedido")
             pc = resultado_a(cliente, "Facturacion")
@@ -16973,14 +16988,9 @@ if NODE:
                and (fila.get("destino") or {}).get("linea") == SEGUNDA, f"{fila.get('destino')}")
             ok("el caso sigue en su linea", fila.get("account") == A, f"{fila.get('account')}")
             v = fila.get("propuesta_version") or ""
-            con_sidecars(home, lambda: tick(home))
-            ok("la regla no la firma sola: espera al dueno, nada sale",
-               js(home, "caso", "ver", dueno)[0]["etapa"] == "decision"
-               and salidas(home, BOT_NORTE) == [], f"{salidas(home, BOT_NORTE)}")
-            corre(home, "caso", "aprobar", dueno, "--version", v, "--actor", "dueno")
             p, _ = con_sidecars(home, lambda: tick(home))
             fuera = salidas(home, BOT_NORTE)
-            ok("firmada por el dueno, sale al grupo por la linea del bot",
+            ok("la orden del dueno sale al grupo por la linea del bot, sin `si N` (decision c)",
                [(f["account"], f["req_id"], f["estado"]) for f in fuera]
                == [(SEGUNDA, f"caso-{dueno}-{v[:12]}", "enviado")], f"{fuera} {p.stderr[-300:]}")
             ok("y el caso queda respondido", js(home, "caso", "ver", dueno)[0]["etapa"]
@@ -16991,11 +17001,13 @@ if NODE:
                [(f["account"], f["estado"]) for f in confirma] == [(A, "enviado")]
                and "Bot Norte" in confirma[0]["body"], f"{salidas(home, DUENO_DM)}")
 
-            # Por WhatsApp: el aviso dice a donde y por que linea; `si N` lo manda por ella.
+            # Por WhatsApp: lo que el piso del grupo frena le llega al dueno; el aviso dice a
+            # donde y por que linea, y `si N` lo lleva por ella (alla el piso lo retiene otra
+            # vez: queda en el tablero, en la linea del bot).
             pon_aprobacion(home, DUENO_LID)
             whats = pedido_en(home, DUENO_DM, "ODL2", DUENO_LID, "y esto al grupo del bot")
             v2 = version_de(propone_a(home, whats, "Bot Norte",
-                                      "Les comparto el resumen de la semana."))
+                                      "El resumen de la semana cuesta $50."))
             con_sidecars(home, lambda: tick(home))
             aviso = [f["body"] for f in salidas(home, DUENO_DM)
                      if f["req_id"].startswith(f"aviso-{whats}-")]
@@ -17006,8 +17018,8 @@ if NODE:
                    activar=False)
             con_sidecars(home, lambda: js(home, "ingest"))
             fuera = [f for f in salidas(home, BOT_NORTE) if f["req_id"] == f"caso-{whats}-{v2[:12]}"]
-            ok("`si N` la manda al grupo por la linea del bot",
-               [(f["account"], f["estado"]) for f in fuera] == [(SEGUNDA, "enviado")],
+            ok("`si N` la lleva al grupo por la linea del bot",
+               [(f["account"], f["estado"]) for f in fuera] == [(SEGUNDA, "borrador")],
                f"{fuera} {eventos_de(home, whats)[-3:]}")
 
             # El piso fijo y Jev con los niveles del destino, en SU linea.
@@ -17111,6 +17123,127 @@ if NODE:
                error_de(p) == "E_DEST_MODE" and "wa-scope mode" in (falla_de(p).get("detail") or ""),
                p.stderr[-300:])
             ok("y su modo no cambio", modos(js(home, "list")).get(FACTURACION) == "off")
+        finally:
+            os.environ.clear()
+            os.environ.update(env_antes)
+
+
+print("\nordenes-del-dueno: la orden del dueno sale sin un segundo `si N` (decision c)")
+# Decision (c) del dueno: lo que EL ordena mandar a otro chat no le vuelve a pedir `si N`.
+# Pasa por el piso, Jev y las reglas del destino como siempre; solo se salta la espera. Un
+# Super admin sigue esperando la firma del dueno, y un destino en borrador sigue saliendo
+# con su firma. Datos de mentira.
+if NODE:
+    with tempfile.TemporaryDirectory() as home:
+        env_antes = dict(os.environ)
+        dos_lineas_del_dueno(home)
+        try:
+            def espera_de(cid):
+                return [d for d in eventos_de(home, cid)
+                        if d.startswith("respuesta espera al dueno:")]
+
+            misma = pedido_en(home, DUENO_DM, "ODS1", DUENO_LID)
+            v1 = version_de(propone_a(home, misma, "Facturacion",
+                                      "Les comparto la conclusion del cierre."))
+            otra = pedido_en(home, DUENO_DM, "ODS2", DUENO_LID, "y esto al grupo del bot")
+            v2 = version_de(propone_a(home, otra, "Bot Norte",
+                                      "Les comparto el resumen de la semana."))
+            con_sidecars(home, lambda: tick(home))
+            fuera = [(f["account"], f["estado"]) for f in salidas(home, FACTURACION)
+                     if f["req_id"] == f"caso-{misma}-{v1[:12]}"]
+            ok("la orden del dueno a otro chat de su linea sale con el tick, sin su `si N`",
+               fuera == [(A, "enviado")]
+               and js(home, "caso", "ver", misma)[0]["etapa"] == "respondido",
+               f"{fuera} {espera_de(misma)}")
+            fuera = [(f["account"], f["estado"]) for f in salidas(home, BOT_NORTE)
+                     if f["req_id"] == f"caso-{otra}-{v2[:12]}"]
+            ok("y la de otra linea sale por esa linea, tambien sin esperarlo",
+               fuera == [(SEGUNDA, "enviado")]
+               and js(home, "caso", "ver", otra)[0]["etapa"] == "respondido",
+               f"{fuera} {espera_de(otra)}")
+            ok("ninguna dice que espera al dueno por ir a otro chat",
+               not any("other_chat" in d for d in espera_de(misma) + espera_de(otra)),
+               f"{espera_de(misma)} {espera_de(otra)}")
+            con_sidecars(home, lambda: tick(home))
+            confirma = [f for f in salidas(home, DUENO_DM) if f["req_id"].endswith("-ok")]
+            ok("el chat del dueno recibe la confirmacion de cada una",
+               len(confirma) == 2 and any("Facturacion" in f["body"] for f in confirma)
+               and any("Bot Norte" in f["body"] for f in confirma), f"{confirma}")
+
+            # El piso con los niveles del destino sigue frenando: espera al dueno por eso.
+            dinero = pedido_en(home, DUENO_DM, "ODS3", DUENO_LID)
+            v3 = version_de(propone_a(home, dinero, "Bot Norte", "El arreglo cuesta $50."))
+            con_sidecars(home, lambda: tick(home))
+            ok("con dinero, el piso del destino la frena aunque la ordene el dueno",
+               not [f for f in salidas(home, BOT_NORTE) if f["req_id"] == f"caso-{dinero}-{v3[:12]}"
+                    and f["estado"] == "enviado"]
+               and js(home, "caso", "ver", dinero)[0]["etapa"] == "decision"
+               and any("money" in d and "other_chat" not in d for d in espera_de(dinero)),
+               f"{salidas(home, BOT_NORTE)} {espera_de(dinero)}")
+
+            # Las reglas del destino: si deja de estar en responder, no sale.
+            apagado = pedido_en(home, DUENO_DM, "ODS4", DUENO_LID)
+            v4 = version_de(propone_a(home, apagado, "Facturacion", "Otra conclusion del cierre."))
+            js(home, "mode", FACTURACION, "observar")
+            con_sidecars(home, lambda: tick(home))
+            ok("si el destino ya no esta en responder, no sale",
+               not [f for f in salidas(home, FACTURACION)
+                    if f["req_id"] == f"caso-{apagado}-{v4[:12]}"]
+               and js(home, "caso", "ver", apagado)[0]["etapa"] == "decision")
+            js(home, "mode", FACTURACION, "responder")
+
+            # Un destino en borrador sigue saliendo con la firma del dueno, nunca con el tick.
+            borrador = pedido_en(home, DUENO_DM, "ODS5", DUENO_LID)
+            propone_a(home, borrador, "Operaciones", "Les comparto el informe del mes.")
+            con_sidecars(home, lambda: tick(home))
+            ok("un destino en borrador no sale con el tick (espera la firma del dueno)",
+               salidas(home, OPERACIONES) == []
+               and js(home, "caso", "ver", borrador)[0]["etapa"] == "decision",
+               f"{salidas(home, OPERACIONES)}")
+
+            # Un Super admin: su pedido a otro chat sigue esperando la firma del dueno.
+            jefa = pedido_en(home, SOPORTE, "ODS6", JEFA_OC)
+            vj = version_de(propone_a(home, jefa, "Facturacion",
+                                      "Les comparto lo que pidio la jefa."))
+            con_sidecars(home, lambda: tick(home))
+            ok("lo de una Super admin a otro chat no sale: espera al dueno (other_chat)",
+               not [f for f in salidas(home, FACTURACION)
+                    if f["req_id"] == f"caso-{jefa}-{vj[:12]}"]
+               and js(home, "caso", "ver", jefa)[0]["etapa"] == "decision"
+               and any("other_chat" in d for d in espera_de(jefa)),
+               f"{salidas(home, FACTURACION)} {espera_de(jefa)}")
+            ok("y la regla no la firma a mano (E_EXCEPTION)",
+               error_de(corre(home, "caso", "aprobar", jefa, "--version", vj,
+                              "--actor", "regla")) == "E_EXCEPTION")
+
+            # El resultado del agente del proyecto: el del dueno sale en el acto, el de una
+            # Super admin espera.
+            def trabajo_de(chat, stanza, de):
+                cid = pedido_en(home, chat, stanza, de, "revisa el reporte y avisale al grupo")
+                v = js(home, "caso", "propuesta", cid, "--tipo", "trabajar", "--instrucciones",
+                       "Revisa el reporte de ventas.", "--actor", "agente")[0]["propuesta_version"]
+                js(home, "caso", "aprobar", cid, "--version", v, "--actor", "dueno")
+                return cid
+
+            def resultado_a(cid, destino):
+                return corre(home, "caso", "resultado", cid, "--estado", "resuelto",
+                             "--respuesta", f"El reporte de ventas quedo revisado ({cid}).",
+                             "--resumen", "revisado", "--chat", destino, "--actor", "trabajador")
+
+            del_dueno = trabajo_de(DUENO_DM, "ODS7", DUENO_LID)
+            p = con_sidecars(home, lambda: resultado_a(del_dueno, "Bot Sur"))
+            r = json.loads(p.stdout or "[{}]")[0] if p.returncode == 0 else {}
+            ok("el resultado que el dueno mando a otro chat sale en el acto",
+               (r.get("envio") or {}).get("estado") == "enviado"
+               and [f["estado"] for f in salidas(home, BOT_SUR)] == ["enviado"],
+               f"{r.get('envio')} {p.stderr[-300:]}")
+            de_jefa = trabajo_de(SOPORTE, "ODS8", JEFA_OC)
+            p = con_sidecars(home, lambda: resultado_a(de_jefa, "Facturacion"))
+            r = json.loads(p.stdout or "[{}]")[0] if p.returncode == 0 else {}
+            ok("el de una Super admin no: espera la firma del dueno",
+               (r.get("envio") or {}).get("estado") != "enviado"
+               and not any(f"({de_jefa})" in f["body"] for f in salidas(home, FACTURACION)),
+               f"{r.get('envio')} {p.stderr[-300:]}")
         finally:
             os.environ.clear()
             os.environ.update(env_antes)

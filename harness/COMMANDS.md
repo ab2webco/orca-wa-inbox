@@ -46,8 +46,9 @@ board, and anyone else gets `E_NOT_OWNER`.
     "$WA/wa-read" chat "<chat_jid>" --json      # anything else in the conversation
 
 In a case of the owner or of a Super admin, `caso propuesta ... --chat <jid>` sends the
-reply (or a job's final reply) to another chat of the same line in responder, always after
-the owner's approval. The owner's own order also reaches a chat of another linked line
+reply (or a job's final reply) to another chat of the same line in responder. The owner's own
+order goes out without a second approval once the floor and Jev pass (a chat in borrador
+still waits for his signature); a Super admin's waits for the owner's approval. The owner's own order also reaches a chat of another linked line
 (it goes out through that line) or one in borrador. A customer's case is refused with
 `E_DEST_ROLE`; the other refusals are `E_DEST_MODE` (the detail says how to enable the
 chat), `E_DEST_LINE`, `E_DEST_NOT_FOUND` and `E_DEST_AMBIGUOUS` (the detail names the candidates,
@@ -55,8 +56,7 @@ each with its line). Every refusal goes back to whoever asked, in the case's own
 
 The project agent does the same from its result, when the owner (or that Super admin) asks
 it to report to another chat: `caso resultado <id> --estado resuelto ... --chat <jid>
---actor trabajador`. Same destinations, same refusals, and it also waits for the owner's
-approval. Only a `resuelto` result takes `--chat` (`E_ARGS` otherwise).
+--actor trabajador`. Same destinations, same refusals, and the same approval rule. Only a `resuelto` result takes `--chat` (`E_ARGS` otherwise).
 
 A different proposal on a case in `listo` (the result of a job) sends the case back to
 `decision`: the owner approves the new version, never the old one.

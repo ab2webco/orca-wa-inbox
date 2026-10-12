@@ -4786,8 +4786,10 @@ def frenos_de_regla(con, caso):
       con su nivel. Un valor con forma de secreto va al dueno siempre (`secret`).
     - Un chat en `borrador` pregunta todo."""
     # Una respuesta a OTRO chat (respuesta-otro-chat) se juzga con los niveles de ese chat,
-    # el que la va a leer, y nunca la firma la regla: el dueno aprueba el texto y el destino.
+    # el que la va a leer, y la regla no la firma: el dueno aprueba el texto y el destino.
     # En otra linea (la orden del dueno, ordenes-del-dueno), con los niveles de ESA linea.
+    # Decision (c) del dueno: lo que EL ordena ya es su firma del texto y del destino, asi
+    # que no espera un segundo `si N`; el piso, Jev y las reglas del destino quedan igual.
     destino = destino_de_propuesta(caso)
     leyente = dict(caso, chat_jid=destino, account=linea_de_envio(caso)) if destino else caso
     scope = merged_scope(con, linea_de_propuesta(caso)).get(leyente["chat_jid"]) or {}
@@ -4824,7 +4826,7 @@ def frenos_de_regla(con, caso):
     # (proyectos-por-chat, M5). La del que escribio se vuelve a mirar: sin su rol, del dueno.
     if pregunta_del_dueno(con, caso):
         al_dueno.append("project_question")
-    if destino:
+    if destino and not caso_del_dueno(con, caso):
         al_dueno.append(OTRO_CHAT)
     return al_dueno, al_agente
 
@@ -5108,7 +5110,8 @@ def cmd_caso_resultado(con, a):
     destino, linea = destino_de_propuesta(caso), linea_de_propuesta(caso)
     if pedido_chat is not None:
         # La misma resolucion y los mismos rechazos que `caso propuesta --chat`; None es el
-        # chat del propio caso. Espera la firma del dueno como aquella (`OTRO_CHAT`).
+        # chat del propio caso. Espera la firma del dueno como aquella (`OTRO_CHAT`), salvo
+        # la orden del propio dueno (decision c, `frenos_de_regla`).
         destino, linea = destino_de_ref(con, caso, pedido_chat)
     if destino and estado == "resuelto":
         nueva["chat"] = destino
@@ -12197,8 +12200,9 @@ def tick_caso(con, caso, texto, estados, resumen):
             resumen["bloqueados"] += 1
         return
     # Sin peticion, o pendiente (un tick anterior se quedo sin veredicto): la regla firma
-    # —idempotente si ya firmo— y se pregunta con el MISMO id. Una respuesta a otro chat no
-    # la firma nunca la regla: sale solo con la firma del dueno (respuesta-otro-chat).
+    # —idempotente si ya firmo— y se pregunta con el MISMO id. Una respuesta a otro chat la
+    # firma la regla solo si la ordeno el dueno (decision c, `frenos_de_regla`); la de un
+    # Super admin sale solo con la firma del dueno (respuesta-otro-chat).
     firmada_por_dueno = (destino_de_propuesta(caso) is not None
                          and caso.get("propuesta_aprobada") == version)
     try:
@@ -13128,8 +13132,10 @@ def brief_de_despacho(con, caso, proyecto, instrucciones):
         f"{'of the line ' + linea_de_propuesta(caso) if linea_de_propuesta(caso) else 'of this line'}: "
         f"{' '.join(nombre_del_destino(con, caso).split())} ({destino}), not to the chat "
         f"of this case. Your `resuelto` --respuesta goes there, so write it for the people "
-        f"of that chat. It waits for the owner's approval before it goes out, and the plugin "
-        f"tells this case's chat once it is sent. A `necesita` question goes to whoever "
+        f"of that chat. " + ("The owner's own order goes out once the plugin's review passes "
+                             "(no second approval)" if del_dueno else
+                             "It waits for the owner's approval before it goes out") +
+        f", and the plugin tells this case's chat once it is sent. A `necesita` question goes to whoever "
         f"asked, in this case's chat.",
     ] if destino else []
     cola = [
@@ -13177,7 +13183,8 @@ def brief_de_despacho(con, caso, proyecto, instrucciones):
         f"evidence: commit, PR or ticket link, files, test output>\" --respuesta \"<reply>\"",
         *([f"When the owner (or a Super admin) asked you to report to another chat of this "
            f"line, add --chat \"<jid>\" to that command (`{wa} caso destinos {cid}` lists the "
-           f"candidates): the reply goes there after the owner's approval, never before."]
+           f"candidates): the owner's own order goes out once the plugin's review passes; a "
+           f"Super admin's waits for the owner's approval, never before."]
           if del_dueno or rol_del_caso(con, caso) == wa_store.ROL_ADMIN else []),
         (REPORTE_DUENO["necesita"] if del_dueno else
          "A real doubt that would make the work wrong or a guess (missing data, an ambiguous "
@@ -13348,15 +13355,18 @@ def cabeza_del_caso(con, caso, del_dueno=None, operador=None, de_casos=True):
     # Si lo que pide el caso puede reportarse a OTRO chat (respuesta-otro-chat): solo el
     # dueno o un Super admin de esta conversacion; lo decide el id, como el rol.
     # El agente de casos lo propone; el del proyecto no propone: reporta con `caso resultado
-    # --chat` (guardar-panel G5), y espera la firma del dueno igual.
+    # --chat` (guardar-panel G5), y espera la firma del dueno igual, salvo la orden del
+    # propio dueno (decision c).
     puede_otro_chat = del_dueno or rol_del_caso(con, caso) == wa_store.ROL_ADMIN
     if not de_casos and puede_otro_chat:
         lineas.append(f"- Reply to another chat: allowed (the owner or a Super admin of this "
                       f"chat asked). When he asks you to report the result to another chat, "
                       f"add `--chat <jid>` to `caso resultado {caso['case_id']} --estado "
                       f"resuelto`; if he does not name it, `caso destinos {caso['case_id']}` "
-                      f"lists the candidates. It waits for the owner's approval before it "
-                      f"goes out")
+                      f"lists the candidates. "
+                      + ("The owner's own order goes out once the plugin's review passes"
+                         if del_dueno else "It waits for the owner's approval before it goes "
+                                           "out"))
     elif not de_casos:
         lineas.append("- Reply to another chat: no (a customer's case: your reply goes to "
                       "this chat only)")
@@ -15203,9 +15213,10 @@ def main():
                                   "case of the owner or of a Super admin of the conversation, "
                                   "and only to a chat of the same line in responder (the owner's "
                                   "own order also to a chat of another linked line, through "
-                                  "that line, or in borrador); it always waits for the owner's "
-                                  "approval, and the case's chat gets a confirmation once it is "
-                                  "sent. `caso destinos <id>` lists the candidates. Refusals "
+                                  "that line, or in borrador). The owner's own order goes out "
+                                  "once the floor and Jev pass (a chat in borrador waits for his "
+                                  "signature); a Super admin's waits for the owner's approval. "
+                                  "The case's chat gets a confirmation once it is sent. `caso destinos <id>` lists the candidates. Refusals "
                                   "(exit 2): E_DEST_ROLE (a customer's case), E_DEST_NOT_FOUND, "
                                   "E_DEST_AMBIGUOUS (the detail names the candidates, each "
                                   "with its line: pass the JID), E_DEST_LINE (another line), "
@@ -15247,8 +15258,10 @@ def main():
                                   "case of the owner or of a Super admin of the conversation, "
                                   "and only to a chat of the same line in responder (the owner's "
                                   "own order also to another linked line or a chat in "
-                                  "borrador); it always waits for the owner's approval, and the "
-                                  "case's chat gets a confirmation once it is sent. `caso "
+                                  "borrador). The owner's own order goes out at once if the "
+                                  "floor and Jev pass; a Super admin's waits for the owner's "
+                                  "approval. The case's chat gets a confirmation once it is "
+                                  "sent. `caso "
                                   "destinos <id>` lists the candidates. Refusals (exit 2): "
                                   "E_DEST_ROLE (a customer's case), E_DEST_NOT_FOUND, "
                                   "E_DEST_AMBIGUOUS (pass the JID), E_DEST_LINE, E_DEST_MODE, "
