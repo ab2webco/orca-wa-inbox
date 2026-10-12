@@ -716,7 +716,7 @@ console.log('\nworker: lv3-auditoria — la salud que no se lee')
 {
   const {
     lineasSinAtender, crearRespaldoTick, textoDeIncidente, SALUD_FALLAS_INCIDENTE,
-    RESPALDO_CADA_MS, INCIDENTE_AVISO_MS
+    RESPALDO_CADA_MS, INCIDENTE_AVISO_MS, TICK_INCOMPLETO_S
   } = await import('../main.mjs')
   const L1 = 'pn:15550000001'
   const L2 = 'pn:15550000002'
@@ -816,6 +816,23 @@ console.log('\nworker: lv3-auditoria — la salud que no se lee')
       JSON.stringify(avisos))
   }
 
+  // lv3-auditoria, 2: el tick anota `tick_at` al arrancar; `tick_ok_hace_s` es cuanto hace que
+  // termino uno ENTERO. Fresco el primero y viejo el segundo: se rompe a medias.
+  ok('lv3: un tick que arranca pero no termina entero es una linea sin atender',
+    JSON.stringify(lineasSinAtender({ lineas: [sana(L1, { tick_ok_hace_s: 40 }),
+      sana(L2, { tick_ok_hace_s: TICK_INCOMPLETO_S + 1 })] })
+      .map((l) => [l.cuenta, l.motivo, l.haceS])) ===
+      JSON.stringify([[L2, 'tick-incompleto', TICK_INCOMPLETO_S + 1]]))
+  ok('lv3: uno que nunca termino tambien; sin la llave (un wa-scope de antes) no se juzga',
+    JSON.stringify(lineasSinAtender({ lineas: [sana(L1, { tick_ok_hace_s: null }), sana(L2)] })
+      .map((l) => [l.cuenta, l.motivo, l.haceS])) === JSON.stringify([[L1, 'tick-incompleto', null]]))
+  ok('lv3: el plazo deja terminar al tick mas largo que Orca permite, y el que no arranca manda',
+    TICK_INCOMPLETO_S > 300 + 60 && TICK_INCOMPLETO_S <= 10 * 60 &&
+    JSON.stringify(lineasSinAtender({ lineas: [sana(L1, { tick_hace_s: 999, tick_ok_hace_s: 999 })] })
+      .map((l) => l.motivo)) === JSON.stringify(['sin-tick']) &&
+    JSON.stringify(lineasSinAtender({ lineas: [sana(L1, { tick_ok_hace_s: 999, sin_juzgar: 1,
+      sin_juzgar_hace_s: 400 })] }).map((l) => l.motivo)) === JSON.stringify(['sin-juzgar']))
+
   {
     const desdeS = Math.round(AHORA / 1000) - 12 * 60
     const aviso = (extra) => Object.assign({ tipo: 'incidente', cuenta: L1, motivo: 'sin-salud',
@@ -833,6 +850,12 @@ console.log('\nworker: lv3-auditoria — la salud que no se lee')
       /cannot check the state of the lines/.test(ilegible('en')) &&
       /nao consegue verificar o estado das linhas/.test(ilegible('pt')),
       `${ilegible('es')} | ${ilegible('en')} | ${ilegible('pt')}`)
+    const incompleto = (idioma) => textoDeIncidente(idioma, aviso({ motivo: 'tick-incompleto' }))
+    ok('lv3: el tick que no termina entero tiene su texto: arranca pero no envia',
+      /\+15550000001/.test(incompleto('es')) && /12 min/.test(incompleto('es')) &&
+      /arranca pero no termina/.test(incompleto('es')) && /starts but does not finish/.test(incompleto('en')) &&
+      /comeca mas nao termina/.test(incompleto('pt')),
+      `${incompleto('es')} | ${incompleto('en')} | ${incompleto('pt')}`)
     ok('lv3: y su recuperacion es otro texto, sin linea',
       /vuelve a ver el estado de las lineas/.test(ilegible('es', 'recuperada')) &&
       /can check the state of the lines again/.test(ilegible('en', 'recuperada')) &&

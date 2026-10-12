@@ -9884,6 +9884,10 @@ def candidatos_tick(con):
             propuesta = json.loads(caso["propuesta"])
         except (TypeError, ValueError):
             continue
+        # Una propuesta que no es un objeto no se envia: antes reventaba aca y frenaba
+        # los envios de toda la linea.
+        if not isinstance(propuesta, dict):
+            continue
         if propuesta.get("tipo") != "responder" or not propuesta.get("respuesta"):
             continue
         # La de otro chat sale solo mientras ESE chat siga en responder.
@@ -11618,9 +11622,21 @@ def cmd_tick(con, a):
             if con.in_transaction:
                 con.rollback()
             print(f"wa-scope: agent updates skipped: {exc}", file=sys.stderr)
-        candidatos = candidatos_tick(con)
-        estados, vivo = envios_del_almacen(
-            [id_envio_caso(c["case_id"], c["propuesta_version"]) for c, _ in candidatos])
+        # Lo que envia, atrapado como lo demas (lv3-auditoria, 2): un caso roto aca se
+        # llevaba el despacho, el agente, los avisos y el tablero. Una vuelta sin esto no es
+        # un tick entero: no anota `tick_ok_at`, y la salud lo ve.
+        entero = True
+        try:
+            candidatos = candidatos_tick(con)
+            estados, vivo = envios_del_almacen(
+                [id_envio_caso(c["case_id"], c["propuesta_version"]) for c, _ in candidatos])
+        except Exception as exc:
+            if con.in_transaction:
+                con.rollback()
+            entero = False
+            candidatos, estados, vivo = [], {}, False
+            resumen["errores"] += 1
+            print(f"wa-scope: sends skipped: {exc}", file=sys.stderr)
         if candidatos and not vivo:
             # Sin la linea corriendo no se firma ni se encola nada: quedaria aprobado por
             # la regla algo que no salio. El minuto siguiente lo intenta de nuevo.
@@ -11723,6 +11739,11 @@ def cmd_tick(con, a):
             if con.in_transaction:
                 con.rollback()
             resumen["limpieza_error"] += 1
+        if entero:
+            try:
+                tick_anota(con, "tick_ok_at")
+            except sqlite3.Error as exc:
+                print(f"wa-scope: tick end not recorded: {exc}", file=sys.stderr)
     finally:
         candado.close()
     print(json.dumps(resumen, ensure_ascii=False))
@@ -14273,13 +14294,14 @@ TICK_VIVO_S = 180
 CRON_ARREGLA = ("sin-cli", "sin-espacio", "sin-prompt")
 
 
-def tick_anota(con):
+def tick_anota(con, nombre="tick_at"):
     """Cuando corrio el tick: lo lee el precheck del cron. Cada linea anota el suyo
     (`tick_at@<cuenta>`, linea-viva V2): con uno solo, el tick de una linea tapaba que el de
     la otra no corria (visto en vivo: seis horas y media sin juzgar nada). El global sigue,
-    para lo que lo lee de antes."""
+    para lo que lo lee de antes. `tick_ok_at` es cuando TERMINO uno entero (lv3-auditoria,
+    2): `tick_at` se anota al arrancar y no dice si lo que envia llego a correr."""
     ahora_s = str(time.time())
-    for clave in dict.fromkeys(("tick_at", rastro("tick_at"))):
+    for clave in dict.fromkeys((nombre, rastro(nombre))):
         con.execute("insert into settings (key,value) values (?,?) on conflict(key) "
                     "do update set value=excluded.value", (clave, ahora_s))
     con.commit()
@@ -14454,7 +14476,8 @@ def sin_juzgar_de_linea(con, fuente, cuenta, ahora_s):
 def cmd_lineas_salud(con, a):
     """`lineas-salud`: UN objeto JSON, `{"at": <epoch>, "lineas": [...]}`, con una fila por
     linea activa en el orden de `lineas_activas` (la principal primero): `cuenta`,
-    `principal`, hace cuanto corrio su tick (`tick_hace_s`, null si nunca), cuantos mensajes
+    `principal`, hace cuanto corrio su tick (`tick_hace_s`, null si nunca) y hace cuanto
+    termino uno entero (`tick_ok_hace_s`, null si nunca: lv3-auditoria, 2), cuantos mensajes
     llegaron y nadie juzgo (`sin_juzgar`) y hace cuanto llego el mas viejo de esos
     (`sin_juzgar_hace_s`, null sin ninguno), y el ultimo latido del sidecar
     (`latido_hace_s`). Una linea viva que no esta anotada en el almacen lleva ademas
@@ -14477,11 +14500,14 @@ def cmd_lineas_salud(con, a):
                     # El de ESA linea (V8): el global lo late cualquiera, y con dos lineas la
                     # viva hacia ver viva a la caida.
                     latido = wa_store.ultimo_latido(fuente, cuenta)
-                    tick = con.execute("select value from settings where key=?",
-                                       (rastro("tick_at", cuenta),)).fetchone()
+                    tick, tick_ok = (con.execute(
+                        "select value from settings where key=?",
+                        (rastro(nombre, cuenta),)).fetchone() for nombre in ("tick_at", "tick_ok_at"))
                     sin = sin_juzgar_de_linea(con, fuente, cuenta, ahora_s)
                     fila = {"cuenta": cuenta, "principal": n == 0,
                             "tick_hace_s": edad_s(tick["value"] if tick else None, ahora_s),
+                            "tick_ok_hace_s": edad_s(tick_ok["value"] if tick_ok else None,
+                                                     ahora_s),
                             "sin_juzgar": len(sin),
                             "sin_juzgar_hace_s": edad_s(min(sin) if sin else None, ahora_s),
                             "latido_hace_s": edad_s(latido, ahora_s)}

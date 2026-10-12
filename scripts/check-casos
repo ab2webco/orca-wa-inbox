@@ -13930,6 +13930,13 @@ if NODE:
 # su tick, cuantos mensajes de sus conversaciones autorizadas llegaron y nadie juzgo (ni caso
 # ni veredicto), el mas viejo de esos, y el latido del sidecar. Solo lectura, sin Jev, sin red
 # y sin la CLI de Orca: corre cada minuto.
+def _json_o_nada_prueba(texto):
+    try:
+        return json.loads(texto)
+    except ValueError:
+        return None
+
+
 def lineas_salud(home, extra=None):
     """(proceso, objeto) de `lineas-salud --json`: UN objeto, `{"at", "lineas"}`."""
     p = corre(home, "lineas-salud", extra=extra)
@@ -13939,8 +13946,8 @@ def lineas_salud(home, extra=None):
         return p, None
 
 
-LLAVES_SALUD = {"cuenta", "principal", "tick_hace_s", "sin_juzgar", "sin_juzgar_hace_s",
-                "latido_hace_s"}
+LLAVES_SALUD = {"cuenta", "principal", "tick_hace_s", "tick_ok_hace_s", "sin_juzgar",
+                "sin_juzgar_hace_s", "latido_hace_s"}
 
 
 print("\nla salud de cada linea (V3)")
@@ -16912,6 +16919,59 @@ if NODE:
            [(f["tipo"], f["estado"]) for f in avisos_worker(home)] == [("worker", "enviado")],
            f"{avisos_worker(home)} {p.stderr[-300:]}")
 
+
+
+# ── El tick que se rompe a medias no parece sano (lv3-auditoria, 2) ─────────────────────
+# El tick anota `tick_at` al ARRANCAR: si lo que envia reventaba, se iban los envios, el
+# despacho, el agente, los avisos y el tablero, y la linea seguia viendose atendida. Ahora
+# lo que envia va atrapado como lo demas, y `tick_ok_at@<cuenta>` se anota al TERMINAR un
+# tick entero: la salud dice hace cuanto (`tick_ok_hace_s`) y el worker ve la diferencia.
+print("\nel tick que se rompe a medias no parece sano (lv3-auditoria)")
+if NODE:
+    import contextlib
+    import io
+    env_lv3 = dict(os.environ)
+    argv_lv3 = list(sys.argv)
+    try:
+        with tempfile.TemporaryDirectory() as home:
+            llegan(home, A, [msg(PERSONA, "TK1", "no me llega la factura", 5)])
+            js(home, "set", PERSONA, "--provider", "ninguno", "--mode", "responder")
+            filas = (lineas_salud(home)[1] or {}).get("lineas") or [{}]
+            ok("sin ningun tick entero todavia, tick_ok_hace_s es null",
+               "tick_ok_hace_s" in filas[0] and filas[0]["tick_ok_hace_s"] is None, f"{filas}")
+            p, r = tick(home)
+            filas = (lineas_salud(home)[1] or {}).get("lineas") or [{}]
+            ok("un tick que termina anota tick_ok_at de su linea, y la salud lo dice",
+               tick_at_de(home, f"tick_ok_at@{A}") is not None
+               and isinstance(filas[0].get("tick_ok_hace_s"), int)
+               and filas[0]["tick_ok_hace_s"] < 60, f"{filas} {p.stderr[-300:]}")
+            pon_tick_at(home, f"tick_ok_at@{A}", 15 * 60)
+            ws, _ = ws_de_linea(home, None)
+
+            def rompe(con):
+                raise RuntimeError("una propuesta rota")
+            ws.candidatos_tick = rompe
+            sys.argv = [str(WA_SCOPE), "tick", "--json"]
+            salida, rompio = io.StringIO(), None
+            try:
+                with contextlib.redirect_stdout(salida), \
+                        contextlib.redirect_stderr(io.StringIO()):
+                    ws.main()
+            except Exception as exc:
+                rompio = exc
+            lineas_out = [l for l in salida.getvalue().splitlines() if l.strip()]
+            r = _json_o_nada_prueba(lineas_out[-1]) if lineas_out else None
+            ok("si lo que envia revienta, el resto del tick corre igual y lo cuenta como error",
+               rompio is None and isinstance(r, dict) and r.get("errores", 0) >= 1,
+               f"{rompio!r} {salida.getvalue()[-300:]}")
+            filas = (lineas_salud(home)[1] or {}).get("lineas") or [{}]
+            ok("y su tick_at queda fresco pero tick_ok_at no avanza: la salud ve la diferencia",
+               isinstance(filas[0].get("tick_hace_s"), int) and filas[0]["tick_hace_s"] < 60
+               and (filas[0].get("tick_ok_hace_s") or 0) >= 15 * 60 - 5, f"{filas}")
+    finally:
+        sys.argv = argv_lv3
+        os.environ.clear()
+        os.environ.update(env_lv3)
 
 print(f"\n{pruebas - len(fallos)}/{pruebas} en verde")
 if fallos:

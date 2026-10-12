@@ -1609,6 +1609,8 @@
             'igual.',
           lineWhySaludIlegible: 'El plugin no puede revisar el estado de las lineas. Reiniciar ' +
             'Orca suele corregirlo.',
+          lineWhyTickIncompleto: 'Su revision de cada minuto arranca pero no termina, y no ' +
+            'envia lo que espera.',
           workerStaleHow: 'Espere unos segundos y, si no vuelve, reinicie Orca. Dejo de ' +
             'dar senales hace {s} s.',
           chatLabel: 'Conversacion',
@@ -2205,6 +2207,8 @@
             'it anyway.',
           lineWhySaludIlegible: 'The plugin cannot check the state of the lines. Restarting ' +
             'Orca usually fixes it.',
+          lineWhyTickIncompleto: 'Its every-minute check starts but does not finish, and what ' +
+            'is waiting is not sent.',
           workerStaleHow: 'Wait a few seconds and, if it does not come back, restart ' +
             'Orca. It stopped signalling {s} s ago.',
           chatLabel: 'Conversation',
@@ -2761,6 +2765,8 @@
           'atende mesmo assim.',
         lineWhySaludIlegible: 'O plugin nao consegue verificar o estado das linhas. Reiniciar ' +
           'o Orca costuma corrigir.',
+        lineWhyTickIncompleto: 'A revisao de cada minuto comeca mas nao termina, e o que ' +
+          'espera nao e enviado.',
         workerStaleHow: 'Espere alguns segundos e, se nao voltar, reinicie o Orca. ' +
           'Parou de dar sinal ha {s} s.',
         qualityLabel: 'Qualidade da transcricao',
@@ -3414,7 +3420,8 @@
       var LINEA_RESPALDO = { ok: 'lineBackupOk', busy: 'lineBackupBusy', failed: 'lineBackupFailed' }
       var LINEA_PORQUE = { 'sin-tick': 'lineWhySinTick', 'sin-juzgar': 'lineWhySinJuzgar',
         'despacho-atascado': 'lineWhyDespacho', 'fuera-de-lista': 'lineWhyFueraDeLista',
-        'sin-salud': 'lineWhySinSalud', 'salud-ilegible': 'lineWhySaludIlegible' }
+        'sin-salud': 'lineWhySinSalud', 'salud-ilegible': 'lineWhySaludIlegible',
+        'tick-incompleto': 'lineWhyTickIncompleto' }
       /** `sinWorker`: con el worker callado su latido es viejo y lo que dice de las lineas
        *  tambien; manda el aviso del worker. */
       function pintarLineasSinAtender (beat, sinWorker) {

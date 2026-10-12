@@ -424,6 +424,10 @@ export const TICK_RESPALDO_PLAZO_MS = 280 * 1000
 // Una linea se atiende cada minuto: tres sin tick, o un mensaje sin juzgar de mas de tres
 // minutos, es que nadie la esta atendiendo.
 export const LINEA_QUIETA_S = 180
+// El tick anota `tick_at` al arrancar y `tick_ok_at` al terminar entero (lv3-auditoria, 2).
+// Uno largo dura hasta los 300 s que Orca le da, y el siguiente arranca al minuto: siete
+// minutos sin uno entero, con el tick arrancando, es que se rompe a medias.
+export const TICK_INCOMPLETO_S = 7 * 60
 // Las corridas atascadas se miran cada 5 min (son tres llamadas a la CLI de Orca), y una
 // en `dispatching` desde hace mas de 10 es un incidente.
 export const ATASCO_REVISION_MS = 5 * 60 * 1000
@@ -448,7 +452,8 @@ const esNumero = (v) => typeof v === 'number' && Number.isFinite(v)
  *  almacen (dos sidecars que la anotaron a la vez), y eso es la causa de lo demas.
  *  `sin-salud` es una linea que no se pudo leer (trae `error`): no se sabe si se atiende,
  *  asi que se atiende. `sin-juzgar` manda sobre `sin-tick`: es lo que el dueno ve,
- *  mensajes sin respuesta. */
+ *  mensajes sin respuesta. `tick-incompleto` es un tick que arranca pero no termina entero
+ *  (lo que envia revienta): solo con `tick_ok_hace_s`, que un wa-scope de antes no trae. */
 export function lineasSinAtender (salud) {
   const lineas = salud && typeof salud === 'object' && Array.isArray(salud.lineas) ? salud.lineas : []
   const salida = []
@@ -464,6 +469,10 @@ export function lineasSinAtender (salud) {
     } else if (!esNumero(l.tick_hace_s) || l.tick_hace_s > LINEA_QUIETA_S) {
       salida.push({ cuenta: l.cuenta, motivo: 'sin-tick',
         haceS: esNumero(l.tick_hace_s) ? l.tick_hace_s : null })
+    } else if ('tick_ok_hace_s' in l &&
+        (!esNumero(l.tick_ok_hace_s) || l.tick_ok_hace_s > TICK_INCOMPLETO_S)) {
+      salida.push({ cuenta: l.cuenta, motivo: 'tick-incompleto',
+        haceS: esNumero(l.tick_ok_hace_s) ? l.tick_ok_hace_s : null })
     }
   }
   return salida
@@ -783,6 +792,8 @@ const TEXTOS_INCIDENTE = Object.freeze({
     'despacho-atascado': 'WhatsApp Inbox: la automatizacion {auto} de Orca lleva {min} min atascada ' +
       'sin arrancar. Mientras tanto el plugin atiende las lineas por su cuenta. Reiniciar Orca ' +
       'suele destrabarla.',
+    'tick-incompleto': 'WhatsApp Inbox: la linea {num} lleva {min} min sin enviar: su revision de ' +
+      'cada minuto arranca pero no termina. {respaldo}',
     'sin-salud': 'WhatsApp Inbox: no se pudo revisar el estado de la linea {num} durante {min} min. ' +
       '{respaldo}',
     'salud-ilegible': 'WhatsApp Inbox: el plugin no puede revisar el estado de las lineas desde hace ' +
@@ -806,6 +817,8 @@ const TEXTOS_INCIDENTE = Object.freeze({
     'despacho-atascado': 'WhatsApp Inbox: the Orca automation {auto} has been stuck without ' +
       'starting for {min} min. Meanwhile the plugin attends the lines on its own. Restarting ' +
       'Orca usually clears it.',
+    'tick-incompleto': 'WhatsApp Inbox: line {num} has not sent anything for {min} min: its ' +
+      'every-minute check starts but does not finish. {respaldo}',
     'sin-salud': 'WhatsApp Inbox: the state of line {num} could not be checked for {min} min. ' +
       '{respaldo}',
     'salud-ilegible': 'WhatsApp Inbox: the plugin cannot check the state of the lines for {min} ' +
@@ -829,6 +842,8 @@ const TEXTOS_INCIDENTE = Object.freeze({
     'despacho-atascado': 'WhatsApp Inbox: a automacao {auto} do Orca esta travada sem iniciar ha ' +
       '{min} min. Enquanto isso o plugin cuida das linhas por conta propria. Reiniciar o Orca ' +
       'costuma destrava-la.',
+    'tick-incompleto': 'WhatsApp Inbox: a linha {num} esta ha {min} min sem enviar: a revisao de ' +
+      'cada minuto comeca mas nao termina. {respaldo}',
     'sin-salud': 'WhatsApp Inbox: nao foi possivel verificar o estado da linha {num} ha {min} min. ' +
       '{respaldo}',
     'salud-ilegible': 'WhatsApp Inbox: o plugin nao consegue verificar o estado das linhas ha {min} ' +
