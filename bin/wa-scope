@@ -2058,12 +2058,42 @@ def wa_chats(query=None):
     return json.loads(p.stdout) if p.returncode == 0 else []
 
 
-def jid_of(con, ref):
-    """Acepta el JID directo, el Z_PK, o parte del nombre. Devuelve (jid, nombre)."""
+def registrado_por_persona(con, ref):
+    """El jid registrado en esta linea que es la MISMA persona que `ref` (un telefono o un
+    LID), o None: el de su id, o el de su otro id por el par EXACTO de `lid_telefono` de
+    esta linea. Dos registrados con el mismo par no se eligen: sale como ambiguo."""
+    persona = wa_store.persona_de_ref(ref)
+    if not persona:
+        return None
+    cuenta = cuenta_activa()
+    filas = [{"account": cuenta, "chat_jid": j} for j in merged_scope(con)]
+    hits = sorted(f["chat_jid"] for f in wa_store.de_la_persona(
+        filas, persona, wa_store.pares_de_persona(persona, wa_store.pares_en_disco())))
+    if len(hits) > 1:
+        print(f"{ref!r} is ambiguous: it is paired to {len(hits)} registered chats; pass "
+              f"the JID:", file=sys.stderr)
+        for j in hits[:12]:
+            print(f"  {j}", file=sys.stderr)
+        sys.exit(2)
+    return hits[0] if hits else None
+
+
+def jid_of(con, ref, por_persona=False):
+    """Acepta el JID directo, el Z_PK, o parte del nombre. Devuelve (jid, nombre).
+
+    `por_persona`, para lo que BUSCA un chat registrado (la compuerta, `voice`, `mode`): un
+    telefono o un LID que no esta registrado tal cual encuentra el chat de la misma persona
+    (`registrado_por_persona`). `set` y `rm` nombran el jid exacto que tocan, y no lo usan."""
     if "@" in ref:
         row = con.execute("select chat_name from chat_scope where chat_jid=? and account=?",
                           (ref, cuenta_activa())).fetchone()
+        otro = None if row or not por_persona else registrado_por_persona(con, ref)
+        if otro:
+            return otro, ((merged_scope(con).get(otro) or {}).get("chat_name") or otro)
         return ref, (row["chat_name"] if row else ref)
+    otro = registrado_por_persona(con, ref) if por_persona else None
+    if otro:
+        return otro, ((merged_scope(con).get(otro) or {}).get("chat_name") or otro)
     hits = [c for c in wa_chats() if str(c["id"]) == ref
             or ref.lower() in (c["name"] or "").lower()]
     exact = [c for c in hits if (c["name"] or "").lower() == ref.lower()]
@@ -2245,7 +2275,7 @@ def cmd_set(con, a):
 
 
 def cmd_mode(con, a):
-    jid, _ = jid_of(con, a.chat)
+    jid, _ = jid_of(con, a.chat, por_persona=True)
     if a.value not in MODES:
         sys.exit(f"invalid mode: {a.value} (use {'/'.join(MODES)})")
     cuenta = cuenta_activa()
@@ -2282,7 +2312,7 @@ def cmd_rm(con, a):
 
 def cmd_check(con, a):
     """La compuerta. Toda automation llama esto antes de tocar nada."""
-    jid, name = jid_of(con, a.chat)
+    jid, name = jid_of(con, a.chat, por_persona=True)
     row = merged_scope(con).get(jid)
     mode = row["mode"] if row else "off"
     allowed = RANK[mode] >= RANK[a.for_]  and mode != "off"
@@ -3049,7 +3079,7 @@ def cmd_voice(con, a):
     global_tone = merged_settings(con).get("tone") or DEFAULT_CONFIG["tone"]
     if not a.chat:
         return [{"scope": "global", "tone": global_tone}]
-    jid, name = jid_of(con, a.chat)
+    jid, name = jid_of(con, a.chat, por_persona=True)
     row = merged_scope(con).get(jid) or {}
     own = (row.get("tone") or "").strip()
     provider = row.get("provider") or "plane"
@@ -4492,13 +4522,18 @@ def chats_y_alcance(con, cuenta):
 
 def coincide_ref(ref, chats, cuenta, pares):
     """Los jids de `chats` ({jid: nombre}) que nombra `ref`: el jid, el telefono (de un
-    directo por telefono o por su LID) o el nombre, el exacto primero."""
-    if "@" in ref:
-        jid = wa_store.jid_sin_dispositivo(ref)
-        return [j for j in chats if j == jid]
-    if TELEFONO_REF.match(ref):
-        digitos = re.sub(r"\D", "", ref)
-        return [j for j in chats if wa_store.telefono_de(cuenta, j, pares) == f"+{digitos}"]
+    directo por telefono o por su LID) o el nombre, el exacto primero.
+
+    Un telefono o un LID nombra a la persona: el chat de ese id o, si no lo hay en la linea,
+    el de su otro id por el par EXACTO de `lid_telefono` de ESA linea (`pares`)."""
+    if "@" in ref or TELEFONO_REF.match(ref):
+        jid = wa_store.jid_sin_dispositivo(ref) if "@" in ref else None
+        if jid in chats:
+            return [jid]
+        persona = wa_store.persona_de_ref(ref)
+        filas = [{"account": cuenta, "chat_jid": j} for j in chats]
+        return [f["chat_jid"] for f in wa_store.de_la_persona(
+            filas, persona, wa_store.pares_de_persona(persona, pares))]
     bajo = ref.lower()
     hits = [j for j in chats if bajo in (chats[j] or "").lower()]
     exactos = [j for j in hits if (chats[j] or "").lower() == bajo]

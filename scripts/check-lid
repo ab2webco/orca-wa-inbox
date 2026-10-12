@@ -427,6 +427,77 @@ with tempfile.TemporaryDirectory() as home:
        len(rastro) == 1 and rastro[0]["origen"] == "panel", f"{rastro}")
     ok("y sin aviso: lo hizo el dueno", not avisos(home), f"{avisos(home)}")
 
+# ── 9. Un telefono nombra el chat registrado por su LID, y al reves ─────────────────────
+# Visto en vivo: el chat del dueno registrado por su LID no se encontraba por el jid de su
+# telefono. Las busquedas por referencia (la compuerta, `voice`, `mode`, `wa-read`) usan el
+# par EXACTO de `lid_telefono` de la linea, nunca parte de los digitos ni el de otra linea.
+WA_READ = RAIZ / "bin" / "wa-read"
+LID_C = "100000000000001@lid"
+TEL_C = "573001112233@s.whatsapp.net"
+
+
+def lee(home, *args):
+    p = subprocess.run([str(WA_READ), *args, "--json"], capture_output=True, text=True,
+                       env=entorno(home), timeout=120)
+    try:
+        return p.returncode, json.loads(p.stdout or "[]") if p.returncode == 0 else p.stderr
+    except ValueError:
+        return p.returncode, p.stdout
+
+
+def compuerta(home, ref):
+    p = corre(home, "check", ref)
+    try:
+        return p.returncode, json.loads(p.stdout or "{}")
+    except ValueError:
+        return p.returncode, {"error": p.stderr.strip()[-200:]}
+
+
+print("\nun telefono nombra el chat registrado por su LID (check, voice, mode, wa-read)")
+with tempfile.TemporaryDirectory() as home:
+    almacen(home,
+            chats=[(A, LID, "Contacto Lid", AHORA - 30 * MIN),
+                   (A, TEL2, "Contacto Telefono", AHORA - 20 * MIN),
+                   (A, LID_C, "Contacto Otra Linea", AHORA - 10 * MIN)],
+            mensajes=[(A, LID, "P1", AHORA - 30 * MIN, False, "hola por el lid"),
+                      (A, TEL2, "P2", AHORA - 20 * MIN, False, "hola por el telefono"),
+                      (A, LID_C, "P3", AHORA - 10 * MIN, False, "hola de la otra")],
+            pares=[(A, LID, TEL), (A, OTRO_LID, TEL2), (B, LID_C, TEL_C)])
+    for jid in (LID, TEL2, LID_C):
+        autoriza(home, jid)
+    for ref in (TEL, "573000000011", "+57 300 000 0011"):
+        codigo, salida = compuerta(home, ref)
+        ok(f"la compuerta con {ref} encuentra el chat de su LID",
+           codigo == 0 and salida.get("chat_jid") == LID, f"{codigo} {salida}")
+    codigo, salida = compuerta(home, OTRO_LID)
+    ok("y con un LID, el chat registrado por su telefono",
+       codigo == 0 and salida.get("chat_jid") == TEL2, f"{codigo} {salida}")
+    codigo, salida = compuerta(home, "57300000001@s.whatsapp.net")
+    ok("parte del telefono no es un par: la compuerta niega", codigo == 3, f"{codigo} {salida}")
+    codigo, salida = compuerta(home, TEL_C)
+    ok("el par de otra linea tampoco", codigo == 3 and salida.get("chat_jid") != LID_C,
+       f"{codigo} {salida}")
+    voz = corre(home, "voice", TEL)
+    ok("voice por el telefono lee el chat del LID",
+       voz.returncode == 0 and json.loads(voz.stdout or "[{}]")[0].get("chat_jid") == LID,
+       voz.stdout[-300:] + voz.stderr[-300:])
+    corre(home, "mode", TEL, "observar")
+    ok("mode por el telefono cambia el chat del LID, sin crear otro",
+       (alcance(home).get(LID) or {}).get("mode") == "observar" and TEL not in alcance(home),
+       f"{sorted(alcance(home))}")
+    codigo, salida = lee(home, "chat", TEL)
+    ok("wa-read chat por el telefono lee la conversacion del LID",
+       codigo == 0 and any("hola por el lid" in m.get("text", "") for m in salida),
+       f"{codigo} {salida}")
+    codigo, salida = lee(home, "chat", OTRO_LID)
+    ok("y por un LID, la del telefono",
+       codigo == 0 and any("hola por el telefono" in m.get("text", "") for m in salida),
+       f"{codigo} {salida}")
+    codigo, salida = lee(home, "chat", "57300000001@s.whatsapp.net")
+    ok("parte del telefono no encuentra nada en wa-read", codigo != 0, f"{codigo} {salida}")
+    codigo, salida = lee(home, "chat", TEL_C)
+    ok("ni el par de otra linea", codigo != 0, f"{codigo} {salida}")
+
 print(f"\n{pruebas - len(fallos)}/{pruebas} en verde")
 if fallos:
     sys.exit(1)

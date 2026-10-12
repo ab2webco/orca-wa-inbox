@@ -17249,6 +17249,48 @@ if NODE:
             os.environ.update(env_antes)
 
 
+print("\nordenes-del-dueno: el destino por telefono encuentra el chat de su LID (y al reves)")
+# Visto en vivo: un chat registrado por su LID no se encontraba por el jid de su telefono.
+# Solo un par EXACTO de `lid_telefono` de la linea del chat cuenta. Datos de mentira.
+if NODE:
+    with tempfile.TemporaryDirectory() as home:
+        env_antes = dict(os.environ)
+        dos_lineas_del_dueno(home)
+        try:
+            LID_X, TEL_X = "222233334444@lid", "573001234567@s.whatsapp.net"
+            LID_Y, TEL_Y = "222233335555@lid", "573002220000@s.whatsapp.net"
+            LID_Z, TEL_Z = "222233336666@lid", "573007776655@s.whatsapp.net"
+            for jid in (LID_X, TEL_Y, LID_Z):
+                js(home, "set", jid, "--provider", "ninguno", "--mode", "responder")
+            anota_par(home, A, LID_X, TEL_X)
+            anota_par(home, A, LID_Y, TEL_Y)
+            # El par de LID_Z es de la otra linea: en la linea A no tiene telefono.
+            anota_par(home, SEGUNDA, LID_Z, TEL_Z)
+            dueno = pedido_en(home, DUENO_DM, "ODT1", DUENO_LID)
+
+            def destino(ref):
+                p = propone_a(home, dueno, ref)
+                return ((json.loads(p.stdout)[0].get("propuesta") or {}).get("chat")
+                        if p.returncode == 0 else falla_de(p).get("error"))
+
+            ok("el jid del telefono encuentra el chat registrado por su LID emparejado",
+               destino(TEL_X) == LID_X, destino(TEL_X))
+            ok("y el telefono escrito tambien", destino("+57 300 123 4567") == LID_X)
+            ok("un LID encuentra el chat registrado por su telefono emparejado",
+               destino(LID_Y) == TEL_Y, destino(LID_Y))
+            ok("parte del telefono no es un par: E_DEST_NOT_FOUND",
+               destino("57300123456@s.whatsapp.net") == "E_DEST_NOT_FOUND")
+            ok("el par de otra linea no cuenta: E_DEST_NOT_FOUND",
+               destino(TEL_Z) == "E_DEST_NOT_FOUND", destino(TEL_Z))
+            js(home, "set", "222233337777@lid", "--provider", "ninguno", "--mode", "responder")
+            anota_par(home, A, "222233337777@lid", TEL_X)
+            ok("dos chats emparejados con el mismo telefono: E_DEST_AMBIGUOUS",
+               destino(TEL_X) == "E_DEST_AMBIGUOUS", destino(TEL_X))
+        finally:
+            os.environ.clear()
+            os.environ.update(env_antes)
+
+
 print("\nordenes-del-dueno: una sola linea, y nadie mas redirige ni ordena (ordenes-del-dueno)")
 if NODE:
     with tempfile.TemporaryDirectory() as home:

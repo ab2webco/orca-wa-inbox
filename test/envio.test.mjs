@@ -470,6 +470,133 @@ console.log('\nT9: wa-send no manda por una autorizacion de otro numero')
   almacen.cerrar()
 }
 
+console.log('\nwa-send: un telefono llega al chat registrado por su LID, y al reves')
+{
+  // Visto en vivo: el chat del dueno estaba registrado por su LID y un agente le escribio
+  // por el jid de su telefono: `send-denied`, "not in the registry". El par de
+  // `lid_telefono` de ESA linea dice que es la misma persona; nada mas cuenta. Datos de
+  // mentira.
+  const L1 = 'pn:573000000001'
+  const L2 = 'pn:573000000012'
+  const LID_A = '100000000000002@lid'
+  const TEL_A = '573000000011@s.whatsapp.net'
+  const LID_B = '199887766554433@lid'
+  const TEL_B = '573000000013@s.whatsapp.net'
+  const LID_C = '100000000000001@lid'
+  const TEL_C = '573005554433@s.whatsapp.net'
+  const home = nueva()
+  firmar(home, 'Agente De Ejemplo')
+  const almacen = abrirAlmacen(rutaAlmacen({ HOME: home }))
+  almacen.registrarLinea({ cuenta: L1, pn: '573000000001:7@s.whatsapp.net' })
+  almacen.registrarLinea({ cuenta: L2, pn: '573000000012:7@s.whatsapp.net' })
+  almacen.activarLinea(L1)
+  almacen.anotarTelefono({ cuenta: L1, lid: LID_A, pn: TEL_A })
+  almacen.anotarTelefono({ cuenta: L1, lid: LID_B, pn: TEL_B })
+  // El par de LID_C es de la OTRA linea: en L1 ese LID no tiene telefono.
+  almacen.anotarTelefono({ cuenta: L2, lid: LID_C, pn: TEL_C })
+  autorizar(home, { jid: LID_A, nombre: 'Contacto Lid', modo: 'responder', cuenta: L1 })
+  autorizar(home, { jid: TEL_B, nombre: 'Contacto Telefono', modo: 'responder', cuenta: L1 })
+  autorizar(home, { jid: LID_C, nombre: 'Contacto Otra Linea', modo: 'responder', cuenta: L1 })
+  const socket = socketFalso()
+  const envia = (ref, ...extra) => correrEnvio(home, [ref, 'hola', '--send', ...extra],
+    { almacen, socket })
+  const ultimo = () => socket.enviados.at(-1)?.jid
+
+  for (const ref of [TEL_A, '573000000011', '+57 300 000 0011']) {
+    const antes = socket.enviados.length
+    const r = await envia(ref)
+    ok(`${ref} llega al chat registrado por el LID con el que esta emparejado`,
+      r.code === 0 && socket.enviados.length === antes + 1 && ultimo() === LID_A, r.stderr)
+  }
+  const inverso = await envia(LID_B)
+  ok('y un LID llega al chat registrado por el telefono con el que esta emparejado',
+    inverso.code === 0 && ultimo() === TEL_B, inverso.stderr)
+  const filas = filasEnvio(home)
+  ok('la bandeja de salida anota el chat registrado, no lo que se escribio',
+    filas.length === 4 && filas.every((f) => [LID_A, TEL_B].includes(f.chat_jid)),
+    JSON.stringify(filas.map((f) => f.chat_jid)))
+
+  const antes = socket.enviados.length
+  const parte = await envia('57300000001')
+  ok('parte de un telefono no es un par: se niega',
+    parte.primera === 'wa-send: send-denied' && socket.enviados.length === antes, parte.stderr)
+  ok('y dice que se busco: ese telefono no tiene chat ni par registrado',
+    parte.stderr.includes('phone 57300000001 has no registered chat') &&
+    parte.stderr.includes('not paired to any registered LID'), parte.stderr)
+  const otraLinea = await envia(TEL_C)
+  ok('el par de OTRA linea no sirve en esta: se niega',
+    otraLinea.primera === 'wa-send: send-denied' && socket.enviados.length === antes,
+    otraLinea.stderr)
+  const lidSuelto = await envia('999900001111@lid')
+  ok('un LID sin par lo dice tambien',
+    lidSuelto.primera === 'wa-send: send-denied' &&
+    lidSuelto.stderr.includes('LID 999900001111 has no registered chat') &&
+    lidSuelto.stderr.includes('not paired to any registered phone'), lidSuelto.stderr)
+  const porNombre = await envia('Grupo Que Nadie Registro')
+  ok('un nombre sin registro sigue diciendo que no esta en el registro',
+    porNombre.primera === 'wa-send: send-denied' &&
+    porNombre.stderr.includes('not in the registry'), porNombre.stderr)
+  almacen.cerrar()
+}
+
+console.log('\nwa-send: un telefono con dos chats o dos lineas pregunta, nunca elige')
+{
+  const L1 = 'pn:573000000001'
+  const L2 = 'pn:573000000012'
+  const LID_A = '100000000000002@lid'
+  const LID_D = '100000000000001@lid'
+  const TEL_A = '573000000011@s.whatsapp.net'
+  const home = nueva()
+  firmar(home, 'Agente De Ejemplo')
+  const almacen = abrirAlmacen(rutaAlmacen({ HOME: home }))
+  almacen.registrarLinea({ cuenta: L1, pn: '573000000001:7@s.whatsapp.net' })
+  almacen.registrarLinea({ cuenta: L2, pn: '573000000012:7@s.whatsapp.net' })
+  almacen.activarLinea(L1)
+  almacen.sumarLinea(L2)
+  almacen.anotarTelefono({ cuenta: L1, lid: LID_A, pn: TEL_A })
+  almacen.anotarTelefono({ cuenta: L2, lid: LID_A, pn: TEL_A })
+  const scopeDb = new DatabaseSync(join(home, '.wa-inbox', 'scope.db'))
+  autorizar(home, { jid: LID_A, nombre: 'Contacto Lid', modo: 'responder', cuenta: L1 })
+  scopeDb.prepare("insert into chat_scope (account, chat_jid, chat_name, mode, provider) " +
+    "values (?,?,?,'responder','ninguno')").run(L2, LID_A, 'Contacto Lid')
+  const socket = socketFalso()
+  const envia = (ref, ...extra) => correrEnvio(home, [ref, 'hola', '--send', ...extra],
+    { almacen, socket })
+
+  const dos = await envia(TEL_A)
+  ok('el telefono emparejado en dos lineas pide --line (send-ambiguous-line)',
+    dos.primera === 'wa-send: send-ambiguous-line' && dos.stderr.includes('--line') &&
+    socket.enviados.length === 0, dos.stderr)
+  const conLinea = await envia(TEL_A, '--line', L2)
+  ok('con --line sale por esa linea, al chat de su LID',
+    conLinea.code === 0 && socket.enviados.length === 1 && socket.enviados[0].jid === LID_A &&
+    filasEnvio(home).at(-1)?.account === L2, conLinea.stderr)
+
+  // Dos chats registrados de la misma linea emparejados con el mismo telefono: se pide el
+  // jid, como con dos chats del mismo nombre.
+  almacen.anotarTelefono({ cuenta: L1, lid: LID_D, pn: TEL_A })
+  scopeDb.prepare("insert into chat_scope (account, chat_jid, chat_name, mode, provider) " +
+    "values (?,?,?,'responder','ninguno')").run(L1, LID_D, 'Contacto Lid Dos')
+  const ambos = await envia(TEL_A, '--line', L1)
+  ok('dos chats de esa linea con el mismo telefono: pide el jid',
+    ambos.primera === 'wa-send: send-ambiguous-line' && ambos.stderr.includes(LID_A) &&
+    ambos.stderr.includes(LID_D) && socket.enviados.length === 1, ambos.stderr)
+  scopeDb.close()
+
+  // Un almacen de antes de la tabla: sin pares, todo como antes.
+  const crudo = new DatabaseSync(rutaAlmacen({ HOME: home }))
+  crudo.exec('drop table lid_telefono')
+  crudo.close()
+  const sinTabla = await envia(TEL_A, '--line', L1)
+  ok('sin la tabla de pares, el telefono no encuentra el LID y se niega sin romperse',
+    sinTabla.primera === 'wa-send: send-denied' && !sinTabla.stderr.includes('Traceback'),
+    sinTabla.stderr)
+  const exacto = await envia(LID_A, '--line', L1)
+  ok('y el jid exacto sigue saliendo', exacto.code === 0 && socket.enviados.length === 2 &&
+    socket.enviados[1].jid === LID_A, exacto.stderr)
+  almacen.cerrar()
+}
+
 console.log('\nwa-send: borrador deja un borrador y NO envia, y se aprueba a mano')
 {
   const home = nueva()

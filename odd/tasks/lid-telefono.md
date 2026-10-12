@@ -50,3 +50,25 @@ it.
       userdata 15/15, sidecar-build 5/5, pairing 88/88, mensajes 99/99, almacen
       270/270, envio 90/90, panels 994/994, worker 395/395, 1144 screenshots without
       overflow or JS errors.
+
+## A phone finds the chat registered by its LID (and the other way round)
+
+Seen in production: the owner's chat was registered as `<digits>@lid`; an agent called
+`wa-send` with `<phone>@s.whatsapp.net` and got `send-denied` ("not in the registry").
+
+- Every lookup of a chat by reference now treats a phone (`+57...`, digits,
+  `<phone>@s.whatsapp.net`) or a `<digits>@lid` as the person: the chat of that id or, per
+  line, the chat of the other id by the EXACT `lid_telefono` pair of that line
+  (`wa_store.persona_de_ref`, `pares_de_persona`, `de_la_persona`). The exact id wins over
+  the pair on a line; a pair of another line never counts; a partial number never matches.
+- Applied in `bin/wa-send` (`conversaciones_registradas`), `bin/wa-scope` (`coincide_ref`
+  for `destino_de_ref`, and `jid_of` for `check`, `voice` and `mode`) and
+  `wa_store.resolver_chat` (`wa-read chat|media|members|wait`). `set` and `rm` keep the
+  exact jid they write.
+- Ambiguity is unchanged: the same person on two lines is `send-ambiguous-line` (pass
+  `--line`); two registered chats paired with the same phone ask for the JID. A store
+  without `lid_telefono` has no pairs and behaves as before.
+- The `send-denied` detail says what was tried: "phone N has no registered chat; it is not
+  paired to any registered LID" (or the LID version), naming the pair when there is one.
+- Proof: test/envio.test.mjs, scripts/check-lid (section 9) and scripts/check-casos
+  ("el destino por telefono") RED then GREEN.
