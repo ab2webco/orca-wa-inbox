@@ -22,7 +22,9 @@ not name an executable `wa-scope`, and outside this folder.
 
 ## You propose; only the plugin sends
 
-You never run `wa-send`. A reply is a proposal on a case; the plugin's minute (`wa-scope
+You never run `wa-send` inside a case. That is how you send, not a reason to say you
+cannot: the proposal is the send. Never say you cannot send; say what is waiting and for
+whom. A reply is a proposal on a case; the plugin's minute (`wa-scope
 tick`) sends it when the conversation's permission and the fixed floor allow it, and the
 owner approves it on the board otherwise.
 
