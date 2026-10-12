@@ -440,13 +440,17 @@ function registroDeFalla (que, error, extra = {}) {
 const esNumero = (v) => typeof v === 'number' && Number.isFinite(v)
 
 /** Las lineas de `wa-scope lineas-salud` que nadie esta atendiendo, y por que. Pura.
+ *  `fuera-de-lista` manda sobre todo: la linea late conectada pero no esta anotada en el
+ *  almacen (dos sidecars que la anotaron a la vez), y eso es la causa de lo demas.
  *  `sin-juzgar` manda sobre `sin-tick`: es lo que el dueno ve, mensajes sin respuesta. */
 export function lineasSinAtender (salud) {
   const lineas = salud && typeof salud === 'object' && Array.isArray(salud.lineas) ? salud.lineas : []
   const salida = []
   for (const l of lineas) {
     if (!l || typeof l !== 'object' || typeof l.cuenta !== 'string' || !LINEA_RE.test(l.cuenta)) continue
-    if (esNumero(l.sin_juzgar) && l.sin_juzgar > 0 && esNumero(l.sin_juzgar_hace_s) &&
+    if (l.fuera_de_lista === true) {
+      salida.push({ cuenta: l.cuenta, motivo: 'fuera-de-lista', haceS: null })
+    } else if (esNumero(l.sin_juzgar) && l.sin_juzgar > 0 && esNumero(l.sin_juzgar_hace_s) &&
         l.sin_juzgar_hace_s > LINEA_QUIETA_S) {
       salida.push({ cuenta: l.cuenta, motivo: 'sin-juzgar', haceS: l.sin_juzgar_hace_s })
     } else if (!esNumero(l.tick_hace_s) || l.tick_hace_s > LINEA_QUIETA_S) {
@@ -734,6 +738,9 @@ const TEXTOS_INCIDENTE = Object.freeze({
       'revision de cada minuto. {respaldo}',
     'sin-juzgar': 'WhatsApp Inbox: la linea {num} tiene mensajes sin revisar desde hace {min} min. ' +
       '{respaldo}',
+    'fuera-de-lista': 'WhatsApp Inbox: la linea {num} esta conectada pero quedo fuera de la lista de ' +
+      'lineas activas hace {min} min. El plugin la sigue atendiendo igual; reiniciar Orca suele ' +
+      'corregirlo.',
     'despacho-atascado': 'WhatsApp Inbox: la automatizacion {auto} de Orca lleva {min} min atascada ' +
       'sin arrancar. Mientras tanto el plugin atiende las lineas por su cuenta. Reiniciar Orca ' +
       'suele destrabarla.',
@@ -749,6 +756,9 @@ const TEXTOS_INCIDENTE = Object.freeze({
     'sin-tick': 'WhatsApp Inbox: line {num} has not been attended for {min} min: Orca did not run ' +
       'its every-minute check. {respaldo}',
     'sin-juzgar': 'WhatsApp Inbox: line {num} has messages nobody reviewed for {min} min. {respaldo}',
+    'fuera-de-lista': 'WhatsApp Inbox: line {num} is connected but has been outside the list of ' +
+      'active lines for {min} min. The plugin keeps attending it anyway; restarting Orca usually ' +
+      'fixes it.',
     'despacho-atascado': 'WhatsApp Inbox: the Orca automation {auto} has been stuck without ' +
       'starting for {min} min. Meanwhile the plugin attends the lines on its own. Restarting ' +
       'Orca usually clears it.',
@@ -764,6 +774,9 @@ const TEXTOS_INCIDENTE = Object.freeze({
     'sin-tick': 'WhatsApp Inbox: a linha {num} esta ha {min} min sem atendimento: o Orca nao rodou ' +
       'a revisao de cada minuto. {respaldo}',
     'sin-juzgar': 'WhatsApp Inbox: a linha {num} tem mensagens sem revisar ha {min} min. {respaldo}',
+    'fuera-de-lista': 'WhatsApp Inbox: a linha {num} esta conectada mas ficou fora da lista de ' +
+      'linhas ativas ha {min} min. O plugin continua atendendo-a; reiniciar o Orca costuma ' +
+      'corrigir.',
     'despacho-atascado': 'WhatsApp Inbox: a automacao {auto} do Orca esta travada sem iniciar ha ' +
       '{min} min. Enquanto isso o plugin cuida das linhas por conta propria. Reiniciar o Orca ' +
       'costuma destrava-la.',

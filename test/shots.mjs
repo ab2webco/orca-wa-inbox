@@ -1481,6 +1481,13 @@ const PANELES = [
           motivo: 'sin-juzgar', respaldo: 'failed' },
         'pn:15550000002': { desde: Math.round(Date.now() / 1000) - 31 * 60,
           motivo: 'despacho-atascado', respaldo: 'busy' } } } }) },
+  // linea-fuera-de-lista: viva y conectada pero no anotada en el almacen. La frase del por
+  // que es la mas larga de las filas: a 320 px tiene que partirse sin desbordar.
+  { nombre: 'config-linea-fuera-de-lista', archivo: 'config.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, espera: 300,
+    datos: Object.assign({}, DATOS, { workerBeat: { at: new Date().toISOString(),
+      lineas: { 'pn:15550000002': { desde: Math.round(Date.now() / 1000) - 12 * 60,
+        motivo: 'fuera-de-lista', respaldo: null } } } }) },
   {
     // El worker que latia y dejo de hacerlo. Es otro estado y otra accion: aca no hay
     // nada que aprobar, hay que reiniciar Orca.

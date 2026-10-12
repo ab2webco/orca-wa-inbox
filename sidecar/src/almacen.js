@@ -762,6 +762,9 @@ class Almacen {
       const quedan = actuales.filter((c) => c !== cuenta)
       this.anotarActivas(quedan)
       if (this.lineaActiva() === cuenta && quedan.length) this.anotarMeta('linea_activa', quedan[0])
+      // Su sidecar ya se apago, pero su latido sigue fresco unos segundos: desconectada, los
+      // lectores no la cuentan como una linea viva fuera de la lista (`lineas_vivas`).
+      this.anotarMeta(`sidecar_conectado@${cuenta}`, '0')
       return { retirada: true }
     })
   }

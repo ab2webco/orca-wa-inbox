@@ -14457,8 +14457,10 @@ def cmd_lineas_salud(con, a):
     `principal`, hace cuanto corrio su tick (`tick_hace_s`, null si nunca), cuantos mensajes
     llegaron y nadie juzgo (`sin_juzgar`) y hace cuanto llego el mas viejo de esos
     (`sin_juzgar_hace_s`, null sin ninguno), y el ultimo latido del sidecar
-    (`latido_hace_s`). Sin almacen o sin lineas, `lineas` vacia. Sale 0 aunque una linea
-    este parada: decidir que hacer es de quien lee."""
+    (`latido_hace_s`). Una linea viva que no esta anotada en el almacen lleva ademas
+    `"fuera_de_lista": true` (linea-fuera-de-lista): se atiende igual, pero es un incidente.
+    Sin almacen o sin lineas, `lineas` vacia. Sale 0 aunque una linea este parada: decidir
+    que hacer es de quien lee."""
     ahora_s = time.time()
     filas = []
     try:
@@ -14467,6 +14469,7 @@ def cmd_lineas_salud(con, a):
         fuente = None
     if fuente is not None:
         try:
+            anotadas = wa_store.lineas_anotadas(fuente)
             for n, cuenta in enumerate(wa_store.lineas_activas(fuente)):
                 # El de ESA linea (V8): el global lo late cualquiera, y con dos lineas la
                 # viva hacia ver viva a la caida.
@@ -14474,11 +14477,14 @@ def cmd_lineas_salud(con, a):
                 tick = con.execute("select value from settings where key=?",
                                    (rastro("tick_at", cuenta),)).fetchone()
                 sin = sin_juzgar_de_linea(con, fuente, cuenta, ahora_s)
-                filas.append({"cuenta": cuenta, "principal": n == 0,
-                              "tick_hace_s": edad_s(tick["value"] if tick else None, ahora_s),
-                              "sin_juzgar": len(sin),
-                              "sin_juzgar_hace_s": edad_s(min(sin) if sin else None, ahora_s),
-                              "latido_hace_s": edad_s(latido, ahora_s)})
+                fila = {"cuenta": cuenta, "principal": n == 0,
+                        "tick_hace_s": edad_s(tick["value"] if tick else None, ahora_s),
+                        "sin_juzgar": len(sin),
+                        "sin_juzgar_hace_s": edad_s(min(sin) if sin else None, ahora_s),
+                        "latido_hace_s": edad_s(latido, ahora_s)}
+                if cuenta not in anotadas:
+                    fila["fuera_de_lista"] = True
+                filas.append(fila)
         finally:
             fuente.close()
     print(json.dumps({"at": ahora_s, "lineas": filas}, ensure_ascii=False))

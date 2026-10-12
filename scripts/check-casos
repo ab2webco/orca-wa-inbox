@@ -14057,6 +14057,138 @@ with tempfile.TemporaryDirectory() as home:
        f"{p.returncode} {p.stdout[:200]} {p.stderr[-300:]}")
 
 
+# ── Una linea viva fuera de la lista (linea-fuera-de-lista) ──────────────────────────────
+# Visto en vivo: al reiniciar Orca los dos sidecars anotaron su linea a la vez y uno borro
+# la del otro de `lineas_activas`. La segunda linea siguio conectada y latiendo, capturando,
+# y nadie la juzgo por dias: el tick, la salud y el tablero recorren esa lista. Ahora una
+# linea cuyo sidecar late fresco y esta conectado cuenta aunque no este anotada, y la salud
+# la marca `fuera_de_lista` para que el worker lo diga.
+def anota_activas(home, lista=None, borrar=(), meta=None):
+    """Escribe en el almacen lo que dejo la carrera (o un almacen de antes)."""
+    cap = sqlite3.connect(pathlib.Path(home) / ".wa-inbox" / "capture.db")
+    try:
+        if lista is not None:
+            cap.execute("insert into store_meta (key,value) values ('lineas_activas', ?) on "
+                        "conflict(key) do update set value=excluded.value", (json.dumps(lista),))
+        for llave in borrar:
+            cap.execute("delete from store_meta where key=?", (llave,))
+        for llave, valor in (meta or {}).items():
+            cap.execute("insert into store_meta (key,value) values (?,?) on conflict(key) "
+                        "do update set value=excluded.value", (llave, str(valor)))
+        cap.commit()
+    finally:
+        cap.close()
+
+
+def salud_de(home):
+    return {f["cuenta"]: f for f in (lineas_salud(home)[1] or {}).get("lineas", [])}
+
+
+print("\nuna linea viva fuera de la lista (linea-fuera-de-lista)")
+if NODE:
+    with tempfile.TemporaryDirectory() as home:
+        llegan(home, A, [msg(SOPORTE, "FA1", "@duenio no abre el login", 5, mencion=True)])
+        llegan(home, SEGUNDA, [msg(SOPORTE, "FB1", "@duenio no llega la factura", 5,
+                                   mencion=True)], activar=False)
+        suma_linea(home, SEGUNDA)
+        js(home, "agent", "Agente De Ejemplo")
+        js(home, "set", SOPORTE, "--provider", "ninguno", "--mode", "borrador")
+        jsl(home, SEGUNDA, "set", SOPORTE, "--provider", "ninguno", "--mode", "borrador")
+        # La carrera: la lista quedo solo con la principal, y el sidecar de la otra sigue
+        # conectado y latiendo.
+        anota_activas(home, [A])
+        vivo_b = SidecarConLatidoPropio(home, SEGUNDA)
+        try:
+            time.sleep(0.3)
+            s = salud_de(home)
+            ok("la salud la ve aunque no este en la lista, despues de las anotadas",
+               list(s) == [A, SEGUNDA] and s[SEGUNDA]["principal"] is False, f"{s}")
+            ok("y la marca fuera_de_lista; la anotada no lleva la marca",
+               s.get(SEGUNDA, {}).get("fuera_de_lista") is True
+               and "fuera_de_lista" not in s.get(A, {}), f"{s}")
+            ok("con su mensaje sin juzgar", s.get(SEGUNDA, {}).get("sin_juzgar") == 1, f"{s}")
+            p, r = tick(home)
+            ok("el tick se reparte tambien a ella",
+               sorted(((r or {}).get("lineas") or {})) == sorted([A, SEGUNDA]),
+               f"{p.stdout[:300]} {p.stderr[-300:]}")
+            casos_b = jsl(home, SEGUNDA, "caso", "listar")
+            ok("y juzga su mensaje: su caso queda en su linea",
+               len(casos_b) == 1 and casos_b[0]["account"] == SEGUNDA, f"{casos_b}")
+            ok("ya sin nada sin juzgar", salud_de(home).get(SEGUNDA, {}).get("sin_juzgar") == 0)
+        finally:
+            vivo_b.cerrar()
+
+        # Su sidecar parado (desvinculada, o Orca cerrado): el latido envejece y no cuenta.
+        anota_activas(home, meta={f"sidecar_beat@{SEGUNDA}": int(time.time()) - 60,
+                                  f"sidecar_conectado@{SEGUNDA}": "1"})
+        ok("con el latido vencido, una linea fuera de la lista no aparece",
+           list(salud_de(home)) == [A], f"{salud_de(home)}")
+        p, r = tick(home)
+        ok("y el tick no se reparte: corre solo en la principal",
+           isinstance(r, dict) and "lineas" not in r, f"{p.stdout[:300]}")
+        # Latiendo pero desconectada (reconectando, o la sesion cerrada): tampoco.
+        vivo_b = SidecarConLatidoPropio(home, SEGUNDA, conectado=False)
+        try:
+            time.sleep(0.3)
+            ok("latiendo sin conexion, tampoco", list(salud_de(home)) == [A], f"{salud_de(home)}")
+        finally:
+            vivo_b.cerrar()
+
+        # Desvincular saca la linea con su latido todavia fresco: no vuelve a entrar.
+        anota_activas(home, [A, SEGUNDA], meta={f"sidecar_beat@{SEGUNDA}": int(time.time()),
+                                                f"sidecar_conectado@{SEGUNDA}": "1"})
+        suma_linea(home, SEGUNDA, retirar=True)
+        ok("recien desvinculada, con el latido fresco, no vuelve a la lista",
+           list(salud_de(home)) == [A], f"{salud_de(home)}")
+
+    # Una sola linea, anotada y viva: igual que siempre.
+    with tempfile.TemporaryDirectory() as home:
+        llegan(home, A, [msg(PERSONA, "FU1", "no me llega la factura", 7)])
+        vivo_a = SidecarConLatidoPropio(home, A)
+        try:
+            time.sleep(0.3)
+            s = salud_de(home)
+            p, r = tick(home)
+        finally:
+            vivo_a.cerrar()
+        ok("con una sola linea viva: una fila, sin marca, y el tick sin repartirse",
+           list(s) == [A] and "fuera_de_lista" not in s[A]
+           and isinstance(r, dict) and "lineas" not in r, f"{s} {p.stdout[:300]}")
+        # Un almacen de antes: sin `lineas_activas`, la linea activa de siempre.
+        anota_activas(home, borrar=["lineas_activas"])
+        ok("un almacen sin la lista sigue siendo su linea activa",
+           list(salud_de(home)) == [A], f"{salud_de(home)}")
+
+# Lo mismo, sobre el almacen solo: la lista guardada primero, las vivas detras, sin repetir.
+with tempfile.TemporaryDirectory() as home:
+    tienda = carga_wa_scope(home).wa_store
+    con = sqlite3.connect(":memory:")
+    con.execute("create table store_meta (key text primary key, value text)")
+
+    def meta(**valores):
+        con.execute("delete from store_meta")
+        con.executemany("insert into store_meta (key,value) values (?,?)", valores.items())
+
+    ahora = str(int(time.time()))
+    meta(linea_activa=A, lineas_activas=json.dumps([A]),
+         **{f"sidecar_beat@{SEGUNDA}": ahora, f"sidecar_conectado@{SEGUNDA}": "1",
+            f"sidecar_beat@{A}": ahora, f"sidecar_conectado@{A}": "1"})
+    ok("la anotada primero y la viva detras, sin repetir la anotada",
+       tienda.lineas_activas(con) == [A, SEGUNDA], f"{tienda.lineas_activas(con)}")
+    ok("las anotadas solas, para quien tiene que distinguir",
+       tienda.lineas_anotadas(con) == [A], f"{tienda.lineas_anotadas(con)}")
+    meta(linea_activa="local")
+    ok("`local`, de antes de los numeros, sigue siendo su linea",
+       tienda.lineas_activas(con) == ["local"], f"{tienda.lineas_activas(con)}")
+    meta(linea_activa="local", **{"sidecar_beat@local": ahora, "sidecar_conectado@local": "1",
+                                  "sidecar_beat@no-es-linea": ahora,
+                                  "sidecar_conectado@no-es-linea": "1"})
+    ok("un latido con una llave que no es un numero no agrega nada",
+       tienda.lineas_activas(con) == ["local"], f"{tienda.lineas_activas(con)}")
+    meta()
+    ok("un almacen que nunca vio una linea: ninguna", tienda.lineas_activas(con) == [])
+    con.close()
+
 # ── Un agente de casos por linea (odd/tasks/linea-viva-2.md, W3) ───────────────────────────
 # La auditoria A0: la fila en vuelo de `agente_corrida` y el lock del agente eran uno para
 # toda la maquina, y un agente colgado en una linea dejaba a la otra sin agente. Cada corrida
