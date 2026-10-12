@@ -866,12 +866,14 @@ def alcance_sin_pisar(scope, leido, fresco, cuenta):
 
 
 def plugin_store_write(scope, agent_name=None, activity=None, health=None,
-                       routes=None, extra=None, leido=None):
+                       routes=None, extra=None, leido=None, fusiona=None):
     """Escritura atomica: el host lee este archivo en cualquier momento. Va por
     `plugin_store_modifica` (candado, temporal unico, sin pisar un store ilegible).
 
     `leido` es el alcance del panel sobre el que se armo `scope`: con el, lo que el panel
-    guardo despues no se pisa (`alcance_sin_pisar`).
+    guardo despues no se pisa (`alcance_sin_pisar`). `fusiona(vista)` arma claves sobre lo
+    que hay en el archivo con el candado puesto (la vista de esta linea): lo que se lee
+    afuera del candado pisa lo que otro escribio en medio (lv3-auditoria, 6).
 
     Con varias lineas, lo que es de una linea que no es la principal va a su lugar
     (`escribir_en_linea`, en wa_settings): el tick de cada linea corre en su propio
@@ -896,6 +898,8 @@ def plugin_store_write(scope, agent_name=None, activity=None, health=None,
             cambios["routes"] = routes
         if extra:
             cambios.update(extra)
+        if fusiona is not None:
+            cambios.update(fusiona(vista_de_linea(data, cuenta, principal)))
         escribir_en_linea(data, cambios, cuenta, principal)
         # El alcance de la principal va en la raiz: su copia en `alcancePorLinea` es un
         # resto viejo que `wa-send` igual cruzaba (guardar-panel G3).
@@ -1032,18 +1036,14 @@ def plugin_store_patch_run(trace):
 def mirror_to_panel(key, value):
     """Un ajuste que el panel tambien guarda tiene que viajar en las dos direcciones:
     si solo bajara del panel, un valor viejo del panel ganaria para siempre."""
-    campo = next((c for c, name in PANEL_ORCA_CAMPOS.items() if name == key), None)
-    if campo:
-        orca = plugin_store_raw().get(PANEL_ORCA)
-        orca = dict(orca) if isinstance(orca, dict) else {}
-        orca[campo] = value
-        return plugin_store_write(None, extra={PANEL_ORCA: orca})
-    campo = next((c for c, name in PANEL_PRIMER_CAMPOS.items() if name == key), None)
-    if campo:
-        primer = plugin_store_raw().get(PANEL_PRIMER)
-        primer = dict(primer) if isinstance(primer, dict) else {}
-        primer[campo] = value
-        return plugin_store_write(None, extra={PANEL_PRIMER: primer})
+    for clave, campos in ((PANEL_ORCA, PANEL_ORCA_CAMPOS), (PANEL_PRIMER, PANEL_PRIMER_CAMPOS)):
+        campo = next((c for c, name in campos.items() if name == key), None)
+        if campo:
+            # La fusion, dentro del candado: leida afuera, pisaba lo escrito en medio.
+            def fusiona(vista, clave=clave, campo=campo):
+                previo = vista.get(clave)
+                return {clave: dict(previo if isinstance(previo, dict) else {}, **{campo: value})}
+            return plugin_store_write(None, fusiona=fusiona)
     flat = next((f for f, name in PANEL_SETTINGS.items() if name == key), None)
     if not flat:
         return False

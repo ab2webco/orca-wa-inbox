@@ -17092,6 +17092,57 @@ if NODE:
         ok("libres los dos, corre", isinstance(r, dict) and r.get("busy") is False,
            f"{p.stdout[:300]} {p.stderr[-300:]}")
 
+# ── Un ajuste que sube al panel no pisa lo que otro escribio en medio (lv3-auditoria, 6) ─
+# `mirror_to_panel` leia `orcaNotices` (o `firstReply`) FUERA del candado del storage y
+# despues escribia el objeto entero: lo que otro proceso guardo en ese medio se perdia.
+# Ahora la fusion se hace dentro del candado, sobre lo que hay en el archivo.
+print("\nun ajuste que sube al panel no pisa lo escrito en medio (lv3-auditoria)")
+if NODE:
+    env_lv6 = dict(os.environ)
+    try:
+        with tempfile.TemporaryDirectory() as home:
+            llegan(home, A, [msg(SOPORTE, "MP1", "@duenio no abre el login", 5, mencion=True)])
+            llegan(home, SEGUNDA, [msg(SOPORTE, "MP2", "@duenio no llega la factura", 5,
+                                       mencion=True)], activar=False)
+            suma_linea(home, SEGUNDA)
+            js(home, "set", SOPORTE, "--provider", "ninguno", "--mode", "borrador")
+
+            def con_otro_escritor(ws, escribe):
+                """Otro proceso guarda justo antes de que este tome el candado."""
+                original = ws.plugin_store_modifica
+
+                def modifica(cambia, crear=True):
+                    datos = storage_o_nada(home)
+                    escribe(datos)
+                    escribe_storage(home, datos)
+                    return original(cambia, crear)
+                ws.plugin_store_modifica = modifica
+                return ws
+
+            os.environ.pop("WA_INBOX_LINEA", None)
+            ws = con_otro_escritor(carga_wa_scope(home), lambda d: d.__setitem__(
+                "orcaNotices", dict(d.get("orcaNotices") or {}, waiting="on")))
+            ws.mirror_to_panel("orca_notice_finished", "on")
+            avisos = storage_o_nada(home).get("orcaNotices") or {}
+            ok("el aviso que guardo otro en medio queda, junto al que sube",
+               avisos.get("waiting") == "on" and avisos.get("finished") == "on", f"{avisos}")
+
+            os.environ["WA_INBOX_LINEA"] = SEGUNDA
+
+            def primer_de_b(d):
+                propios = d.setdefault("ajustesPorLinea", {}).setdefault(SEGUNDA, {})
+                propios["firstReply"] = dict(propios.get("firstReply") or {}, max="4")
+            ws = con_otro_escritor(carga_wa_scope(home), primer_de_b)
+            ws.mirror_to_panel("first_reply_mode", "model")
+            datos = storage_o_nada(home)
+            primer = ((datos.get("ajustesPorLinea") or {}).get(SEGUNDA) or {}).get("firstReply") or {}
+            ok("en otra linea igual, y en SU lugar: la raiz no se toca",
+               primer.get("max") == "4" and primer.get("mode") == "model"
+               and "mode" not in (datos.get("firstReply") or {}), f"{primer} {datos.get('firstReply')}")
+    finally:
+        os.environ.clear()
+        os.environ.update(env_lv6)
+
 print(f"\n{pruebas - len(fallos)}/{pruebas} en verde")
 if fallos:
     sys.exit(1)
