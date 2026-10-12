@@ -1121,6 +1121,17 @@ const PANELES = [
       document.querySelector('.card[data-case="1"]').click()`
   },
   {
+    // Lo atrasado de un chat que ya se atendio despues (sin-responder): cerrado sin el agente,
+    // y el detalle dice por que, en el idioma del panel.
+    nombre: 'tablero-detalle-ya-atendido', archivo: 'activity.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, espera: 400,
+    datos: conTablero(tableroDe(TABLERO_CASOS.concat([caso(12, 'cerrado', {
+      title: 'La factura de marzo', chat_name: 'Laura Méndez', updated_at: minutos(5),
+      no_agent_rule: 'rezago_contestado' })]))),
+    guion: ABRIR_TABLERO + `;
+      document.querySelector('.card[data-case="12"]').click()`
+  },
+  {
     // Un caso en "Listo para responder": Enviar, Editar (cli-huecos, C1) y Cerrar.
     nombre: 'tablero-detalle-listo', archivo: 'activity.html', anchos: ANCHOS,
     enTodosLosAnchos: true, espera: 400, datos: conTablero(tableroDe(TABLERO_CASOS)),

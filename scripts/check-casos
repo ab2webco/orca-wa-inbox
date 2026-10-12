@@ -8833,7 +8833,8 @@ if NODE:
                "wa_approved" in codigos[dinero] and "wa_rejected" in codigos[cierra]
                and "wa_correction" in codigos[corrige], f"{codigos}")
 
-            # Vencido y superado: no hacen nada, salvo decirlo en una linea.
+            # Un aviso viejo que sigue abierto: el `si N` del dueno vale igual (decision del
+            # dueno, 2026-10-12). La edad no vence una respuesta suya.
             llegan(home, A, [msg(PERSONA, "T5", PEDIDO, 16)])
             viejo, _ = propuesta_lista(home, "T5", texto="Listo, son $10.")
             tick(home)
@@ -8845,12 +8846,22 @@ if NODE:
             con.close()
             llegan(home, A, [msg(DUENO_DM, "R4", f"si {viejo}", 1, de=DUENO_LID)])
             ingiere(home)
-            ok("un aviso vencido no aprueba nada",
-               js(home, "caso", "ver", viejo)[0]["etapa"] == "decision"
-               and not js(home, "caso", "ver", viejo)[0]["aprobada"])
-            ok("y se dice en una linea", any(f"caso {viejo}" in a["body"].lower()
-                                             and "venci" in a["body"].lower()
-                                             for a in al_dueno(home)), f"{al_dueno(home)[-1:]}")
+            ok("`si N` aprueba un aviso viejo que sigue abierto",
+               js(home, "caso", "ver", viejo)[0]["etapa"] == "respondido"
+               and js(home, "caso", "ver", viejo)[0]["aprobada"],
+               f"{js(home, 'caso', 'ver', viejo)[0]['etapa']} {al_dueno(home)[-1:]}")
+            tick(home)
+            ok("y le confirma que salio", any(f"Caso {viejo} aprobado" in a["body"]
+                                              for a in al_dueno(home)), f"{al_dueno(home)[-1:]}")
+            # El mismo aviso, ya decidido: se le dice en una linea, nunca silencio.
+            llegan(home, A, [msg(DUENO_DM, "R4B", f"si {viejo}", 1, de=DUENO_LID)])
+            ingiere(home)
+            tick(home)
+            ok("un `si N` sobre un aviso ya decidido le dice que ya estaba decidido",
+               any(f"Caso {viejo}" in a["body"] and "ya se habia decidido" in a["body"]
+                   for a in al_dueno(home)), f"{al_dueno(home)[-1:]}")
+            ok("y no abre un caso",
+               cuenta(home, "select count(*) from caso_mensaje where stanza_id='R4B'") == 0)
 
             llegan(home, A, [msg(PERSONA, "T6", PEDIDO, 14)])
             superado, _ = propuesta_lista(home, "T6", texto="Listo, son $20.")
@@ -13846,6 +13857,24 @@ if NODE:
             ok("`si` citando algo que no es un aviso, con un solo vivo, lo aprueba como siempre",
                etapa_y_aprobada(home, tres) == ("respondido", True),
                f"{etapa_y_aprobada(home, tres)}")
+
+            # Citar un aviso viejo que sigue abierto: su `no` vale igual (decision del dueno,
+            # 2026-10-12).
+            llegan(home, A, [msg(PERSONA, "W6P4", PEDIDO, 27)])
+            cuatro, _ = propuesta_lista(home, "W6P4", texto="Listo, el arreglo cuesta $95.")
+            tick(home)
+            cita_vieja = stanza_del_aviso(home, cuatro)
+            con = db_de(home)
+            con.execute("update aviso set at=datetime('now','localtime','-30 hours'), "
+                        "enviado_at=datetime('now','localtime','-30 hours') where case_id=?",
+                        (int(cuatro),))
+            con.commit()
+            con.close()
+            llegan(home, A, [msg(DUENO_DM, "W6R5", "no", 1, de=DUENO_LID, cita_id=cita_vieja)])
+            ingiere(home)
+            ok("`no` citando un aviso viejo que sigue abierto cierra ese caso",
+               bool(cita_vieja) and etapa_y_aprobada(home, cuatro) == ("cerrado", False),
+               f"{cita_vieja} {etapa_y_aprobada(home, cuatro)}")
         finally:
             sidecar.cerrar()
 
@@ -17269,6 +17298,378 @@ with tempfile.TemporaryDirectory() as home:
         if hijo.poll() is None:
             hijo.kill()
             hijo.wait()
+
+# ── Lo que nadie contesto no se vence (sin-responder) ───────────────────────────────────
+# Visto en vivo: 31 mensajes de clientes en conversaciones autorizadas, de hace tres dias a
+# hace ocho horas, que nadie juzgo ni contesto. Ingest y la salud miraban solo la ventana
+# (`inbox_days`, `case_window_hours`): una linea que estuvo dias sin atenderse perdia lo
+# anterior para siempre, y ni la alerta de la linea lo veia. Ahora lo que nadie juzgo sigue
+# siendo de alguien hasta lo que guarda el almacen, y lo atrasado de cada chat se retoma en
+# UN caso cuya respuesta firma el dueno; lo que ya se atendio despues queda cerrado con su
+# motivo, sin escribirle nada al cliente.
+DIA_MIN = 24 * 60
+# Lo que el texto fijo de esta parte nunca dice: que algo fallo, que el trabajo hecho no
+# sirve, ni una disculpa.
+PALABRAS_DE_FALLA = re.compile(
+    r"fall|caid|cayo|no sirv|no funcion|perd[oó]n|disculp|lament|sorry|apolog|fail|"
+    r"\bdown\b|broken|roto|rehac|redo\b|error|demora|delay|retras", re.I)
+
+
+def base_de_ingest(home, cuenta_, dias):
+    """La linea base de ingest de la linea, fijada hace `dias`: una instalacion que ya
+    corria, no una recien estrenada."""
+    sello = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(time.time() - dias * 86400))
+    con = db_de(home)
+    con.execute("insert into settings (key, value) values (?, ?) on conflict(key) do update "
+                "set value=excluded.value", (f"ingest_desde@{cuenta_}", sello))
+    con.commit()
+    con.close()
+
+
+def revoca(home, stanza):
+    con = sqlite3.connect(pathlib.Path(home) / ".wa-inbox" / "capture.db")
+    con.execute("update mensaje set revocado=1 where stanza_id=?", (stanza,))
+    con.commit()
+    con.close()
+
+
+def caso_y_eventos(home, stanza):
+    caso = caso_de_stanza(home, stanza)
+    return caso, [e["detalle"] or "" for e in (caso or {}).get("eventos", [])]
+
+
+def es_de_rezago(home, stanza):
+    _, detalles = caso_y_eventos(home, stanza)
+    return any(d.startswith("retoma pendientes") for d in detalles)
+
+
+def envios_al_chat(home, chat):
+    con = sqlite3.connect(pathlib.Path(home) / ".wa-inbox" / "capture.db")
+    try:
+        return [r[0] for r in con.execute("select req_id from envio where chat_jid=?", (chat,))]
+    except sqlite3.Error:
+        return []
+    finally:
+        con.close()
+
+
+def sin_juzgar_de(home, cuenta_):
+    fila = salud_de(home).get(cuenta_, {})
+    return fila.get("sin_juzgar"), fila.get("sin_juzgar_hace_s")
+
+
+print("\nlo que nadie contesto no se vence (sin-responder)")
+if NODE:
+    if not any(c["jid"] == DUENO_DM for c in CHATS):
+        CHATS.append({"jid": DUENO_DM, "nombre": "Dueno Directo", "grupo": False})
+
+    # Una linea, sin Jev: lo de hace tres dias entra con `inbox_days` 1 y la ventana de 12 h.
+    with tempfile.TemporaryDirectory() as home:
+        llave_del_plugin(home)
+        llegan(home, A, [
+            msg(PERSONA, "SR1", "no me llega la factura del mes", 3 * DIA_MIN),
+            msg(SOPORTE, "SR2", "@duenio el reporte de ventas no carga", 3 * DIA_MIN - 30,
+                mencion=True),
+            msg(FACTURACION, "SR3", "@duenio esto es de antes de la base", 5 * DIA_MIN,
+                mencion=True),
+            msg(OPERACIONES, "SR4", "@duenio esto quedo en off", 3 * DIA_MIN, mencion=True),
+            msg(SOPORTE, "SR5", "@duenio este lo borre", 2 * DIA_MIN, mencion=True)])
+        js(home, "agent", "Agente De Ejemplo")
+        js(home, "set", PERSONA, "--provider", "ninguno", "--mode", "responder")
+        for chat in (SOPORTE, FACTURACION, OPERACIONES):
+            js(home, "set", chat, "--provider", "ninguno", "--mode", "borrador")
+        js(home, "mode", OPERACIONES, "off")
+        js(home, "config", "inbox_days", "1")
+        base_de_ingest(home, A, 4)
+        revoca(home, "SR5")
+        n, hace = sin_juzgar_de(home, A)
+        ok("la salud cuenta lo de hace tres dias que nadie juzgo, con inbox_days 1",
+           n == 2 and hace is not None and hace >= 3 * 86400 - 120, f"{n} {hace}")
+        tick(home)
+        ok("el tick siguiente lo toma: el directo y la mencion del grupo tienen caso",
+           caso_de_stanza(home, "SR1") is not None and caso_de_stanza(home, "SR2") is not None)
+        ok("cada uno como un caso que retoma lo pendiente",
+           es_de_rezago(home, "SR1") and es_de_rezago(home, "SR2"),
+           f"{caso_y_eventos(home, 'SR1')[1]}")
+        cid1 = caso_de_stanza(home, "SR1")["case_id"] if caso_de_stanza(home, "SR1") else 0
+        ok("y sin acuse automatico: lo que sale de un caso atrasado lo firma el dueno",
+           auto_de(home, cid1) is None and auto_de(home, cid1, "saludo") is None
+           and envios_al_chat(home, PERSONA) == [], f"{auto_de(home, cid1)}")
+        ok("lo de antes de la linea base sigue sin entrar",
+           caso_de_stanza(home, "SR3") is None)
+        ok("una conversacion en off y un mensaje revocado: ni caso ni cuenta",
+           caso_de_stanza(home, "SR4") is None and caso_de_stanza(home, "SR5") is None)
+        ok("ya nada sin juzgar", sin_juzgar_de(home, A)[0] == 0, f"{sin_juzgar_de(home, A)}")
+        r = ingiere(home)
+        ok("otra corrida no lo repite", cuenta(home, "select count(*) from caso") == 2
+           and r.get("rezago_casos", 0) == 0, f"{r}")
+        if cid1:
+            p = avance(home, cid1, "Hola, ya estoy revisando su factura.", "--actor", "agente")
+            ok("el agente no manda avances en un caso atrasado: todo pasa por el dueno",
+               p.returncode != 0 and "E_CATCH_UP" in p.stderr, f"{p.returncode} {p.stderr[-200:]}")
+            texto, _ = archivo_de(home, cid1)
+            ok("el archivo del caso le pide UNA respuesta que retome los temas pendientes",
+               "## Pending topics from earlier" in texto and "ONE" in texto
+               and "owner approves" in texto, texto[-1500:])
+            ok("y le prohibe decir que algo fallo o disculparse por una falla",
+               "Never say or imply that the bot, the system or the service failed" in texto
+               and "never apologize" in texto, texto[-1500:])
+            ok("ni decir que el trabajo ya hecho no sirve: lo abierto es un seguimiento",
+               "work already done" in texto and "pending follow-up" in texto, texto[-1500:])
+            ok("sin las instrucciones del primer mensaje: aca no hay acuse ni avances",
+               "## First message and updates" not in texto)
+
+        # Lo que llega en vivo sigue el camino de siempre: nunca entra a un caso que retoma lo
+        # atrasado (decision del dueno, 2026-10-12). Ni el directo, ni la linea suelta del
+        # grupo, ni una union a mano.
+        rezago_grupo = (caso_de_stanza(home, "SR2") or {}).get("case_id")
+        llegan(home, A, [msg(PERSONA, "SR6", "y tambien necesito el certificado", 1),
+                         msg(SOPORTE, "SR7", "alguien vio el correo de ayer", 1)])
+        ingiere(home)
+        vivo = caso_de_stanza(home, "SR6")
+        ok("un mensaje en vivo no se suma al caso que retoma lo atrasado de su chat",
+           vivo is not None and vivo["case_id"] != cid1 and not es_de_rezago(home, "SR6"),
+           f"{vivo and vivo['case_id']} {cid1}")
+        ok("y el caso atrasado se queda con sus mensajes viejos y nada mas",
+           [r[0] for r in db_de(home).execute("select stanza_id from caso_mensaje where "
+                                              "case_id=?", (cid1,))] == ["SR1"])
+        suelta = caso_de_stanza(home, "SR7")
+        ok("una linea suelta del grupo en vivo tampoco se suma al caso atrasado del grupo",
+           rezago_grupo is not None and (suelta is None or suelta["case_id"] != rezago_grupo),
+           f"{suelta and suelta['case_id']} {rezago_grupo}")
+        if vivo:
+            p = corre(home, "caso", "unir", str(cid1), str(vivo["case_id"]), "--actor", "agente")
+            ok("y unir a mano lo de ahora al caso atrasado se niega",
+               p.returncode != 0 and "E_CATCH_UP" in p.stderr, f"{p.returncode} {p.stderr[-200:]}")
+
+    # El texto fijo que se agrego: ni falla, ni disculpa, ni el trabajo hecho que no sirve.
+    with tempfile.TemporaryDirectory() as home:
+        ws = carga_wa_scope(home)
+        panel = (RAIZ / "activity.html").read_text(encoding="utf-8")
+        fijos = [ws.REZAGO_CONTESTADO, ws.REZAGO_CUBIERTO, ws.REZAGO_YA_RESUELTO,
+                 ws.EJEMPLO_REZAGO] + [ws.MOTIVOS_AVISO[i]["catch_up"] for i in ws.MOTIVOS_AVISO]
+        fijos += re.findall(r'"(?:motCatchUp|noAgent_rezago_[a-z]+)": "([^"]*)"', panel)
+        ok("el panel tiene sus textos en los tres idiomas",
+           len(re.findall(r'"motCatchUp": ', panel)) == 3
+           and len(re.findall(r'"noAgent_rezago_[a-z]+": ', panel)) == 9)
+        ok("el texto fijo de lo atrasado no habla de fallas ni pide disculpas",
+           not [t for t in fijos if PALABRAS_DE_FALLA.search(t)],
+           f"{[t for t in fijos if PALABRAS_DE_FALLA.search(t)]}")
+        reglas = " ".join(ws.REGLAS_REZAGO)
+        ok("las reglas del texto prohiben la falla, la disculpa y juzgar el trabajo hecho",
+           all(x in reglas for x in ("failed", "never apologize", "work already done",
+                                     "redone", "wrong or useless", "pending follow-up",
+                                     "explicitly reported a defect")), reglas)
+
+    # Con Jev: una rafaga vieja es UN juicio y UN caso; lo contestado despues y lo que cubrio
+    # un caso mas nuevo quedan cerrados con su motivo, sin escribirle nada al cliente; la
+    # respuesta del caso atrasado espera la firma del dueno y sale con su `si N`.
+    falso = JevFalso(jev_y_borradores)
+    antes = dict(os.environ)
+    os.environ["WA_INBOX_JEV_ENDPOINT"] = falso.url
+    try:
+        with tempfile.TemporaryDirectory() as home:
+            llave_del_plugin(home)
+            pon_llave(home)
+            pedidos = [msg(PERSONA, f"SB{i}", texto, 3 * DIA_MIN - i * 240)
+                       for i, texto in enumerate(("el reporte no funciono ayer",
+                                                  "tambien la exportacion a excel",
+                                                  "y el filtro por fecha",
+                                                  "me avisan cuando lo vean",
+                                                  "quedo atento"), 1)]
+            llegan(home, A, pedidos + [
+                msg(SOPORTE, "SC1", "@duenio el acceso del equipo nuevo", 3 * DIA_MIN,
+                    mencion=True),
+                msg(SOPORTE, "SC2", "Listo, ya quedo el acceso.", 2 * DIA_MIN, yo=True),
+                # Un sticker suelto en un grupo: ingest lo deja sin caso a proposito, y no es
+                # una linea parada.
+                msg(SOPORTE, "SF1", "", 30, media="sticker"),
+                msg(FACTURACION, "SD1", "@duenio la factura de marzo", 3 * DIA_MIN,
+                    mencion=True),
+                msg(FACTURACION, "SD2", "@duenio otra solicitud nueva", 5, mencion=True)])
+            js(home, "agent", "Agente De Ejemplo")
+            js(home, "set", PERSONA, "--provider", "ninguno", "--mode", "responder")
+            js(home, "set", SOPORTE, "--provider", "ninguno", "--mode", "responder")
+            js(home, "set", FACTURACION, "--provider", "ninguno", "--mode", "borrador")
+            js(home, "set", DUENO_DM, "--provider", "ninguno", "--mode", "responder")
+            js(home, "config", "inbox_days", "1")
+            pon_duenos(home, DUENO_LID)
+            base_de_ingest(home, A, 4)
+            ok("antes: la salud ve los ocho sin juzgar", sin_juzgar_de(home, A)[0] == 8,
+               f"{sin_juzgar_de(home, A)}")
+            falso.pedidos.clear()
+            r = ingiere(home)
+            casos_b = {(caso_de_stanza(home, p["id"]) or {}).get("case_id") for p in pedidos}
+            ok("la rafaga vieja de cinco mensajes es UN caso",
+               len(casos_b) == 1 and None not in casos_b, f"{casos_b} {r}")
+            cid = next(iter(casos_b)) if len(casos_b) == 1 else None
+            textos = [t for t in falso.textos() if "exportacion" in t]
+            ok("y UN juicio de Jev, con los cinco textos juntos",
+               len(textos) == 1 and all(p["texto"] in textos[0] for p in pedidos),
+               f"{falso.textos()}")
+            ok("sin acuse ni saludo automatico", cid is not None and auto_de(home, cid) is None
+               and auto_de(home, cid, "saludo") is None)
+            caso_c, ev_c = caso_y_eventos(home, "SC1")
+            ok("lo que la linea contesto despues: cerrado con su motivo, sin caso abierto",
+               caso_c is not None and caso_c["etapa"] == "cerrado"
+               and any("salio un mensaje despues" in d for d in ev_c), f"{ev_c}")
+            ok("y la tarjeta cerrada dice por que, en el idioma del panel",
+               caso_c is not None
+               and tarjeta(home, caso_c["case_id"])["no_agent_rule"] == "rezago_contestado",
+               f"{caso_c and tarjeta(home, caso_c['case_id'])}")
+            caso_d, ev_d = caso_y_eventos(home, "SD1")
+            nuevo = caso_de_stanza(home, "SD2")
+            ok("lo que cubrio un caso mas nuevo del chat: cerrado, nombrando ese caso",
+               caso_d is not None and caso_d["etapa"] == "cerrado" and nuevo is not None
+               and any(f"#{nuevo['case_id']}" in d for d in ev_d), f"{ev_d}")
+            ok("el caso nuevo sigue su camino de siempre",
+               nuevo is not None and nuevo["etapa"] != "cerrado"
+               and not es_de_rezago(home, "SD2"))
+            ok("la salida de ingest lo cuenta", r.get("rezago_casos") == 1
+               and r.get("rezago_atendidos") == 2, f"{r}")
+            ok("y la salud ya no ve nada sin juzgar", sin_juzgar_de(home, A)[0] == 0,
+               f"{sin_juzgar_de(home, A)}")
+
+            # La propuesta del agente: UN mensaje para el chat, que espera al dueno.
+            texto_rezago = ("Retomando los temas pendientes: revisamos el reporte, la "
+                            "exportacion a excel y el filtro por fecha, y le contamos hoy.")
+            js(home, "caso", "propuesta", str(cid), "--tipo", "responder", "--respuesta",
+               texto_rezago, "--actor", "agente")
+            p = corre(home, "caso", "aprobar", str(cid), "--version",
+                      js(home, "caso", "ver", str(cid))[0]["propuesta_version"],
+                      "--actor", "regla")
+            ok("la regla del dueno no la firma sola: catch_up",
+               p.returncode != 0 and "catch_up" in p.stderr, f"{p.returncode} {p.stderr[-200:]}")
+            sidecar = SidecarFalso(home)
+            try:
+                tick(home)
+            finally:
+                sidecar.cerrar()
+            ok("sin numero de aprobacion: nada sale y espera en el tablero",
+               envios_al_chat(home, PERSONA) == []
+               and etapa_y_aprobada(home, str(cid)) == ("decision", False),
+               f"{envios_al_chat(home, PERSONA)}")
+            pon_aprobacion(home, DUENO_LID)
+            sidecar = SidecarFalso(home)
+            try:
+                tick(home)
+            finally:
+                sidecar.cerrar()
+            avisos = avisos_de(home, cid)
+            ok("con numero: el dueno recibe el aviso de aprobacion y al cliente no sale nada",
+               len(avisos) == 1 and envios_al_chat(home, PERSONA) == []
+               and etapa_y_aprobada(home, str(cid)) == ("decision", False),
+               f"{avisos} {envios_al_chat(home, PERSONA)}")
+            ok("el aviso dice por que espera, sin codigos",
+               "retoma temas pendientes" in (al_dueno(home) or [{}])[-1].get("body", ""),
+               f"{al_dueno(home)}")
+            llegan(home, A, [msg(DUENO_DM, "SB-SI", f"si {cid}", 1, de=DUENO_LID)])
+            sidecar = SidecarFalso(home)
+            try:
+                js(home, "ingest")
+            finally:
+                sidecar.cerrar()
+            ok("con su `si N` sale, una sola vez",
+               etapa_y_aprobada(home, str(cid))[0] == "respondido"
+               and len(envios_al_chat(home, PERSONA)) == 1, f"{envios_al_chat(home, PERSONA)}")
+
+            # Un trabajo en un caso atrasado tampoco corre sin el clic.
+            js(home, "set", OPERACIONES, "--provider", "ninguno", "--mode", "responder")
+            llegan(home, A, [msg(OPERACIONES, "SE1", "@duenio y el informe de abril",
+                                 3 * DIA_MIN, mencion=True)])
+            ingiere(home)
+            otro = (caso_de_stanza(home, "SE1") or {}).get("case_id")
+            if otro:
+                js(home, "caso", "propuesta", str(otro), "--tipo", "trabajar",
+                   "--instrucciones", "Revisar el informe de abril.", "--actor", "agente")
+                v = js(home, "caso", "ver", str(otro))[0]["propuesta_version"]
+                p = corre(home, "caso", "aprobar", str(otro), "--version", v, "--actor", "regla")
+                ok("un trabajo de un caso atrasado espera al dueno",
+                   p.returncode != 0 and "catch_up" in p.stderr, f"{p.stderr[-200:]}")
+            else:
+                ok("un trabajo de un caso atrasado espera al dueno", False, "sin caso")
+    finally:
+        falso.cerrar()
+        os.environ.clear()
+        os.environ.update(antes)
+
+    # Lo que llega MIENTRAS corre la entrada (Jev tarda en contestar lo de ahora): la lectura
+    # de esta corrida no lo trajo, pero es de ahora. No se junta con lo atrasado de su chat:
+    # lo toma la corrida siguiente, en su caso de siempre y con su acuse.
+    en_medio = {}
+
+    def jev_con_uno_en_medio(cuerpo):
+        juzga = (cuerpo["state"].get("message_to_evaluate") or {}).get("text") or ""
+        if "home" in en_medio and "el acceso del equipo nuevo" in juzga:
+            llegan(en_medio.pop("home"), A,
+                   [msg(PERSONA, "SM3", "hoy el portal no funciono", 0)])
+        return jev_y_borradores(cuerpo)
+
+    falso = JevFalso(jev_con_uno_en_medio)
+    antes = dict(os.environ)
+    os.environ["WA_INBOX_JEV_ENDPOINT"] = falso.url
+    try:
+        with tempfile.TemporaryDirectory() as home:
+            llave_del_plugin(home)
+            pon_llave(home)
+            llegan(home, A, [
+                msg(PERSONA, "SM1", "no me llega la factura del mes", 3 * DIA_MIN),
+                msg(SOPORTE, "SM2", "@duenio el acceso del equipo nuevo", 1, mencion=True)])
+            js(home, "agent", "Agente De Ejemplo")
+            js(home, "set", PERSONA, "--provider", "ninguno", "--mode", "responder")
+            js(home, "set", SOPORTE, "--provider", "ninguno", "--mode", "borrador")
+            js(home, "config", "inbox_days", "1")
+            base_de_ingest(home, A, 4)
+            en_medio["home"] = home
+            ingiere(home)
+            atrasado = caso_de_stanza(home, "SM1")
+            en_vivo = caso_de_stanza(home, "SM3")
+            ok("lo que llega mientras corre la entrada no entra al caso que retoma lo atrasado",
+               "home" not in en_medio and atrasado is not None and es_de_rezago(home, "SM1")
+               and (en_vivo is None or en_vivo["case_id"] != atrasado["case_id"]),
+               f"{en_medio} {atrasado and atrasado['case_id']} {en_vivo and en_vivo['case_id']}")
+            ingiere(home)
+            en_vivo = caso_de_stanza(home, "SM3")
+            ok("y la corrida siguiente le abre su caso de siempre, con su acuse",
+               en_vivo is not None and atrasado is not None
+               and en_vivo["case_id"] != atrasado["case_id"] and not es_de_rezago(home, "SM3")
+               and auto_de(home, en_vivo["case_id"]) is not None,
+               f"{en_vivo and en_vivo['case_id']} {en_vivo and auto_de(home, en_vivo['case_id'])}")
+    finally:
+        falso.cerrar()
+        os.environ.clear()
+        os.environ.update(antes)
+
+    # Dos lineas, cada una con lo suyo atrasado: cada una retoma lo de ella.
+    with tempfile.TemporaryDirectory() as home:
+        llave_del_plugin(home)
+        llegan(home, A, [msg(PERSONA, "SL1", "no me llega la factura", 3 * DIA_MIN)])
+        llegan(home, SEGUNDA, [msg(PERSONA, "SL2", "no abre el portal", 3 * DIA_MIN)],
+               activar=False)
+        suma_linea(home, SEGUNDA)
+        js(home, "agent", "Agente De Ejemplo")
+        js(home, "set", PERSONA, "--provider", "ninguno", "--mode", "responder")
+        jsl(home, SEGUNDA, "set", PERSONA, "--provider", "ninguno", "--mode", "responder")
+        js(home, "config", "inbox_days", "1")
+        base_de_ingest(home, A, 4)
+        base_de_ingest(home, SEGUNDA, 4)
+        s = salud_de(home)
+        ok("cada linea cuenta lo suyo sin juzgar",
+           s.get(A, {}).get("sin_juzgar") == 1 and s.get(SEGUNDA, {}).get("sin_juzgar") == 1,
+           f"{s}")
+        js(home, "ingest")
+        jsl(home, SEGUNDA, "ingest")
+        a_, b_ = caso_de_stanza(home, "SL1"), None
+        fila = db_de(home).execute("select c.account from caso_mensaje m join caso c on "
+                                   "c.case_id=m.case_id where m.stanza_id='SL2'").fetchone()
+        ok("y cada una lo retoma en su linea",
+           a_ is not None and a_["account"] == A and fila is not None and fila[0] == SEGUNDA,
+           f"{a_} {fila and dict(fila)}")
+        s = salud_de(home)
+        ok("las dos quedan sin nada sin juzgar",
+           s.get(A, {}).get("sin_juzgar") == 0 and s.get(SEGUNDA, {}).get("sin_juzgar") == 0,
+           f"{s}")
+
 
 print(f"\n{pruebas - len(fallos)}/{pruebas} en verde")
 if fallos:
