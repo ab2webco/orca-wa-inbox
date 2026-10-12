@@ -1014,10 +1014,17 @@ def plugin_store_patch_run(trace):
     """Deja el rastro en el panel sin rearmar la actividad entera. Rearmarla cuesta una
     lectura completa de WhatsApp; al abrir y al cerrar una corrida lo unico que cambio
     es como va, y cobrar ese precio ahi dejaria el panel diciendo "corriendo" hasta el
-    siguiente sync — justo el minuto en que el dueno va a mirar."""
+    siguiente sync — justo el minuto en que el dueno va a mirar.
+
+    Es la actividad de la linea de esta corrida: la de otra linea va a su lugar
+    (`escribir_en_linea`), y el agente de la segunda no pisa la corrida de la principal
+    (lv3-auditoria, 3)."""
+    cuenta, principal = cuenta_activa(), linea_principal()
+
     def cambia(data):
-        actividad = data.get("activity")
-        data["activity"] = dict(actividad if isinstance(actividad, dict) else {}, run=trace)
+        actividad = vista_de_linea(data, cuenta, principal).get("activity")
+        escribir_en_linea(data, {"activity": dict(
+            actividad if isinstance(actividad, dict) else {}, run=trace)}, cuenta, principal)
         return True
     return plugin_store_modifica(cambia) > 0
 

@@ -16973,6 +16973,41 @@ if NODE:
         os.environ.clear()
         os.environ.update(env_lv3)
 
+# ── El agente de otra linea no pisa como va la corrida de la principal (lv3-auditoria, 3) ──
+# `lock` y `unlock` dejan en el panel como va la corrida del agente. Con dos lineas, el de la
+# segunda escribia `activity.run` en la raiz, que es la principal: el panel decia
+# "corriendo" (o "fallo") de la principal por lo que hacia la otra.
+print("\nel agente de otra linea no pisa la corrida de la principal (lv3-auditoria)")
+if NODE:
+    with tempfile.TemporaryDirectory() as home:
+        llegan(home, A, [msg(SOPORTE, "RL1", "@duenio no abre el login", 5, mencion=True)])
+        llegan(home, SEGUNDA, [msg(SOPORTE, "RL2", "@duenio no llega la factura", 5,
+                                   mencion=True)], activar=False)
+        suma_linea(home, SEGUNDA)
+        js(home, "set", SOPORTE, "--provider", "ninguno", "--mode", "borrador")
+
+        def corrida(datos, linea=None):
+            base = datos if linea is None else ((datos.get("porLinea") or {}).get(linea) or {})
+            return ((base.get("activity") or {}).get("run") or {}).get("state")
+
+        p = corre(home, "lock", extra={"WA_INBOX_LINEA": SEGUNDA})
+        datos = storage_o_nada(home)
+        ok("el lock de la otra linea deja su corrida en SU lugar, como corriendo",
+           p.returncode == 0 and corrida(datos, SEGUNDA) == "running", f"{p.stderr[-300:]} "
+           f"{json.dumps(datos.get('porLinea'))[:400]}")
+        ok("y la de la principal, en la raiz, no se toca",
+           corrida(datos) is None, f"{json.dumps(datos.get('activity'))[:300]}")
+        p = corre(home, "unlock", "--failed", "sin red", extra={"WA_INBOX_LINEA": SEGUNDA})
+        datos = storage_o_nada(home)
+        ok("su unlock fallido tambien queda en su lugar, y la raiz sigue intacta",
+           p.returncode == 0 and corrida(datos, SEGUNDA) == "failed" and corrida(datos) is None,
+           f"{p.stderr[-300:]} {json.dumps(datos)[:400]}")
+        p = corre(home, "lock")
+        datos = storage_o_nada(home)
+        ok("el lock de la principal sigue en la raiz, como siempre",
+           p.returncode == 0 and corrida(datos) == "running" and corrida(datos, SEGUNDA) == "failed",
+           f"{p.stderr[-300:]} {json.dumps(datos)[:400]}")
+
 print(f"\n{pruebas - len(fallos)}/{pruebas} en verde")
 if fallos:
     sys.exit(1)
