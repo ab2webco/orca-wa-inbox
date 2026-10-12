@@ -101,10 +101,12 @@ owner's approval number by WhatsApp. Owner-approved on 2026-10-04.
 ## Design (decided while building, 2026-10-05)
 
 - Settings travel in ONE panel key, `orcaNotices` (like `firstReply`, one key per host message):
-  `{waiting, finished, automationFailed, quietStart, quietEnd, hourlyCap, finishedDelaySeconds}`
+  `{waiting, finished, automationFailed, quietStart, quietEnd, hourlyCap, finishedDelaySeconds,
+  finishedDigestMinutes}`
   -> `orca_notice_waiting`, `orca_notice_finished`, `orca_notice_automation` (on/off, off),
   `orca_quiet_start`, `orca_quiet_end` (`HH:MM` or empty, empty), `orca_notice_hourly_cap`
-  (1-60, 6), `orca_finished_delay_s` (10-600, 25). An empty quiet time is a real choice.
+  (1-60, 6), `orca_finished_delay_s` (10-600, 25), `orca_finished_digest_min` (0-1440, 60,
+  added by `resumen-terminados`). An empty quiet time is a real choice.
 - Worker: per-pane state lives in memory and in the storage key `orcaPanes`
   (`{state, at, workingAt, finished, worktreeId, agentType}`), written only when the state
   changes (coalesced), pruned after 24 h. The own workspace is any worktree id whose path
@@ -164,3 +166,10 @@ owner's approval number by WhatsApp. Owner-approved on 2026-10-04.
 ## Checks
 
 - `scripts/check-casos`, the worker suite, `test/panels.test.mjs`, `npm run check`.
+
+## Follow-up: finished agents arrive as one summary
+
+The finished notice (O4) was one WhatsApp message per turn, dozens a day. It now defaults to ONE
+summary per interval (`orca_finished_digest_min`, default 60, 0 = the old one-per-finish
+behaviour). Waiting/blocked and failed automations are unchanged. See
+`odd/tasks/resumen-terminados.md`.
