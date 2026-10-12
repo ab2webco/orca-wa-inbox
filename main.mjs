@@ -1762,11 +1762,36 @@ export function lanzarSidecar({ orca, scriptPath, authDir, toolsDir = TOOLS,
   }
 }
 
-// Cada cuanto late el worker, y a partir de cuando el panel lo da por ido. El panel
-// relee cada 8 s, asi que 5 s de latido y 30 s de tolerancia no marcan muerto a un
-// worker que solo estaba ocupado en una llamada de 30 s a la CLI de Orca.
-const LATIDO_MS = 5 * 1000
-export const LATIDO_VENCE_MS = 30 * 1000
+// Cada cuanto late el worker, y a partir de cuando el panel lo da por ido. Cada
+// `storage.set` reescribe el storage entero del plugin (1,4 MB en una instalacion real) en
+// el proceso principal de Orca: con 5 s eran 16 MB por minuto solo del latido. Late cada
+// 20 s, y enseguida si cambia lo que lleva (`crearLatido`). 90 s de tolerancia no marcan
+// muerto a un worker que perdio un latido y estaba en una llamada de 30 s a la CLI de Orca.
+// El tick lo da por muerto a los 3 min (`WORKER_MUERTO_S`, bin/wa-scope).
+export const LATIDO_MS = 20 * 1000
+export const LATIDO_VENCE_MS = 90 * 1000
+// Cada cuanto se mira si cambio lo que lleva el latido: sin llamar al host.
+const LATIDO_MIRA_MS = 5 * 1000
+
+/**
+ * El latido: `escribir({ at, ...contenido() })` la primera vez, cuando cambia lo que lleva
+ * (sin contar `at`) y, sin cambios, cada `cadaMs`. Devuelve `latir()`, que se puede llamar
+ * tan seguido como se quiera: solo escribe cuando toca.
+ */
+export function crearLatido ({ escribir, contenido, ahora = () => Date.now(),
+  cadaMs = LATIDO_MS }) {
+  let dicho = null
+  let escritoMs = null
+  return function latir () {
+    const datos = contenido()
+    const clave = JSON.stringify(datos)
+    if (clave === dicho && ahora() - escritoMs < cadaMs) return Promise.resolve()
+    dicho = clave
+    escritoMs = ahora()
+    return Promise.resolve(escribir(Object.assign({ at: new Date(escritoMs).toISOString() },
+      datos)))
+  }
+}
 
 // Cuanto tiene que vivir un sidecar para que su salida no cuente como "otra vez lo
 // mismo". Por debajo de esto, salir de nuevo es un bucle; por encima, es un evento
@@ -1925,16 +1950,22 @@ export default function activate(orca) {
   // El latido lleva tambien a que ritmo quedo el triage en Orca (ritmo-triage): el panel
   // ya lo sondea, y una clave aparte le gastaria cupo de mensajes al host.
   // Y las lineas que nadie esta atendiendo (linea-viva, V5): solo cuando hay alguna.
+  // Se mira cada LATIDO_MIRA_MS (sin llamar al host) y se escribe solo cuando toca: la
+  // holgura de media mirada hace que el latido sin cambios salga a los 20 s, no a los 25.
   let ritmoTriage = null
   let lineasSinAtencion = () => null
-  const latir = () => {
-    const lineas = lineasSinAtencion()
-    return guardar(orca, BEAT_KEY, Object.assign({ at: new Date().toISOString() },
-      ritmoTriage ? { triage: ritmoTriage } : {}, lineas ? { lineas } : {}))
-      .catch((error) => orca.log(`heartbeat failed: ${error.message}`))
-  }
+  const latir = crearLatido({
+    escribir: (beat) => guardar(orca, BEAT_KEY, beat)
+      .catch((error) => orca.log(`heartbeat failed: ${error.message}`)),
+    contenido: () => {
+      const lineas = lineasSinAtencion()
+      return Object.assign({}, ritmoTriage ? { triage: ritmoTriage } : {},
+        lineas ? { lineas } : {})
+    },
+    cadaMs: LATIDO_MS - LATIDO_MIRA_MS / 2
+  })
   latir()
-  const latidoTimer = setInterval(latir, LATIDO_MS)
+  const latidoTimer = setInterval(latir, LATIDO_MIRA_MS)
   if (typeof latidoTimer.unref === 'function') latidoTimer.unref()
 
   // Declarado ACA arriba, y no mas abajo junto a `syncTimer`: lo necesitan tambien las
@@ -3004,7 +3035,7 @@ export default function activate(orca) {
   // las fallas van a la bitacora en disco. Arranca despues de resolver la casa de Orca, como
   // las automatizaciones: el tick abre agentes por su CLI. `respaldoCadaMs` y
   // `respaldoAvisoMs` son internos, como `sidecarPath`: existen para que las pruebas no
-  // esperen minutos. El incidente viaja en el latido (V5), que ya se escribe cada 5 s.
+  // esperen minutos. El incidente viaja en el latido (V5): sale en cuanto cambia.
   let pararRespaldo = () => {}
   casaResuelta.then(() => settings()).then((s) => {
     if (detenido) return
@@ -3028,7 +3059,7 @@ export default function activate(orca) {
       anotar: anotarFalla, manifiesto, detenido: () => detenido, avisar: avisarIncidente,
       avisoMs: entero(s.respaldoAvisoMs, INCIDENTE_AVISO_MS) })
     lineasSinAtencion = respaldoTick.estado
-    pararRespaldo = programarSalud(() => respaldoTick.vuelta()
+    pararRespaldo = programarSalud(() => respaldoTick.vuelta().then(() => latir())
       .catch((error) => orca.log(`backup tick failed: ${error.message}`)),
     entero(s.respaldoCadaMs, 0) || RESPALDO_CADA_MS)
   }).catch((error) => orca.log(`backup tick not scheduled: ${error.message}`))

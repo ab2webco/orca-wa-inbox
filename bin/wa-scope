@@ -14367,7 +14367,7 @@ def tick_previo(con):
 
 
 # ── El worker muerto (odd/tasks/linea-viva-2.md, W5) ──────────────────────────────────────
-# El worker late cada 5 s en el storage del plugin (`workerBeat.at`, main.mjs). Con el muerto
+# El worker late cada 20 s en el storage del plugin (`workerBeat.at`, main.mjs). Con el muerto
 # se van el respaldo del tick y los avisos de las lineas (linea-viva V4 y V5), y nada lo
 # decia. El tick, que corre Orca, lo mira: un latido de mas de 3 minutos sale en el resumen
 # (`worker_muerto`), y al dueno le llega UN aviso por incidente (el incidente es ese latido)

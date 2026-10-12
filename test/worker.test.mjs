@@ -1378,12 +1378,69 @@ console.log('\nworker: el latido')
     JSON.stringify(orca.store.workerBeat))
   // Lo que importa: late aunque TODO lo demas falle. Este host no tiene herramientas
   // que corran, y aun asi el panel tiene que poder distinguirlo de un plugin ausente.
-  const primero = orca.store.workerBeat.at
-  await new Promise((r) => setTimeout(r, 6000))
-  ok('y sigue latiendo con las herramientas rotas',
-    orca.store.workerBeat.at !== primero,
-    `${primero} -> ${orca.store.workerBeat.at}`)
+  // Y no mas de lo que hace falta: cada `storage.set` reescribe el storage entero del
+  // plugin (1,4 MB en una instalacion real) en el proceso principal de Orca.
+  const { LATIDO_MS } = await import('../main.mjs')
+  const escritos = []
+  const llamar = orca.host.call
+  orca.host.call = async (action, params) => {
+    if (action === 'storage.set' && params.key === 'workerBeat') escritos.push(params.value)
+    return llamar(action, params)
+  }
+  await dormir(LATIDO_MS + 1500)
+  const iguales = escritos.filter((v, i) => i > 0 &&
+    JSON.stringify(Object.assign({}, v, { at: 0 })) ===
+    JSON.stringify(Object.assign({}, escritos[i - 1], { at: 0 })))
+  ok('y sigue latiendo con las herramientas rotas', escritos.length >= 1,
+    JSON.stringify(escritos))
+  ok('sin nada nuevo, un latido por LATIDO_MS y no mas', iguales.length <= 1,
+    `${escritos.length} escritos, ${iguales.length} iguales al anterior`)
   apagar()
+}
+
+// ───────── el latido cuesta poco: cada LATIDO_MS, o en cuanto cambia lo que lleva ─────────
+console.log('\nworker: el latido no reescribe el storage cada 5 s')
+{
+  const { crearLatido, LATIDO_MS, LATIDO_VENCE_MS } = await import('../main.mjs')
+  ok('late cada 20 s o mas', LATIDO_MS >= 20000, String(LATIDO_MS))
+  ok('y el panel no lo da por ido antes de perder tres latidos',
+    LATIDO_VENCE_MS >= 3 * LATIDO_MS, `${LATIDO_VENCE_MS} vs ${LATIDO_MS}`)
+  const scope = readFileSync(join(PLUGIN_DIR, 'bin', 'wa-scope'), 'utf8')
+  const muerto = /^WORKER_MUERTO_S = (\d+)$/m.exec(scope)
+  ok('ni el tick antes que el panel', !!muerto && Number(muerto[1]) * 1000 > LATIDO_VENCE_MS,
+    `${muerto && muerto[1]} s vs ${LATIDO_VENCE_MS} ms`)
+
+  let reloj = 1_000_000
+  let datos = {}
+  const escritos = []
+  const latir = crearLatido({ escribir: async (v) => { escritos.push(v) },
+    contenido: () => datos, ahora: () => reloj })
+  await latir()
+  ok('el primero se escribe en el acto', escritos.length === 1 &&
+    escritos[0].at === new Date(1_000_000).toISOString(), JSON.stringify(escritos))
+  reloj += 5000
+  await latir()
+  reloj += 10000
+  await latir()
+  ok('lo mismo antes de LATIDO_MS no se reescribe', escritos.length === 1,
+    JSON.stringify(escritos))
+  reloj += 1000
+  datos = { triage: { minutes: 2, ok: true } }
+  await latir()
+  ok('lo que cambia se escribe enseguida', escritos.length === 2 &&
+    escritos[1].triage?.minutes === 2, JSON.stringify(escritos))
+  datos = { triage: { minutes: 2, ok: true }, lineas: { a: { motivo: 'sin-tick' } } }
+  await latir()
+  ok('tambien las lineas sin atender', escritos.length === 3 &&
+    escritos[2].lineas?.a?.motivo === 'sin-tick', JSON.stringify(escritos))
+  reloj += LATIDO_MS - 1
+  await latir()
+  ok('y sin cambios espera LATIDO_MS', escritos.length === 3, JSON.stringify(escritos))
+  reloj += 1
+  await latir()
+  ok('cumplido, late otra vez con lo mismo', escritos.length === 4 &&
+    escritos[3].lineas?.a?.motivo === 'sin-tick' &&
+    escritos[3].at === new Date(reloj).toISOString(), JSON.stringify(escritos))
 }
 
 // ───────── el arnes no se siembra desde dentro de la valla ─────────

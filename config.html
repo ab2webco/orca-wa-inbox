@@ -3339,10 +3339,11 @@
         caja.hidden = false
       }
 
-      // Cuanto puede tardar un latido antes de darlo por ido. El worker late cada 5 s
+      // Cuanto puede tardar un latido antes de darlo por ido. El worker late cada 20 s
       // y una llamada a la CLI de Orca lo puede tener ocupado 30: por debajo de eso se
-      // marcaria muerto a un worker que solo estaba trabajando.
-      var LATIDO_VENCE_MS = 30000
+      // marcaria muerto a un worker que solo estaba trabajando. El MISMO numero que
+      // `LATIDO_VENCE_MS` de main.mjs (la prueba de paneles los compara).
+      var LATIDO_VENCE_MS = 90000
 
       /** Si no hay nadie corriendo, y decirlo. Devuelve true cuando tomo el aviso.
        *
