@@ -13069,13 +13069,26 @@ try:
     # no salen de a uno: se juntan y sale UN resumen por ventana, solo si algo termino.
     WT_BETA = "repo-b::/srv/ejemplo/beta-demo"
 
+    def reloj_de_prueba():
+        """El reloj de mentira de los resumenes, anclado: `id_orca` agrupa el `at` de un turno en
+        ventanas de cinco minutos (VENTANA_ORCA_S), y los turnos de una prueba caen a 35 y a 120
+        segundos del reloj. Con el reloj en cualquier punto, los dos caen a veces en la misma
+        ventana (mismo id: el segundo turno no cuenta) segun la hora a la que se corre. Se ancla
+        a 80 segundos pasado un multiplo de cinco minutos (los dos turnos en ventanas distintas)
+        y a media hora (lejos del cambio de ventana del resumen, que la prueba cruza sumando
+        3600). `CHECK_CASOS_AHORA` (epoch) finge la hora real, para probar cualquier desfase."""
+        t = float(os.environ.get("CHECK_CASOS_AHORA") or time.time())
+        hora = time.localtime(t)
+        medianoche = t - (hora.tm_hour * 3600 + hora.tm_min * 60 + hora.tm_sec)
+        return medianoche + 12 * 3600 + 30 * 60 + 80
+
     def prepara_resumen(home, idioma="es", **campos):
         ws, con, enviados, falsa = prepara_orca(home, idioma, finished="on",
                                                 finishedDelaySeconds="30", **campos)
         falsa.worktrees.append({"worktreeId": WT_BETA, "repoId": "repo-b", "repo": "beta-demo",
                                 "path": "/srv/ejemplo/beta-demo", "branch": "main",
                                 "displayName": "beta-demo", "comment": "", "isArchived": False})
-        reloj = [time.time()]
+        reloj = [reloj_de_prueba()]
         ws.ahora_orca_s = lambda: reloj[0]
         return ws, con, enviados, falsa, reloj
 

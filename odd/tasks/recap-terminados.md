@@ -38,8 +38,8 @@ to the project.
   ES/EN/PT) (check-casos R3).
 - [x] R3 Skill rule + `check-harness` guard (RED observed: guard failed before the rule,
   GREEN after).
-- [x] R4 Task file and final checks (check-casos full: 2391/2395; the 4 failures are the
-  existing R2 clock-window flake, identical on the base commit at the same time of day).
+- [x] R4 Task file and final checks (check-casos full: 2391/2395; the 4 R2 clock-window failures seen at first were then fixed by anchoring the
+  test clock; final full run 2395/2395).
 
 ## Acceptance criteria
 
