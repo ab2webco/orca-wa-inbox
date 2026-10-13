@@ -57,6 +57,17 @@ names that line with `--line "$LINE"`; never pick another one. Exit codes:
 It prints `{"req_id", "estado": "enviado", "stanza_id"}` on exit 0. Add `--id <unique id>`
 when you may retry: the same id is delivered once.
 
+When a long task you ran in this worktree finishes, before you stop, leave one line saying
+what you did. The owner gets an hourly summary of the agents that finished, and this line is
+what it shows next to the project (`WA` is set as in "Find the tools"):
+
+    "$WA/wa-scope" recap "Fixed the login redirect and added a test for it" --json
+
+One line, at most 120 characters, what changed in plain words. No paths, no secrets, no
+prompts. It is not a notice: it sends nothing, and only the latest line of the worktree is
+kept. An error code on stderr (`recap-too-long`, `recap-secret`, ...) means the line was
+rejected: write it again, shorter or without the secret-shaped part.
+
 ## Ask and wait for his reply
 
 Send the question, keep its `stanza_id`, and wait in the same chat:

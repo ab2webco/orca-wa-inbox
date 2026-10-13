@@ -13069,13 +13069,26 @@ try:
     # no salen de a uno: se juntan y sale UN resumen por ventana, solo si algo termino.
     WT_BETA = "repo-b::/srv/ejemplo/beta-demo"
 
+    def reloj_de_prueba():
+        """El reloj de mentira de los resumenes, anclado: `id_orca` agrupa el `at` de un turno en
+        ventanas de cinco minutos (VENTANA_ORCA_S), y los turnos de una prueba caen a 35 y a 120
+        segundos del reloj. Con el reloj en cualquier punto, los dos caen a veces en la misma
+        ventana (mismo id: el segundo turno no cuenta) segun la hora a la que se corre. Se ancla
+        a 80 segundos pasado un multiplo de cinco minutos (los dos turnos en ventanas distintas)
+        y a media hora (lejos del cambio de ventana del resumen, que la prueba cruza sumando
+        3600). `CHECK_CASOS_AHORA` (epoch) finge la hora real, para probar cualquier desfase."""
+        t = float(os.environ.get("CHECK_CASOS_AHORA") or time.time())
+        hora = time.localtime(t)
+        medianoche = t - (hora.tm_hour * 3600 + hora.tm_min * 60 + hora.tm_sec)
+        return medianoche + 12 * 3600 + 30 * 60 + 80
+
     def prepara_resumen(home, idioma="es", **campos):
         ws, con, enviados, falsa = prepara_orca(home, idioma, finished="on",
                                                 finishedDelaySeconds="30", **campos)
         falsa.worktrees.append({"worktreeId": WT_BETA, "repoId": "repo-b", "repo": "beta-demo",
                                 "path": "/srv/ejemplo/beta-demo", "branch": "main",
                                 "displayName": "beta-demo", "comment": "", "isArchived": False})
-        reloj = [time.time()]
+        reloj = [reloj_de_prueba()]
         ws.ahora_orca_s = lambda: reloj[0]
         return ws, con, enviados, falsa, reloj
 
@@ -13266,6 +13279,178 @@ try:
         ok("R2: lo juntado para un numero que ya no es el de aprobacion no sale",
            enviados == [] and filas_de(con, "acumulado") == [], f"{enviados} {estados_orca(con)}")
         con.close()
+
+    # R3 (recap-terminados): el agente que termino deja UNA linea de lo que hizo
+    # (`wa-scope recap`) y el resumen la muestra junto al proyecto.
+    def recap_a(ws, texto, ruta="/srv/ejemplo/alfa-demo"):
+        """`guarda_recap` con la hora del reloj de la prueba."""
+        return ws.guarda_recap(texto, ruta)
+
+    with tempfile.TemporaryDirectory() as home:
+        p = corre(home, "recap", "Fixed the login redirect")
+        ok("R3: sin Orca que conozca la carpeta, el CLI sale distinto de 0 con su codigo",
+           p.returncode != 0 and "recap-no-worktree" in p.stderr
+           and json.loads(p.stdout or "{}").get("codigo") == "recap-no-worktree",
+           f"{p.returncode} {p.stdout} {p.stderr}")
+        p = corre(home, "recap", "una\notra")
+        ok("R3: dos lineas se rechazan antes de mirar Orca", p.returncode != 0
+           and "recap-multiline" in p.stderr, f"{p.returncode} {p.stderr}")
+        ayuda = subprocess.run([str(WA_SCOPE), "recap", "--help"], capture_output=True, text=True,
+                               env=dict(os.environ, HOME=str(home))).stdout
+        ok("R3: la ayuda documenta los codigos de error",
+           all(c in ayuda for c in ("recap-empty", "recap-multiline", "recap-too-long",
+                                    "recap-secret", "recap-no-worktree")), ayuda)
+
+    with tempfile.TemporaryDirectory() as home:
+        ws, con, enviados, falsa, reloj = prepara_resumen(home)
+
+        def codigo(texto):
+            return recap_a(ws, texto)[1]
+        ok("R3: vacio, solo espacios, varias lineas y mas de 120 caracteres se rechazan con su "
+           "codigo",
+           codigo("") == "recap-empty" and codigo("   ") == "recap-empty"
+           and codigo("a\nb") == "recap-multiline" and codigo("a\r\nb") == "recap-multiline"
+           and codigo("x" * 121) == "recap-too-long", "")
+        ok("R3: un valor con forma de secreto se rechaza",
+           codigo("deploy with token ghp_abcdefghijklmnopqrstuvwxyz0123456789") == "recap-secret",
+           "")
+        ok("R3: 120 caracteres justos pasan, y una carpeta que Orca no conoce no guarda nada",
+           codigo("x" * 120) is None
+           and ws.guarda_recap("hola", "/srv/ejemplo/desconocida")[1] == "recap-no-worktree", "")
+        reloj[0] += 5
+        dato, cod = recap_a(ws, "  Fixed the login redirect  ")
+        crudo = ws.plugin_store_raw().get(ws.CLAVE_RECAPS)
+        ok("R3: guarda la ultima por espacio, recortada y con su hora",
+           cod is None and dato == {"estado": "guardado", "worktree": WT_ALFA,
+                                    "at": int(reloj[0] * 1000)}
+           and crudo[WT_ALFA] == {"texto": "Fixed the login redirect", "at": int(reloj[0] * 1000)},
+           f"{dato} {crudo}")
+        recap_a(ws, "Second version")
+        recap_a(ws, "Beta done", "/srv/ejemplo/beta-demo")
+        crudo = ws.plugin_store_raw().get(ws.CLAVE_RECAPS)
+        ok("R3: la segunda reemplaza a la primera del mismo espacio; otro espacio, otra entrada",
+           crudo[WT_ALFA]["texto"] == "Second version" and crudo[WT_BETA]["texto"] == "Beta done"
+           and len(crudo) == 2, f"{crudo}")
+        dato, cod = recap_a(ws, "From a subfolder", "/srv/ejemplo/alfa-demo/src/deep")
+        ok("R3: la carpeta puede ser una subcarpeta del espacio, y no se confunde con otro de "
+           "nombre parecido", cod is None and dato["worktree"] == WT_ALFA
+           and ws.guarda_recap("x", "/srv/ejemplo/alfa-demo-otro")[1] == "recap-no-worktree", "")
+        con.close()
+
+    with tempfile.TemporaryDirectory() as home:
+        ws, con, enviados, falsa, reloj = prepara_resumen(home)
+        pon_paneles(home, turnos(reloj, pA=(WT_ALFA, 100), pB=(WT_ALFA, 90), pC=(WT_BETA, 100)))
+        recap_a(ws, "Fixed the login redirect")
+        vuelta(ws, con)
+        reloj[0] += 3600
+        vuelta(ws, con)
+        t = enviados[0]["texto"] if enviados else ""
+        ok("R3: la linea del proyecto lleva lo que hizo el agente; la que no dejo nada queda "
+           "como siempre",
+           "- alfa-demo · Pagos nuevos x2 — Fixed the login redirect" in t
+           and "\n- beta-demo x1" in t and "beta-demo x1 —" not in t, t)
+        con.close()
+
+    with tempfile.TemporaryDirectory() as home:
+        ws, con, enviados, falsa, reloj = prepara_resumen(home)
+        pon_paneles(home, turnos(reloj, pA=(WT_ALFA, 100), pB=(WT_ALFA, 90)))
+        recap_a(ws, "First thing")
+        reloj[0] += 30
+        recap_a(ws, "Latest thing")
+        vuelta(ws, con)
+        reloj[0] += 3600
+        vuelta(ws, con)
+        t = enviados[0]["texto"] if enviados else ""
+        ok("R3: la ultima de un espacio es la que sale", "— Latest thing" in t
+           and "First thing" not in t, t)
+        con.close()
+
+    with tempfile.TemporaryDirectory() as home:
+        ws, con, enviados, falsa, reloj = prepara_resumen(home)
+        falsa.worktrees.append({"worktreeId": "repo-a::/srv/ejemplo/alfa-demo-2", "repo": "alfa-demo",
+                                "displayName": "Pagos nuevos", "path": "/srv/ejemplo/alfa-demo-2"})
+        pon_paneles(home, turnos(reloj, pA=(WT_ALFA, 100),
+                                 pB=("repo-a::/srv/ejemplo/alfa-demo-2", 90)))
+        recap_a(ws, "Older one")
+        reloj[0] += 10
+        recap_a(ws, "Newer one", "/srv/ejemplo/alfa-demo-2")
+        vuelta(ws, con)
+        reloj[0] += 3600
+        vuelta(ws, con)
+        t = enviados[0]["texto"] if enviados else ""
+        ok("R3: dos espacios con el mismo nombre en una linea: sale la mas reciente, una sola",
+           "alfa-demo · Pagos nuevos x2 — Newer one" in t and "Older one" not in t, t)
+        con.close()
+
+    # La ventana del turno: una linea escrita mucho antes del turno es de otro trabajo; una
+    # escrita despues de armar el resumen todavia no existia.
+    with tempfile.TemporaryDirectory() as home:
+        ws, con, enviados, falsa, reloj = prepara_resumen(home)
+        pon_paneles(home, turnos(reloj, pA=(WT_ALFA, 100), pC=(WT_BETA, 100)))
+        antes = reloj[0]
+        reloj[0] = antes - 100 - ws.RECAP_TOLERANCIA_S - 60
+        recap_a(ws, "Way too old")
+        reloj[0] = antes - 100 - ws.RECAP_TOLERANCIA_S + 20
+        recap_a(ws, "Just before the stop", "/srv/ejemplo/beta-demo")
+        reloj[0] = antes
+        vuelta(ws, con)
+        reloj[0] = antes + 3600
+        crudo = ws.plugin_store_raw().get(ws.CLAVE_RECAPS)
+        crudo[WT_ALFA] = {"texto": "Too late", "at": int((antes + 3600 + 60) * 1000)}
+        ws.plugin_store_write(None, extra={ws.CLAVE_RECAPS: crudo})
+        vuelta(ws, con)
+        t = enviados[0]["texto"] if enviados else ""
+        ok("R3: solo cuenta lo escrito dentro de la ventana del turno (con su tolerancia) y "
+           "antes del resumen", "Way too old" not in t and "Too late" not in t
+           and "beta-demo x1 — Just before the stop" in t, t)
+        con.close()
+
+    with tempfile.TemporaryDirectory() as home:
+        ws, con, enviados, falsa, reloj = prepara_resumen(home)
+        pon_paneles(home, turnos(reloj, pA=(WT_ALFA, 100), pC=(WT_BETA, 100)))
+        recap_a(ws, "Beta shipped", "/srv/ejemplo/beta-demo")
+        crudo = ws.plugin_store_raw().get(ws.CLAVE_RECAPS)
+        crudo[WT_ALFA] = {"texto": "token ghp_abcdefghijklmnopqrstuvwxyz0123456789",
+                          "at": int(reloj[0] * 1000)}
+        ws.plugin_store_write(None, extra={ws.CLAVE_RECAPS: crudo})
+        vuelta(ws, con)
+        reloj[0] += 3600
+        vuelta(ws, con)
+        t = enviados[0]["texto"] if enviados else ""
+        ok("R3: una linea guardada con forma de secreto no viaja: esa linea sale sin ella",
+           "ghp_" not in t and "\n- alfa-demo · Pagos nuevos x1\n" in t
+           and "beta-demo x1 — Beta shipped" in t, t)
+        con.close()
+
+    with tempfile.TemporaryDirectory() as home:
+        ws, con, enviados, falsa, reloj = prepara_resumen(home)
+        for n in range(12):
+            falsa.worktrees.append({"worktreeId": f"repo-{n}::/srv/ejemplo/p{n}",
+                                    "repo": f"proyecto-{n:02d}", "displayName": f"proyecto-{n:02d}",
+                                    "path": f"/srv/ejemplo/p{n}"})
+        pon_paneles(home, turnos(reloj, **{f"p{n}": (f"repo-{n}::/srv/ejemplo/p{n}", 100)
+                                           for n in range(12)}))
+        recap_a(ws, "Done here", "/srv/ejemplo/p3")
+        vuelta(ws, con)
+        reloj[0] += 3600
+        vuelta(ws, con)
+        t = enviados[0]["texto"] if enviados else ""
+        ok("R3: el tope de 10 proyectos y 'y N mas' siguen igual con recaps",
+           t.count("\n- ") == 11 and "- y 2 mas" in t and "proyecto-03 x1 — Done here" in t, t)
+        con.close()
+
+    for idioma, frase in (("en", "since the last summary"), ("pt", "desde o ultimo resumo")):
+        with tempfile.TemporaryDirectory() as home:
+            ws, con, enviados, falsa, reloj = prepara_resumen(home, idioma)
+            pon_paneles(home, turnos(reloj, pA=(WT_ALFA, 100)))
+            recap_a(ws, "Fixed the login redirect")
+            vuelta(ws, con)
+            reloj[0] += 3600
+            vuelta(ws, con)
+            t = enviados[0]["texto"] if enviados else ""
+            ok(f"R3: en {idioma} la linea lleva el recap", frase in t
+               and "alfa-demo · Pagos nuevos x1 — Fixed the login redirect" in t, t)
+            con.close()
 
     # R2: nombres. Sin nombre en Orca, o con forma de secreto, el proyecto es "otros agentes";
     # son muchos proyectos, los primeros y "y N mas"; en cada idioma.

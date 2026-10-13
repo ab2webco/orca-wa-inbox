@@ -1771,12 +1771,22 @@ console.log('\nworker: el arnes se siembra fuera de la valla')
 console.log('\nworker: el sidecar habla, el panel se entera')
 {
   const guion = join(RAIZ, 'sidecar-charla.cjs')
+  // El plugin borra el QR al abrirse la conexion (main.mjs, `state === 'open'`). Por eso la
+  // conexion no se abre hasta que el test haya leido el QR: la senal es un archivo. Con un
+  // plazo fijo, en una maquina lenta el QR se perdia antes de que el test lo viera.
+  const compuerta = join(RAIZ, 'sidecar-charla.abre')
   writeFileSync(guion,
     '#!/usr/bin/env node\n' +
+    'const fs = require("node:fs")\n' +
+    `const compuerta = ${JSON.stringify(compuerta)}\n` +
     'function emit (m) { process.stdout.write(JSON.stringify(m) + "\\n") }\n' +
     'emit({ type: "connection", state: "connecting" })\n' +
     'setTimeout(() => emit({ type: "qr", qr: "QR-DE-PRUEBA", ts: Date.now(), rotation: 1 }), 50)\n' +
-    'setTimeout(() => emit({ type: "connection", state: "open" }), 250)\n' +
+    'const espera = setInterval(() => {\n' +
+    '  if (!fs.existsSync(compuerta)) return\n' +
+    '  clearInterval(espera)\n' +
+    '  emit({ type: "connection", state: "open" })\n' +
+    '}, 20)\n' +
     'setInterval(() => {}, 1000)\n', // se queda vivo hasta que el worker lo mate
     { mode: 0o755 })
 
@@ -1791,6 +1801,7 @@ console.log('\nworker: el sidecar habla, el panel se entera')
     JSON.stringify(conQr && conQr.qr))
   ok('y su marca de tiempo, para que el panel descarte lo vencido',
     conQr && conQr.qr && typeof conQr.qr.ts === 'number', JSON.stringify(conQr && conQr.qr))
+  writeFileSync(compuerta, '') // ya leido: ahora el sidecar abre la conexion
 
   await hasta(() => orca.store.sidecar && orca.store.sidecar.connection === 'open', 10000)
   const conectado = orca.store.sidecar
