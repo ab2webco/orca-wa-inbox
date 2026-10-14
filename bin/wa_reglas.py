@@ -147,6 +147,11 @@ def secreto(texto):
 # ── commitment (only what goes out) ──────────────────────────────────────────────────
 # T22.2: a CONCRETE date or time promised in the reply. The word "fecha", "te confirmo"
 # or "para el" alone promise nothing, and a question ("¿te sirve el viernes?") asks.
+# menos-ruido M2: a date, a day or a time alone describes ("la reunion fue el lunes", "lo
+# recibi el 12/10"). In what goes out it promises only in a sentence that also promises
+# (PROMESA), as a stated deadline (PLAZO: "a mas tardar", "by Friday", "en 2 horas") or as
+# a sentence that is nothing but the date ("El viernes."). Seen live: 33 of 47 replies held
+# for naming a date that promised nothing. In a brief any date still counts (`_menciones`).
 _DIAS = (r"lunes|martes|miercoles|jueves|viernes|sabado|domingo|"
          r"monday|tuesday|wednesday|thursday|friday|saturday|sunday|"
          r"segunda|terca|quarta|quinta|sexta")
@@ -165,16 +170,23 @@ COMPROMISO = re.compile(
     r"amanha|depois de amanha|esta (?:tarde|noite)|(?:a )?proxima semana|"
     r"(?:" + _DIAS + r")(?:-feira)?|"
     r"(?:" + _MESES + r")|"
-    r"by (?:the end|end of|eod|tomorrow|tonight|today|next|this|(?:" + _DIAS + r")|\d)|"
-    r"ate (?:amanha|hoje|o fim|o final|a proxima|o dia|(?:" + _DIAS + r")|\d)|"
-    r"(?:en|in|within|em) (?:\d+|un|una|unos|unas|dos|tres|pocos|pocas|par de|a|an|"
-    r"a few|um|uma|alguns|algumas) ?(?:" + _UNIDADES + r")|"
     r"a las \d|at \d"
     r")\b"
     # dd/mm, dd-mm-yyyy and clock times
     r"|(?<!\d)\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?(?!\d)"
     r"|\b\d{1,2}(?::\d{2})?\s?(?:am|pm|a\.m\.|p\.m\.|hs|hrs)\b"
     r"|(?<!\d)\d{1,2}:\d{2}(?!\d)")
+# A deadline stated as such: it promises on its own.
+PLAZO = re.compile(
+    r"\b(?:"
+    r"by (?:the end|end of|eod|tomorrow|tonight|today|next|this|(?:" + _DIAS + r")|\d)|"
+    r"ate (?:amanha|hoje|o fim|o final|a proxima|o dia|(?:" + _DIAS + r")|\d)|"
+    r"(?:en|in|within|em) (?:\d+|un|una|unos|unas|dos|tres|pocos|pocas|par de|a|an|"
+    r"a few|um|uma|alguns|algumas) ?(?:" + _UNIDADES + r")|"
+    r"a mas tardar|sin falta|no later than|at the latest|sem falta|no maximo"
+    r")\b")
+# What is left of a sentence that is only a date ("El viernes.", "Manana a las 3.").
+SOLO_FECHA_PALABRAS = 2
 # avisos-retenidos A4: in what goes out, "hoy" and "esta manana" also describe ("ese paso hoy
 # solo existe", "los leads de hoy", "tus mensajes de esta manana"): they promise only in a
 # sentence that also promises an action, a future or a delivery verb. "Manana" alone
@@ -182,9 +194,9 @@ COMPROMISO = re.compile(
 # "despliega a produccion hoy" is an order with a date.
 HOY = re.compile(r"\b(?:hoy|today|hoje|esta manana|this morning|esta manha)\b")
 _ENTREGA = (r"mando|mandamos|envio|enviamos|entrego|entregamos|paso|pasamos|confirmo|"
-            r"confirmamos|tengo|tenemos|resuelvo|resolvemos|arreglo|arreglamos|reviso|"
-            r"revisamos|dejo|dejamos|termino|terminamos|corrijo|corregimos|hago|hacemos|"
-            r"llamo|llamamos|escribo|escribimos")
+            r"confirmamos|tengo|tenemos|tienes|tendras|tendra|resuelvo|resolvemos|arreglo|"
+            r"arreglamos|reviso|revisamos|dejo|dejamos|termino|terminamos|corrijo|"
+            r"corregimos|hago|hacemos|llamo|llamamos|escribo|escribimos|veo|vemos|hablamos")
 PROMESA = re.compile(
     r"\b(?:voy a|vamos a|va a|van a|queda|quedan|quedara|quedaran|estara|estaran|"
     # te lo mando, se lo envio, lo revisamos: el verbo con su objeto
@@ -196,14 +208,22 @@ PREGUNTA = re.compile(r"\?\s*$|^\s*[¿?]")
 
 
 def _compromiso(original, hoy_basta=False):
-    """A sentence that is not a question and names a concrete date or time ("hoy" or "esta
-    manana" only with a promise, unless `hoy_basta`). The original text is split, not the
-    normalized one: "¿" survives only there."""
+    """A sentence that is not a question and promises a concrete moment: a stated deadline,
+    a date or time with a promise, or nothing but the date. With `hoy_basta` (a brief) any
+    date or "hoy" counts. The original text is split, not the normalized one: "¿" survives
+    only there."""
     for frase in frases(original):
         if PREGUNTA.search(frase):
             continue
         t = normaliza(frase)
-        if COMPROMISO.search(t) or (HOY.search(t) and (hoy_basta or PROMESA.search(t))):
+        fecha = COMPROMISO.search(t) or HOY.search(t)
+        if hoy_basta:
+            if fecha or PLAZO.search(t):
+                return True
+        elif PLAZO.search(t) or (fecha and (
+                PROMESA.search(t) or
+                len(re.findall(r"\w+", HOY.sub(" ", COMPROMISO.sub(" ", t))))
+                <= SOLO_FECHA_PALABRAS)):
             return True
     return False
 

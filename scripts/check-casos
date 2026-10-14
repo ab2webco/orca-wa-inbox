@@ -1647,6 +1647,8 @@ ok("la fecha pide un momento dicho, y 'we will confirm' ya no es ejemplo de prom
 ok("acusar recibo, decir que lo revisa o que cuenta lo que encuentre no es promesa",
    "Acknowledging the message" in _fecha and "report back" in _fecha
    and "is not a promise" in _fecha, _fecha)
+ok("una fecha que dice cuando paso algo no es promesa (menos-ruido M2)",
+   "when something happened" in _fecha and "is not a promise either" in _fecha, _fecha)
 ok("el estado sin verificar es lo arreglado, resuelto o terminado",
    "fixed, resolved, changed or finished" in _estado, _estado)
 ok("recibirlo, revisarlo ahora o pasarlo a una persona es su propio trabajo, no un estado",
@@ -2810,6 +2812,23 @@ for texto, direccion, esperado in (
         ("hoy vamos a dejarlo listo", "salida", ["commitment"]),
         ("queda listo hoy", "salida", ["commitment"]),
         ("vou te enviar hoje", "salida", ["commitment"]),
+        # menos-ruido M2: una fecha, un dia o una hora solos describen; prometen en una frase
+        # que promete (queda, te lo mando, will...), en un plazo dicho (a mas tardar, by,
+        # en 2 horas) o en una frase que no es mas que la fecha ("El viernes."). Visto en
+        # vivo: 33 de 47 respuestas retenidas por nombrar una fecha sin prometer nada.
+        ("la reunión fue el lunes", "salida", []),
+        ("lo recibí el 12/10 y ya está en la cola", "salida", []),
+        ("the meeting was on Monday", "salida", []),
+        ("tu correo del 5 de octubre ya llegó", "salida", []),
+        ("el error empezó a las 10:30", "salida", []),
+        ("recibimos tu correo del viernes", "salida", []),
+        ("mañana es feriado en Colombia", "salida", []),
+        ("El viernes.", "salida", ["commitment"]),
+        ("Mañana a las 3.", "salida", ["commitment"]),
+        ("Mañana sin falta", "salida", ["commitment"]),
+        ("no later than Friday", "salida", ["commitment"]),
+        ("lo tendrás el lunes", "salida", ["commitment"]),
+        ("nos vemos el jueves a las 4", "salida", ["commitment"]),
         ("le confirmo que sale", "salida", []),
         ("te confirmo apenas lo vea el equipo", "salida", []),
         ("¿Para qué fecha lo necesitas?", "salida", []),
