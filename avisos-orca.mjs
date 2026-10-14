@@ -25,6 +25,8 @@ export const PANELES_KEY = 'orcaPanes'
 // y cada otra linea en `ajustesPorLinea[<numero>].orcaNotices` (todo-por-linea, P1).
 export const AVISOS_ORCA_KEY = 'orcaNotices'
 export const AJUSTES_POR_LINEA_KEY = 'ajustesPorLinea'
+// El registro de lineas vinculadas que escribe el worker (`LINEAS_KEY` de main.mjs).
+export const LINEAS_KEY = 'lineas'
 // Un panel que no se movio en un dia ya no importa: se olvida.
 export const PANELES_VIDA_MS = 24 * 60 * 60 * 1000
 // Y nunca mas de estos: el storage entero viaja en cada lectura del panel.
@@ -60,11 +62,24 @@ const texto = (v) => typeof v === 'string' && v.trim() ? v.trim() : null
 
 /** Si alguna linea tiene encendido el aviso de espera: la principal (`raiz`, lo de la raiz)
  *  o cualquier otra en su contenedor. Es solo la compuerta para no lanzar un proceso por
- *  nada: `wa-scope orca-aviso` corre en cada linea y cada una decide con lo suyo. */
-export function algunaLineaEspera (raiz, contenedor) {
+ *  nada: `wa-scope orca-aviso` corre en cada linea y cada una decide con lo suyo. Con
+ *  `vinculadas` (las cuentas del registro) una linea desvinculada no cuenta; null, todas. */
+export function algunaLineaEspera (raiz, contenedor, vinculadas = null) {
   if (raiz?.waiting === 'on') return true
-  const lineas = contenedor && typeof contenedor === 'object' ? Object.values(contenedor) : []
+  const lineas = contenedor && typeof contenedor === 'object'
+    ? Object.entries(contenedor).filter(([cuenta]) =>
+      !Array.isArray(vinculadas) || vinculadas.includes(cuenta)).map(([, l]) => l)
+    : []
   return lineas.some((l) => l && typeof l === 'object' && l.orcaNotices?.waiting === 'on')
+}
+
+/** Las cuentas del registro de lineas (`lineas`), o null sin registro con cuentas. */
+function cuentasDelRegistro (valor) {
+  const cuentas = Array.isArray(valor)
+    ? valor.map((l) => l && typeof l === 'object' ? l.cuenta : null)
+      .filter((c) => typeof c === 'string' && c)
+    : []
+  return cuentas.length ? cuentas : null
 }
 
 /** El estado nuevo de los paneles con un evento: `{ paneles, cambio, avisar }`.
@@ -153,7 +168,8 @@ export function crearAvisosOrca ({ leer, guardar, lanzar, llave, log = () => {},
       if (!r.avisar) return
       const raiz = await leer(AVISOS_ORCA_KEY)
       const contenedor = raiz?.waiting === 'on' ? null : await leer(AJUSTES_POR_LINEA_KEY)
-      if (!algunaLineaEspera(raiz, contenedor) || detenido) return
+      const vinculadas = contenedor ? cuentasDelRegistro(await leer(LINEAS_KEY)) : null
+      if (!algunaLineaEspera(raiz, contenedor, vinculadas) || detenido) return
       await lanzar(argsDeAviso(payload))
     }).catch((error) => log(`orca notice failed: ${String(error?.message ?? error).slice(0, 200)}`))
     return fila

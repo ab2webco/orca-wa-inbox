@@ -64,8 +64,9 @@ const PLUGIN_DIR = dirname(dirname(fileURLToPath(import.meta.url)))
 const {
   default: activate, intervaloSync, lanzarSidecar, programarIngesta, correrIngesta,
   INGESTA_AVISOS_MAX, INGESTA_ESPERA_MS, sembrarAjustesDeLinea, AJUSTES_DE_LINEA,
-  NO_HEREDAN, intervalosDeLineas, lineasDelTurno, sync
+  NO_HEREDAN, intervalosDeLineas, lineasDelTurno, sync, quitarLineaDelStorage, jevPorLinea
 } = await import('../main.mjs')
+const { algunaLineaEspera } = await import('../avisos-orca.mjs')
 const { workspaceDir, dataDir } = await import('../harness.mjs')
 
 // Un sidecar de mentira para TODO el resto de las pruebas de este archivo: sin esto
@@ -2958,6 +2959,10 @@ console.log('\nworker: L2 — un sidecar por linea, y cada pedido toca solo la s
       JSON.stringify(raro))
 
     // Desvincular UNA linea: la suya y nada mas.
+    orca.store.porLinea = { 'pn:573000000001': { board: { v: 1, counts: { decision: 1 } } } }
+    orca.store.alcancePorLinea = { 'pn:573000000001': { 'a@g.us': { mode: 'responder' } } }
+    orca.store.ajustesPorLinea = { 'pn:573000000001': { agentName: 'De La Que Sale' } }
+    orca.store.skillsLine = 'pn:573000000001'
     const antesOtra = vidasDe('pn-573000000002').length
     orca.store.sidecarRequest = { id: 'pedido-desv-1', action: 'desvincular',
       carpeta: 'pn-573000000001', at: new Date().toISOString() }
@@ -2972,6 +2977,12 @@ console.log('\nworker: L2 — un sidecar por linea, y cada pedido toca solo la s
     ok('y sale del registro y de los estados que lee el panel',
       !(orca.store.lineas || []).some((l) => l.carpeta === 'pn-573000000001') &&
       !orca.store.sidecars?.['pn-573000000001'], JSON.stringify({ l: orca.store.lineas, s: orca.store.sidecars }))
+    ok('D2: y lo que guardaba en el storage se va con ella (tablero, alcance, ajustes, skills)',
+      !('pn:573000000001' in (orca.store.porLinea || {})) &&
+      !('pn:573000000001' in (orca.store.alcancePorLinea || {})) &&
+      !('pn:573000000001' in (orca.store.ajustesPorLinea || {})) && orca.store.skillsLine === null,
+      JSON.stringify({ p: orca.store.porLinea, a: orca.store.alcancePorLinea,
+        j: orca.store.ajustesPorLinea, s: orca.store.skillsLine }))
 
     // Desvincular la principal con otra todavia vinculada: la otra pasa a ser la principal.
     orca.store.sidecarRequest = { id: 'pedido-desv-2', action: 'desvincular', at: new Date().toISOString() }
@@ -2990,6 +3001,97 @@ console.log('\nworker: L2 — un sidecar por linea, y cada pedido toca solo la s
     process.env.XDG_CONFIG_HOME = xdgAntes
     process.env.APPDATA = appAntes
   }
+}
+
+// ───────── D2: desvincular una linea no deja nada suyo en el storage ─────────
+// Lo de la linea que sale (su tablero, su alcance, sus informes, sus ajustes, la eleccion de
+// las skills) se va con ella: si no, la insignia la sigue contando, Jev la sigue listando y
+// volver a vincular el numero revive permisos que el dueno ya corto. Si la que sale es la
+// principal, lo de la que queda pasa a la raiz: si no, la que queda lee los ajustes y el
+// alcance de la que se fue y los suyos quedan guardados sin que nadie los mire.
+console.log('\nworker: D2 — desvincular una linea no deja nada suyo en el storage')
+{
+  const SALE = 'pn:573000000021'
+  const QUEDA = 'pn:573000000022'
+  const OTRA = 'pn:573000000023'
+  const datos = {
+    scope: { 'a@g.us': { mode: 'responder' } },
+    board: { v: 1, counts: { decision: 3 } },
+    chats: [{ jid: 'a@g.us' }],
+    reports: { v: 1, de: 'raiz' },
+    agentName: 'Agente De La Que Sale',
+    tone: 'Tono de la que sale',
+    approvalNumber: '100000000000021@lid',
+    orcaNotices: { waiting: 'on' },
+    porLinea: {
+      [SALE]: { board: { v: 1, counts: { decision: 1 } } },
+      [QUEDA]: { board: { v: 1, counts: { decision: 0 } }, chats: [{ jid: 'b@g.us' }] },
+      [OTRA]: { board: { v: 1, counts: { decision: 2 } } }
+    },
+    alcancePorLinea: { [SALE]: { 'x@g.us': { mode: 'responder' } },
+      [QUEDA]: { 'b@g.us': { mode: 'borrador' } } },
+    informesPorLinea: { [SALE]: { v: 1 }, [QUEDA]: { v: 1, de: 'queda' } },
+    ajustesPorLinea: {
+      [SALE]: { agentName: 'Propio De La Que Sale' },
+      [QUEDA]: { agentName: 'Agente De La Que Queda', tone: null, approvalNumber: '100000000000022@lid' }
+    },
+    skillsLine: SALE
+  }
+  const antes = JSON.stringify(datos)
+
+  const secundaria = quitarLineaDelStorage(datos, SALE, null)
+  ok('la que sale deja de estar en cada contenedor por linea',
+    !(SALE in secundaria.porLinea) && !(SALE in secundaria.alcancePorLinea) &&
+    !(SALE in secundaria.informesPorLinea) && !(SALE in secundaria.ajustesPorLinea),
+    JSON.stringify(secundaria))
+  ok('lo de las otras lineas queda igual',
+    JSON.stringify(secundaria.porLinea[OTRA]) === JSON.stringify(datos.porLinea[OTRA]) &&
+    JSON.stringify(secundaria.alcancePorLinea[QUEDA]) === JSON.stringify(datos.alcancePorLinea[QUEDA]),
+    JSON.stringify(secundaria))
+  ok('las skills que avisaban por ella vuelven a la principal (null)',
+    'skillsLine' in secundaria && secundaria.skillsLine === null, JSON.stringify(secundaria))
+  ok('si la que sale no es la principal, la raiz no se toca',
+    !('scope' in secundaria) && !('board' in secundaria) && !('agentName' in secundaria),
+    JSON.stringify(Object.keys(secundaria)))
+  ok('no muta lo que recibe', JSON.stringify(datos) === antes)
+
+  const principal = quitarLineaDelStorage(datos, SALE, QUEDA)
+  ok('si sale la principal, el alcance de la que queda pasa a la raiz',
+    JSON.stringify(principal.scope) === JSON.stringify({ 'b@g.us': { mode: 'borrador' } }),
+    JSON.stringify(principal.scope))
+  ok('y su tablero, sus chats y sus informes; lo que no tenia guardado queda vacio',
+    principal.board?.counts?.decision === 0 &&
+    JSON.stringify(principal.chats) === JSON.stringify([{ jid: 'b@g.us' }]) &&
+    principal.reports?.de === 'queda' && principal.activity === null, JSON.stringify(principal))
+  ok('sus ajustes propios pasan a la raiz, tambien el vacio (null)',
+    principal.agentName === 'Agente De La Que Queda' && principal.tone === null &&
+    principal.approvalNumber === '100000000000022@lid', JSON.stringify(principal))
+  ok('los avisos de Orca, que no se heredan, quedan de fabrica (null)',
+    'orcaNotices' in principal && principal.orcaNotices === null, JSON.stringify(principal))
+  ok('un ajuste que la que queda no tenia propio sigue siendo el de la raiz: no se escribe',
+    !('ownerName' in principal), JSON.stringify(Object.keys(principal)))
+  ok('y ninguna de las dos queda en los contenedores por linea',
+    !(SALE in principal.porLinea) && !(QUEDA in principal.porLinea) &&
+    !(QUEDA in principal.alcancePorLinea) && !(QUEDA in principal.informesPorLinea) &&
+    !(QUEDA in principal.ajustesPorLinea) && OTRA in principal.porLinea,
+    JSON.stringify(principal))
+
+  const sinNada = quitarLineaDelStorage({}, SALE, null)
+  ok('sin nada guardado de la linea no hay nada que escribir',
+    Object.keys(sinNada).length === 0, JSON.stringify(sinNada))
+
+  // D3: una instalacion que desvinculo antes de esta version guarda los ajustes de la linea
+  // que se fue. Jev y la compuerta de los avisos de Orca miran solo las vinculadas.
+  const ajustes = { [SALE]: { jevEnabled: true, orcaNotices: { waiting: 'on' } },
+    [QUEDA]: { jevEnabled: false } }
+  const jev = jevPorLinea(false, ajustes, [QUEDA])
+  ok('D3: Jev no lista ni enciende una linea que ya no esta vinculada',
+    !(SALE in jev.lineas) && jev.alguna === false, JSON.stringify(jev))
+  ok('D3: sin registro de lineas (null) se miran todas, como antes',
+    jevPorLinea(false, ajustes, null).alguna === true)
+  ok('D3: el aviso de espera de Orca no se lanza por una linea desvinculada',
+    algunaLineaEspera({ waiting: 'off' }, ajustes, [QUEDA]) === false &&
+    algunaLineaEspera({ waiting: 'off' }, ajustes, null) === true)
 }
 
 // ───────── A4: una linea nueva empieza con los ajustes de la principal ─────────
