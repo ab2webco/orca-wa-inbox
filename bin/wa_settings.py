@@ -546,7 +546,8 @@ PANEL_ORCA_CAMPOS = {"waiting": "orca_notice_waiting", "finished": "orca_notice_
                      "quietStart": "orca_quiet_start", "quietEnd": "orca_quiet_end",
                      "hourlyCap": "orca_notice_hourly_cap",
                      "finishedDelaySeconds": "orca_finished_delay_s",
-                     "finishedDigestMinutes": "orca_finished_digest_min"}
+                     "finishedDigestMinutes": "orca_finished_digest_min",
+                     "claudeRecap": "orca_claude_recap"}
 # Las horas de silencio, en hora local de la maquina: `HH:MM` de 24 horas, o vacio. Vaciar
 # una es una eleccion (quita el silencio), no un valor que falta.
 CONFIG_HORAS = ("orca_quiet_start", "orca_quiet_end")
@@ -570,6 +571,7 @@ CONFIG_OPCIONES = {
     "orca_notice_waiting": ("on", "off"),
     "orca_notice_finished": ("on", "off"),
     "orca_notice_automation": ("on", "off"),
+    "orca_claude_recap": ("on", "off"),
     "sign_messages": ("on", "off"),
 }
 CONFIG_NUMERICOS = ("inbox_days", "lock_ttl_s", "sync_minutes",
