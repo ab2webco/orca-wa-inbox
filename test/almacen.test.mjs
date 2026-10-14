@@ -1633,6 +1633,31 @@ console.log('\ningesta: la libreta de nombres y los directos')
   ok('y el nombre queda en memoria por los dos',
     memoria.get(DIRECTO_PN) === 'Persona Por Lid' &&
     memoria.get('111122224444@lid') === 'Persona Por Lid')
+
+  // La libreta del telefono se guarda aunque no haya directo (nombres-de-libreta): casi
+  // todos los miembros de los grupos nunca le escribieron al dueno, y su nombre se perdia
+  // al reiniciar. Se guarda por cada forma del contacto (telefono y LID), y lo que el dueno
+  // guardo en su telefono no lo pisa el nombre que la persona se puso en WhatsApp.
+  const nombreGuardado = (jid) => alm.con.prepare(
+    'select nombre, fuente from contacto where account=? and jid=?').get(CUENTA, jid)
+  ok('el nombre de la libreta de alguien sin directo queda guardado, por telefono y por LID',
+    nombreGuardado('573009999999@s.whatsapp.net')?.nombre === 'Nunca Escribio' &&
+    nombreGuardado('111122224444@lid')?.nombre === 'Persona Por Lid' &&
+    nombreGuardado(DIRECTO_PN)?.fuente === 'libreta',
+    JSON.stringify(nombreGuardado('573009999999@s.whatsapp.net')))
+  ingerirContactos({ almacen: alm, cuenta: CUENTA, esPropio, recordarNombre,
+    contactos: [{ id: '111122224444@lid', notify: 'Apodo Propio' }] })
+  ok('el nombre que la persona se puso no pisa el de la libreta',
+    nombreGuardado('111122224444@lid')?.nombre === 'Persona Por Lid')
+  ingerirContactos({ almacen: alm, cuenta: CUENTA, esPropio, recordarNombre,
+    contactos: [{ id: '111122225555@lid', notify: 'Solo Apodo' }] })
+  ingerirContactos({ almacen: alm, cuenta: CUENTA, esPropio, recordarNombre,
+    contactos: [{ id: '111122225555@lid', name: 'Nombre Guardado' }] })
+  ok('pero la libreta si reemplaza un apodo, y queda dicho de donde salio',
+    JSON.stringify(nombreGuardado('111122225555@lid')) ===
+      JSON.stringify({ nombre: 'Nombre Guardado', fuente: 'libreta' }),
+    JSON.stringify(nombreGuardado('111122225555@lid')))
+  ok('el dueno no se guarda como contacto', !nombreGuardado(MI_LID))
   alm.cerrar()
 }
 

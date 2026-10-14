@@ -31,6 +31,13 @@ C. Features: delivery/read status of our sends; owner reactions as signals; quot
   has an 8 s limit and falls back to Baileys' own; newsletters and broadcast are ignored at
   the socket (`shouldIgnoreJid`); 428 and 503 closes are named `socket-caido`
   (sidecar-pairing: RED missing export, GREEN 128/128; bundle 11/11).
+- [x] N1 Address book names (nombres-de-libreta): group members are LIDs and almost none
+  ever wrote to the owner, so names from his phone were dropped (`nombrarChat` only updated
+  existing chats). New `contacto` table (by phone and LID, source libreta > verificado >
+  apodo, a lower source never overwrites a higher one), `contacts.update` listened, and the
+  Python side (`NombresDeLibreta`) names message authors, senders and group members as the
+  owner saved them, through the LID-phone pair (almacen RED no such table, GREEN 357/357;
+  check-clis RED missing class, GREEN 550).
 - [ ] B1 `markOnlineOnConnect: false` (owner OK needed: it changes the "online" status).
 - [ ] C1 Delivery and read status of our sends, stored on the outbox.
 - [ ] C2-C6 Owner decisions, not started.

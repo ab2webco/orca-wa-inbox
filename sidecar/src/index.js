@@ -885,6 +885,9 @@ async function iniciar () {
     }
     sock.ev.on('contacts.upsert', anotarContactos)
     sock.ev.on('contacts.set', ({ contacts }) => anotarContactos(contacts))
+    // Un cambio de nombre (el que la persona se pone, o uno nuevo en la libreta) llega
+    // parcial por aca (nombres-de-libreta): sin escucharlo, el nombre quedaba el viejo.
+    sock.ev.on('contacts.update', anotarContactos)
 
     // Los pares LID-telefono que Baileys 7 avisa por su cuenta (y que guarda para
     // descifrar): contabilidad para `lid_telefono`, como los de la libreta.

@@ -6372,6 +6372,8 @@ def caso_hilo(con, caso, stanzas, una_linea=True):
             f"media_type, media_bytes, media_path from mensaje where account=? and chat_jid=? "
             f"and revocado=0 and (stanza_id in ({marcas}) or (from_me=1 and ts >= ?)) order by ts, rowid",
             (caso["account"], caso["chat_jid"], *stanzas, propios["t"])).fetchall()
+        # Quien escribio, como el dueno lo guardo en su telefono (nombres-de-libreta).
+        nombres = wa_store.NombresDeLibreta(fuente)
     except sqlite3.Error:
         return None
     finally:
@@ -6383,7 +6385,7 @@ def caso_hilo(con, caso, stanzas, una_linea=True):
         texto, transcripcion = texto_de_audio(con, caso, r,
                                               cuerpo.replace("\n", " ") if una_linea else cuerpo)
         x = {"stanza_id": r["stanza_id"], "date": wa_store.ts(r["ts"]), "ts": r["ts"],
-             "from_me": bool(r["from_me"]), "sender": wa_store.quien(r), "text": texto,
+             "from_me": bool(r["from_me"]), "sender": wa_store.quien(r, nombres, caso["account"]), "text": texto,
              "media": media_de_fila(r), "en_caso": r["stanza_id"] in stanzas,
              "respondido": bool(i < ultima and not r["from_me"])}
         if transcripcion is not None:

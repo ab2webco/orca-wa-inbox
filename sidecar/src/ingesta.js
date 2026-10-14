@@ -191,6 +191,19 @@ export function nombreDeContacto (contacto) {
     texto(contacto?.notify) || ''
 }
 
+/** `{ nombre, fuente }` del contacto, con lo que el dueno guardo en su telefono primero
+ *  (`name`), despues el de una cuenta de empresa (`verifiedName`) y al final el que la
+ *  persona se puso (`notify`); null sin ninguno. */
+export function fuenteDeNombre (contacto) {
+  const texto = (v) => (typeof v === 'string' ? v.trim() : '')
+  if (texto(contacto?.name)) return { nombre: texto(contacto.name), fuente: 'libreta' }
+  if (texto(contacto?.verifiedName)) {
+    return { nombre: texto(contacto.verifiedName), fuente: 'verificado' }
+  }
+  if (texto(contacto?.notify)) return { nombre: texto(contacto.notify), fuente: 'apodo' }
+  return null
+}
+
 export function ingerirContactos ({ almacen, cuenta, contactos, recordarNombre = () => {},
   esPropio = () => false }) {
   let nombrados = 0
@@ -207,12 +220,16 @@ export function ingerirContactos ({ almacen, cuenta, contactos, recordarNombre =
     if (par && !esPropio(par.lid) && !esPropio(par.pn)) almacen.anotarTelefono({ cuenta, ...par })
     const nombre = nombreDeContacto(contacto)
     if (!nombre) continue
+    // El nombre que se guarda aunque no haya directo: el de la libreta primero, porque es
+    // como el dueno conoce a esa persona.
+    const guardado = fuenteDeNombre(contacto)
     // El directo puede estar guardado con cualquiera de las formas, asi que se nombran
     // todas las que traiga.
     const formas = [...new Set([jid, lid, pn])]
       .filter((cual) => cual && (cual === jid || !esPropio(cual)))
     for (const cual of formas) {
       recordarNombre(cual, nombre)
+      if (guardado) almacen.nombrarContacto({ cuenta, jid: cual, ...guardado })
       // Solo pone nombre donde no lo hay. La libreta llega en lotes y a destiempo: si ya
       // se sabia como se llama esa conversacion, un lote viejo no puede degradarlo.
       if (almacen.nombrarChat({ cuenta, chatJid: cual, nombre })) nombrados += 1

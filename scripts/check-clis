@@ -1796,10 +1796,14 @@ def revisa_roles(fallos: list) -> int:
                 "{ jid: %r, admin: 1 }, { jid: %r, admin: 0 }] });"
                 "a.reemplazarMiembros({ cuenta: %r, chatJid: %r, miembros: [{ jid: %r }] });"
                 "a.anotarTelefono({ cuenta: %r, lid: %r, pn: %r });"
+                "a.nombrarContacto({ cuenta: %r, jid: %r, nombre: 'Operador Guardado', "
+                "fuente: 'libreta' });"
+                "a.nombrarContacto({ cuenta: %r, jid: %r, nombre: 'Apodo De Nadie', "
+                "fuente: 'apodo' });"
                 "a.activarLinea(%r); a.latir(); a.cerrar();"
                 % ((RAIZ / "sidecar" / "src" / "almacen.js").as_uri(), NUEVA, NUEVA, GRUPO,
                    NUEVA, OTRO, NUEVA, GRUPO, OPER, NADIE, NUEVA, OTRO, JEFA, NUEVA, OPER,
-                   OPER_TEL, NUEVA))
+                   OPER_TEL, NUEVA, OPER_TEL, NUEVA, NADIE, NUEVA))
             subprocess.run([shutil.which("node") or "node", "--input-type=module", "-e", js],
                            env=env, check=True, capture_output=True, timeout=120)
             # El alcance de la linea vinculada: los chats de antes eran de `local`.
@@ -1814,13 +1818,55 @@ def revisa_roles(fallos: list) -> int:
             scope("sync")
             grupos = storage().get("groupMembers")
             hechas += 1
-            if grupos != {GRUPO: [{"id": OPER, "name": "", "phone": "+573007776655"},
-                                  {"id": NADIE, "name": "", "phone": None}]}:
-                fallos.append(f"`sync` no empuja groupMembers de los grupos del alcance: "
-                              f"{grupos!r}")
+            # nombres-de-libreta: el nombre que el dueno guardo en su telefono llega por el
+            # telefono del LID; sin libreta, el apodo que la persona se puso.
+            if grupos != {GRUPO: [{"id": NADIE, "name": "Apodo De Nadie", "phone": None},
+                                  {"id": OPER, "name": "Operador Guardado",
+                                   "phone": "+573007776655"}]}:
+                fallos.append(f"`sync` no empuja groupMembers de los grupos del alcance, con "
+                              f"el nombre de la libreta: {grupos!r}")
 
     # ── rol_de, la regla, con un almacen de verdad para los pares LID-telefono.
     wa_store = cargar_modulo("wa_store_roles", BIN / "wa_store.py")
+
+    # ── nombres-de-libreta: quien escribio se nombra como el dueno lo guardo en su
+    # telefono, despues como la persona se llama en WhatsApp, y solo al final el numero.
+    libro = sqlite3.connect(":memory:")
+    libro.row_factory = sqlite3.Row
+    libro.execute("create table lid_telefono (account text, lid text, pn text, updated_at "
+                  "integer)")
+    libro.execute("create table contacto (account text, jid text, nombre text, fuente text, "
+                  "updated_at integer)")
+    libro.execute("insert into lid_telefono values (?,?,?,0)",
+                  (NUEVA, "100000000000002@lid", "573000000002@s.whatsapp.net"))
+    libro.executemany("insert into contacto values (?,?,?,?,0)", [
+        (NUEVA, "573000000002@s.whatsapp.net", "Guardado Por Telefono", "libreta"),
+        (NUEVA, "573000000011@s.whatsapp.net", "Solo Apodo", "apodo")])
+    nombres = wa_store.NombresDeLibreta(libro)
+    fila = lambda jid, pushname, mio=0: {"from_me": mio, "sender_name": pushname,  # noqa: E731
+                                          "sender_jid": jid, "account": NUEVA}
+    for nombre, args, esperado in (
+            ("la libreta gana sobre el apodo del mensaje, por el par LID-telefono",
+             (fila("100000000000002@lid", "Apodo Del Mensaje"), nombres), "Guardado Por Telefono"),
+            ("con el dispositivo en el id tambien",
+             (fila("100000000000002:4@lid", ""), nombres), "Guardado Por Telefono"),
+            ("sin libreta, el nombre del mensaje",
+             (fila("573000000012@s.whatsapp.net", "Apodo Del Mensaje"), nombres), "Apodo Del Mensaje"),
+            ("sin nada en el mensaje, el apodo guardado",
+             (fila("573000000011@s.whatsapp.net", ""), nombres), "Solo Apodo"),
+            ("sin ningun nombre, el numero", (fila("573000000013@s.whatsapp.net", ""), nombres),
+             "573000000013"),
+            ("lo propio sigue siendo YO", (fila("x@lid", "", 1), nombres), "YO"),
+            ("y sin libreta todo queda como antes", (fila("100000000000002@lid", "Apodo"),), "Apodo")):
+        hechas += 1
+        salio = wa_store.quien(*args)
+        if salio != esperado:
+            fallos.append(f"quien: {nombre}: salio {salio!r}, se esperaba {esperado!r}")
+    viejo = sqlite3.connect(":memory:")
+    viejo.row_factory = sqlite3.Row
+    hechas += 1
+    if wa_store.NombresDeLibreta(viejo).nombre(NUEVA, "573000000002@s.whatsapp.net") is not None:
+        fallos.append("un almacen sin la tabla contacto no da nombres, y no falla")
     con = sqlite3.connect(":memory:")
     con.row_factory = sqlite3.Row
     con.execute("create table lid_telefono (account text, lid text, pn text, updated_at "
