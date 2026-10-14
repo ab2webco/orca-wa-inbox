@@ -151,6 +151,11 @@ AJUSTES = [
     (["config", "orca_finished_digest_min", "0"], True, "0"),
     (["config", "orca_finished_digest_min", "1440"], True, "1440"),
     (["config", "orca_finished_digest_min", "45"], True, "45"),
+    # The Claude Code recap in the summary: on or off, nothing else.
+    (["config", "orca_claude_recap", "off"], True, "off"),
+    (["config", "orca_claude_recap", "si"], False, "off"),
+    (["config", "orca_claude_recap", "on"], True, "on"),
+    (["config", "orca_claude_recap", "off"], True, "off"),
 ]
 
 # Con que arranca la meta del primer contacto: 15 minutos, y se cambia en Ajustes.
@@ -161,8 +166,8 @@ DEFAULTS_ACUSE = {"ack_quiet_minutes": "30"}
 
 # Con que arrancan los avisos de Orca: todos apagados, sin horas de silencio, seis por hora
 # como mucho, 25 segundos antes de avisar que un agente termino y un resumen de los "termino"
-# cada 60 minutos.
-DEFAULTS_ORCA = {"orca_notice_waiting": "off", "orca_notice_finished": "off",
+# cada 60 minutos, con el recap de Claude Code.
+DEFAULTS_ORCA = {"orca_claude_recap": "on", "orca_notice_waiting": "off", "orca_notice_finished": "off",
                  "orca_notice_automation": "off", "orca_quiet_start": "",
                  "orca_quiet_end": "", "orca_notice_hourly_cap": "6",
                  "orca_finished_delay_s": "25", "orca_finished_digest_min": "60"}
@@ -2698,7 +2703,8 @@ def revisa_ajustes(fallos: list) -> int:
         hechas += 1
         orca = {"waiting": "on", "finished": "on", "automationFailed": "on",
                 "quietStart": "22:00", "quietEnd": "06:45", "hourlyCap": "10",
-                "finishedDelaySeconds": "60", "finishedDigestMinutes": "45"}
+                "finishedDelaySeconds": "60", "finishedDigestMinutes": "45",
+                "claudeRecap": "off"}
         if espejo.get("orcaNotices") != orca:
             fallos.append(f"sync no le devolvio orcaNotices al panel: quedo "
                           f"{espejo.get('orcaNotices')!r} en vez de {orca!r}")
@@ -2713,12 +2719,13 @@ def revisa_ajustes(fallos: list) -> int:
                                      "orcaNotices": {"waiting": "si", "quietStart": "25:00",
                                                      "hourlyCap": "0",
                                                      "finishedDelaySeconds": True,
-                                                     "finishedDigestMinutes": "1441"}}),
+                                                     "finishedDigestMinutes": "1441",
+                                                     "claudeRecap": "a veces"}}),
                          encoding="utf-8")
-        hechas += 5
+        hechas += 6
         for clave, esperado in (("orca_notice_waiting", "on"), ("orca_quiet_start", "22:00"),
                                 ("orca_notice_hourly_cap", "10"), ("orca_finished_delay_s", "60"),
-                                ("orca_finished_digest_min", "45")):
+                                ("orca_finished_digest_min", "45"), ("orca_claude_recap", "off")):
             quedo = valor(env, clave)
             if quedo != esperado:
                 fallos.append(f"basura del panel en {clave}: llego {quedo!r} en vez de "
@@ -2744,13 +2751,14 @@ def revisa_ajustes(fallos: list) -> int:
                                      "orcaNotices": {"waiting": "off", "quietStart": "",
                                                      "quietEnd": "", "hourlyCap": 3,
                                                      "finishedDelaySeconds": "30",
-                                                     "finishedDigestMinutes": "0"}}),
+                                                     "finishedDigestMinutes": "0",
+                                                     "claudeRecap": "on"}}),
                          encoding="utf-8")
-        hechas += 6
+        hechas += 7
         for clave, esperado in (("orca_notice_waiting", "off"), ("orca_quiet_start", ""),
                                 ("orca_quiet_end", ""), ("orca_notice_hourly_cap", "3"),
                                 ("orca_finished_delay_s", "30"),
-                                ("orca_finished_digest_min", "0")):
+                                ("orca_finished_digest_min", "0"), ("orca_claude_recap", "on")):
             quedo = valor(env, clave)
             if quedo != esperado:
                 fallos.append(f"el panel no le gano al CLI en {clave}: quedo {quedo!r}")

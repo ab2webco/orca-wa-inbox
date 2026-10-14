@@ -8310,6 +8310,14 @@ console.log('\nconfig.html — avisos-orca: los avisos de Orca')
     resumen?.type === 'number' && resumen.min === '0' && resumen.max === '1440' &&
     resumen.value === '60', resumen?.value)
   ok('con "termino" apagado el resumen no se muestra', doc.getElementById('orca-digest-row').hidden)
+  // recap-claude: el recap de Claude Code en el resumen, encendido de fabrica, con el resumen.
+  const recapClaude = doc.getElementById('orca-claude-recap')
+  ok('el recap de Claude Code es un interruptor encendido de fabrica, dentro del resumen',
+    recapClaude?.getAttribute('role') === 'switch' &&
+    recapClaude.getAttribute('aria-checked') === 'true' &&
+    doc.getElementById('orca-digest-row').contains(recapClaude) &&
+    recapClaude.getAttribute('aria-describedby') === 'orca-claude-recap-help',
+  recapClaude?.outerHTML)
   ok('el resumen tiene su ayuda enlazada, que dice que 0 es un mensaje por cada uno',
     resumen?.getAttribute('aria-describedby') === 'orca-digest-help' &&
     /\b0\b/.test(doc.getElementById('orca-digest-help').textContent) &&
@@ -8336,11 +8344,17 @@ console.log('\nconfig.html — avisos-orca: los avisos de Orca')
   doc.getElementById('save-orca').click()
   await espera(); await espera()
   ok('guardar escribe la clave entera, en texto', JSON.stringify(storage.orcaNotices) ===
-    JSON.stringify({ waiting: 'on', finished: 'on', automationFailed: 'off', quietStart: '22:00',
-      quietEnd: '07:00', hourlyCap: '10', finishedDelaySeconds: '40',
+    JSON.stringify({ waiting: 'on', finished: 'on', automationFailed: 'off', claudeRecap: 'on',
+      quietStart: '22:00', quietEnd: '07:00', hourlyCap: '10', finishedDelaySeconds: '40',
       finishedDigestMinutes: '90' }),
   JSON.stringify(storage.orcaNotices))
   ok('y dice guardado', /✓/.test(doc.getElementById('said-orca').textContent))
+  recapClaude.click()
+  doc.getElementById('save-orca').click()
+  await espera(); await espera()
+  ok('apagar el recap de Claude Code se guarda como "off"',
+    recapClaude.getAttribute('aria-checked') === 'false' &&
+    storage.orcaNotices?.claudeRecap === 'off', JSON.stringify(storage.orcaNotices))
   const guardado = JSON.stringify(storage.orcaNotices)
   for (const [nombre, preparar, re] of [
     ['tope 0', () => escribir(doc, 'orca-cap', '0'), /60/],
@@ -8383,7 +8397,8 @@ console.log('\nconfig.html — avisos-orca: los avisos de Orca')
   const { doc } = await montar('config.html', {
     owners: [{ id: ANA, name: 'Ana Duena' }], approvalNumber: ANA,
     orcaNotices: { waiting: 'on', finished: 'off', automationFailed: 'on', quietStart: '23:30',
-      quietEnd: '06:15', hourlyCap: '12', finishedDelaySeconds: '90', finishedDigestMinutes: '0' }
+      quietEnd: '06:15', hourlyCap: '12', finishedDelaySeconds: '90', finishedDigestMinutes: '0',
+      claudeRecap: 'off' }
   }, 'es-419')
   await espera()
   doc.getElementById('tab-aprobacion').click()
@@ -8395,8 +8410,19 @@ console.log('\nconfig.html — avisos-orca: los avisos de Orca')
     doc.getElementById('orca-quiet-start').value === '23:30' &&
     doc.getElementById('orca-quiet-end').value === '06:15' &&
     doc.getElementById('orca-cap').value === '12' && doc.getElementById('orca-delay').value === '90' &&
-    doc.getElementById('orca-digest').value === '0')
+    doc.getElementById('orca-digest').value === '0' &&
+    doc.getElementById('orca-claude-recap').getAttribute('aria-checked') === 'false')
   ok('con el numero de aprobacion elegido no hay aviso', doc.getElementById('orca-no-number').hidden)
+}
+{
+  const { doc } = await montar('config.html', {
+    orcaNotices: { waiting: 'on', finished: 'on', finishedDigestMinutes: '60' } }, 'es-419')
+  await espera()
+  doc.getElementById('tab-aprobacion').click()
+  await espera(); await espera()
+  ok('lo guardado antes del recap de Claude Code lo pinta encendido, como de fabrica',
+    doc.getElementById('orca-claude-recap').getAttribute('aria-checked') === 'true' &&
+    !doc.getElementById('orca-digest-row').hidden)
 }
 {
   const { doc } = await montar('config.html', {}, 'es-419',
@@ -8426,6 +8452,14 @@ for (const [idioma, nombre, leyenda, nunca, bloqueado] of [['es-419', 'ES', /Orc
     PT: /1440.*uma vez por dia.*silencio/i }[nombre]
   ok(`${nombre}: la ayuda del resumen dice que 1440 es una vez al dia, al empezar el silencio`,
     diario.test(t('orca-digest-help')), t('orca-digest-help'))
+  // recap-claude: lo unico del agente que viaja es el recap, y la pista lo dice.
+  const recap = { ES: [/recap de Claude Code/i, /4 minutos/, /no se repite/i, /apagar/i],
+    EN: [/Claude Code recap/i, /4 minutes/, /not repeated/i, /turned off/i],
+    PT: [/recap do Claude Code/i, /4 minutos/, /nao se repete/i, /desligad/i] }[nombre]
+  ok(`${nombre}: el interruptor del recap, su ayuda y la pista que dice que se puede apagar`,
+    recap[0].test(t('orca-claude-recap-label')) && recap[1].test(t('orca-claude-recap-help')) &&
+    recap[2].test(t('orca-claude-recap-help')) && recap[3].test(t('orca-intro')),
+  `${t('orca-claude-recap-label')} | ${t('orca-claude-recap-help')} | ${t('orca-intro')}`)
   ok(`${nombre}: la etiqueta larga no se separa de su interruptor`,
     window.getComputedStyle(fila).flexWrap === 'nowrap' &&
     parseFloat(window.getComputedStyle(doc.getElementById('orca-waiting-label')).minWidth) === 0,
@@ -8441,7 +8475,9 @@ for (const [idioma, nombre, leyenda, nunca, bloqueado] of [['es-419', 'ES', /Orc
     ok('el portugues es propio, no el ingles',
       S.pt.orcaLegend && S.pt.orcaIntro !== S.en.orcaIntro && S.pt.orcaWaitingLabel !== S.en.orcaWaitingLabel &&
       S.pt.orcaDigestLabel !== S.en.orcaDigestLabel && S.pt.orcaDigestHelp !== S.en.orcaDigestHelp &&
-      S.pt.orcaDigestRange !== S.en.orcaDigestRange)
+      S.pt.orcaDigestRange !== S.en.orcaDigestRange &&
+      S.pt.orcaClaudeRecapLabel !== S.en.orcaClaudeRecapLabel &&
+      S.pt.orcaClaudeRecapHelp !== S.en.orcaClaudeRecapHelp)
   }
 }
 

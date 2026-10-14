@@ -66,7 +66,9 @@ what it shows next to the project (`WA` is set as in "Find the tools"):
 One line, at most 120 characters, what changed in plain words. No paths, no secrets, no
 prompts. It is not a notice: it sends nothing, and only the latest line of the worktree is
 kept. An error code on stderr (`recap-too-long`, `recap-secret`, ...) means the line was
-rejected: write it again, shorter or without the secret-shaped part.
+rejected: write it again, shorter or without the secret-shaped part. Without your line, the
+summary may carry the recap Claude Code writes on its own when the owner is away from the
+session; your line, when there is one, wins.
 
 ## Ask and wait for his reply
 

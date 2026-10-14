@@ -2544,6 +2544,9 @@ DEFAULT_CONFIG = {
     # Cada cuantos minutos sale UN resumen de los agentes que terminaron (0 = un aviso por
     # cada uno, apenas pasa la espera de arriba). Solo cuenta con `orca_notice_finished` on.
     "orca_finished_digest_min": "60",
+    # Si el resumen lleva el recap que Claude Code escribe al terminar (recap-claude): se lee
+    # de la transcripcion de la sesion de ese espacio, en esta maquina.
+    "orca_claude_recap": "on",
     # Si los mensajes de la linea salen firmados con el nombre del agente (todo-por-linea,
     # P2). `off`: salen como del dueno, sin firma, y el nombre del agente no hace falta.
     "sign_messages": "on",
@@ -12114,7 +12117,8 @@ def ajustes_orca(con):
             "silencio": (minutos_de(ini), minutos_de(fin)) if ini and fin and ini != fin else None,
             "tope": int(valor("orca_notice_hourly_cap")),
             "demora": int(valor("orca_finished_delay_s")),
-            "resumen_min": int(valor("orca_finished_digest_min"))}
+            "resumen_min": int(valor("orca_finished_digest_min")),
+            "recap_claude": valor("orca_claude_recap") == "on"}
 
 
 def hora_local():
@@ -12159,6 +12163,13 @@ def donde_de(worktree, lista):
         if p and p not in partes:
             partes.append(p)
     return " · ".join(partes)
+
+
+def ruta_de(worktree, lista):
+    """La carpeta del espacio de ese agente, o None si Orca no la conoce."""
+    w = next((x for x in lista if worktree and x.get("worktreeId") == worktree), None)
+    ruta = w.get("path") if w else None
+    return ruta if isinstance(ruta, str) and ruta.strip() else None
 
 
 def texto_de_agente(tx, clase, tipo, donde):
@@ -12327,10 +12338,119 @@ def orca_terminados(con, ajustes, tx):
         if junta:
             # Que espacio y cuando termino el turno: con eso el resumen busca su recap.
             aviso_encola(con, req, TIPO_ORCA, donde, estado=ESTADO_ACUMULADO,
-                         version=json.dumps({"w": p.get("worktreeId"), "at": at}))
+                         version=json.dumps({"w": p.get("worktreeId"), "at": at,
+                                             "p": ruta_de(p.get("worktreeId"), lista)}))
         else:
             orca_encola(con, req, texto_de_agente(tx, "termino", p.get("agentType"), donde),
                         ajustes)
+
+
+# recap-claude: el recap que Claude Code escribe cuando el agente termina (el "※ recap" que ve
+# el dueno) queda en la transcripcion de la sesion, una linea JSON `away_summary` con la carpeta
+# y la hora. Llega unos tres minutos despues del turno y mide de 200 a 335 caracteres.
+LARGO_RECAP_CLAUDE = 600
+# Lo que se lee del final de cada transcripcion. Despues del recap la sesion puede seguir y
+# escribir megas (una de 37 MB tenia su recap a 9 MB del final), asi que se lee entera hasta
+# este tope y solo se decodifican las lineas `away_summary`.
+COLA_TRANSCRIPCION = 64 * 1024 * 1024
+# Al abrirse una ventana, el resumen espera hasta esto a que llegue el recap de un turno
+# reciente. Solo con ventanas de al menos el triple: en una mas corta la espera se comeria la
+# ventana y la siguiente volveria a esperar.
+ESPERA_RECAP_S = 240
+# Por espacio, el `at` del ultimo recap que salio en un resumen: un turno nuevo de ese espacio
+# sin un recap mas nuevo no se repite. Una llave por linea, como la ventana del resumen.
+RECAPS_MOSTRADOS = "orca_recaps_mostrados"
+
+
+def carpetas_de_claude():
+    """Donde Claude Code guarda las transcripciones: la de `CLAUDE_CONFIG_DIR` si esta, y la
+    de siempre (Orca junta ahi las de todas sus cuentas)."""
+    salida = []
+    for base in (os.environ.get("CLAUDE_CONFIG_DIR") or "",
+                 os.path.join(os.path.expanduser("~"), ".claude")):
+        carpeta = os.path.join(base, "projects") if base else ""
+        if carpeta and carpeta not in salida:
+            salida.append(carpeta)
+    return salida
+
+
+def texto_recap_claude(texto):
+    """El recap listo para viajar, o None: en una linea, sin rutas, sin forma de secreto y sin
+    pasarse de `LARGO_RECAP_CLAUDE` (lo largo no se recorta: no sale)."""
+    if not isinstance(texto, str):
+        return None
+    texto = " ".join(RUTA_EN_TEXTO.sub("…", texto).split())
+    if not texto or len(texto) > LARGO_RECAP_CLAUDE or wa_reglas.secreto(texto):
+        return None
+    return texto
+
+
+def ms_de_iso(valor):
+    """Los ms de una hora ISO de Claude Code (`2026-10-14T04:46:21.490Z`), o None."""
+    if not isinstance(valor, str):
+        return None
+    try:
+        hora = datetime.datetime.fromisoformat(valor.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return int(hora.timestamp() * 1000) if hora.tzinfo else None
+
+
+def lineas_con(datos, marca):
+    """Las lineas de `datos` (bytes) que contienen `marca`, decodificadas, sin recorrer el
+    resto: una transcripcion pesa megas y el recap es una linea de cientos."""
+    i = datos.find(marca)
+    while i >= 0:
+        ini = datos.rfind(b"\n", 0, i) + 1
+        fin = datos.find(b"\n", i)
+        fin = len(datos) if fin < 0 else fin
+        yield datos[ini:fin].decode("utf-8", "replace")
+        i = datos.find(marca, fin)
+
+
+def recap_de_claude(ruta, desde_ms, hasta_ms):
+    """`(texto, at)` del ultimo recap de Claude Code de una sesion abierta en `ruta`, escrito
+    entre `desde_ms` y `hasta_ms`, o None. Solo se leen las transcripciones que cambiaron desde
+    `desde_ms` (hasta `COLA_TRANSCRIPCION` del final), y solo se decodifican sus lineas
+    `away_summary`."""
+    if not isinstance(ruta, str) or not ruta.strip():
+        return None
+    nombre = re.sub(r"[^A-Za-z0-9]", "-", ruta.strip())
+    mejor, vistos = None, set()
+    for base in carpetas_de_claude():
+        carpeta = os.path.join(base, nombre)
+        try:
+            archivos = sorted(os.listdir(carpeta))
+        except OSError:
+            continue
+        for archivo in archivos:
+            camino = os.path.join(carpeta, archivo)
+            if not archivo.endswith(".jsonl") or os.path.realpath(camino) in vistos:
+                continue
+            vistos.add(os.path.realpath(camino))
+            try:
+                if os.path.getmtime(camino) * 1000 < desde_ms:
+                    continue
+                with open(camino, "rb") as f:
+                    f.seek(max(0, os.path.getsize(camino) - COLA_TRANSCRIPCION))
+                    cola = f.read()
+            except OSError:
+                continue
+            for linea in lineas_con(cola, b'"away_summary"'):
+                try:
+                    dato = json.loads(linea)
+                except ValueError:
+                    continue
+                if not isinstance(dato, dict) or dato.get("type") != "system" \
+                        or dato.get("subtype") != "away_summary" \
+                        or ruta_comparable(dato.get("cwd")) != ruta_comparable(ruta):
+                    continue
+                at = ms_de_iso(dato.get("timestamp"))
+                texto = texto_recap_claude(dato.get("content"))
+                if at is not None and texto and desde_ms <= at <= hasta_ms \
+                        and (mejor is None or at > mejor[1]):
+                    mejor = (texto, at)
+    return mejor
 
 
 def recap_valido(entrada):
@@ -12344,25 +12464,95 @@ def recap_valido(entrada):
     return (texto, at) if texto and recap_invalido(texto) is None else None
 
 
-def recaps_de_filas(filas, recaps, ahora_ms):
+def marca_de(fila):
+    """El espacio, la hora del turno y la carpeta que `orca_terminados` anoto en la fila."""
+    try:
+        marca = json.loads(fila["version"] or "")
+    except (TypeError, ValueError):
+        marca = None
+    return marca if isinstance(marca, dict) else {}
+
+
+def es_hora_ms(valor):
+    return isinstance(valor, (int, float)) and not isinstance(valor, bool)
+
+
+def espera_recap(filas, entradas, minutos, desde, ahora_ms):
+    """Si el resumen espera el recap: recien abierta la ventana (menos de `ESPERA_RECAP_S`),
+    con un turno de hace menos que eso que todavia no tiene. Contado desde el inicio de la
+    ventana, asi que los turnos nuevos no la estiran."""
+    if minutos * 60 < 3 * ESPERA_RECAP_S:
+        return False
+    t = ahora_ms / 1000
+    if (t + time.localtime(t).tm_gmtoff - desde * 60) % (minutos * 60) >= ESPERA_RECAP_S:
+        return False
+    return any(e is None and es_hora_ms(marca_de(f).get("at"))
+               and ahora_ms - marca_de(f)["at"] < ESPERA_RECAP_S * 1000
+               for f, e in zip(filas, entradas))
+
+
+def llave_mostrados():
+    return RECAPS_MOSTRADOS if es_linea_principal() else f"{RECAPS_MOSTRADOS}@{cuenta_activa()}"
+
+
+def recaps_mostrados(con):
+    fila = con.execute("select value from settings where key=?", (llave_mostrados(),)).fetchone()
+    try:
+        dato = json.loads(fila["value"]) if fila else {}
+    except (TypeError, ValueError):
+        dato = {}
+    return {w: at for w, at in dato.items() if isinstance(w, str) and es_hora_ms(at)} \
+        if isinstance(dato, dict) else {}
+
+
+def repetido(fila, entrada, mostrados):
+    """Un turno de un espacio que ya salio con su recap, sin un recap mas nuevo."""
+    w = marca_de(fila).get("w")
+    return isinstance(w, str) and w in mostrados \
+        and (entrada is None or entrada[1] <= mostrados[w])
+
+
+def anota_mostrados(con, mostrados, filas, entradas, texto, ahora_ms):
+    """Guarda que espacios salieron con su recap en `texto`. El que salio sin recap se borra:
+    sus turnos siguientes salen como siempre. Lo de mas de `RECAP_VIGENCIA_S` se barre."""
+    por_espacio = {}
+    for f, e in zip(filas, entradas):
+        w = marca_de(f).get("w")
+        if not isinstance(w, str):
+            continue
+        if e is not None and e[0] in texto:
+            por_espacio[w] = max(por_espacio.get(w) or 0, e[1])
+        else:
+            por_espacio.setdefault(w, None)
+    for w, at in por_espacio.items():
+        if at is None:
+            mostrados.pop(w, None)
+        else:
+            mostrados[w] = at
+    vigentes = {w: at for w, at in mostrados.items() if ahora_ms - at <= RECAP_VIGENCIA_S * 1000}
+    con.execute("insert into settings (key,value) values (?,?) on conflict(key) "
+                "do update set value=excluded.value", (llave_mostrados(), json.dumps(vigentes)))
+
+
+def recaps_de_filas(filas, recaps, ahora_ms, claude=False):
     """El recap de cada fila acumulada (por indice), o None: el de su espacio si se escribio
-    desde `RECAP_TOLERANCIA_S` antes del `at` del turno y hasta ahora."""
+    desde `RECAP_TOLERANCIA_S` antes del `at` del turno y hasta ahora. Sin ese, y con `claude`,
+    el ultimo de Claude Code de la carpeta del espacio escrito desde el turno y hasta ahora."""
     salida = []
     for f in filas:
-        try:
-            marca = json.loads(f["version"] or "")
-        except (TypeError, ValueError):
-            marca = None
-        espacio = marca.get("w") if isinstance(marca, dict) else None
-        at = marca.get("at") if isinstance(marca, dict) else None
+        marca = marca_de(f)
+        espacio, at = marca.get("w"), marca.get("at")
         entrada = recap_valido((recaps or {}).get(espacio)) if isinstance(espacio, str) else None
-        vale = entrada is not None and isinstance(at, (int, float)) \
-            and not isinstance(at, bool) and at - RECAP_TOLERANCIA_S * 1000 <= entrada[1] <= ahora_ms
+        hora = es_hora_ms(at)
+        vale = entrada is not None and hora \
+            and at - RECAP_TOLERANCIA_S * 1000 <= entrada[1] <= ahora_ms
+        if not vale and claude and hora:
+            entrada, vale = recap_de_claude(marca.get("p"), at, ahora_ms), True
         salida.append(entrada if vale else None)
     return salida
 
 
-def texto_terminados(tx, filas, recaps=None, ahora_ms=None):
+def texto_terminados(tx, filas, recaps=None, ahora_ms=None, entradas=None):
     """El resumen de lo que terminaron: una linea por proyecto con cuantas veces, los de mas
     turnos primero, y lo que el agente dijo que hizo (`recap`) si dejo algo para ese turno
     (el mas reciente del proyecto). Un proyecto sin nombre en Orca, o con un nombre con forma
@@ -12380,7 +12570,9 @@ def texto_terminados(tx, filas, recaps=None, ahora_ms=None):
     nombres = [f["texto"] if f["texto"] and not wa_reglas.secreto(f["texto"]) else tx["otros"]
                for f in filas]
     notas = {}
-    for nombre, entrada in zip(nombres, recaps_de_filas(filas, recaps, ahora_ms or 0)):
+    if entradas is None:
+        entradas = recaps_de_filas(filas, recaps, ahora_ms or 0)
+    for nombre, entrada in zip(nombres, entradas):
         if entrada and nombre != tx["otros"] \
                 and (nombre not in notas or entrada[1] > notas[nombre][1]):
             notas[nombre] = entrada
@@ -12419,12 +12611,25 @@ def orca_resumen_terminados(con, ajustes, tx):
         if frena_silencio(minutos, ajustes["silencio"], hora_local()) \
                 or orca_ultima_hora(con) >= ajustes["tope"]:
             return
-        huella = ventana or "0:" + hashlib.sha1(
-            ",".join(f["req_id"] for f in filas).encode()).hexdigest()[:16]
-        if not aviso_encola(con, id_orca("terminados", huella), TIPO_ORCA,
-                            texto_terminados(tx, filas, plugin_store_raw().get(CLAVE_RECAPS),
-                                             int(ahora_orca_s() * 1000))):
+        ahora_ms = int(ahora_orca_s() * 1000)
+        entradas = recaps_de_filas(filas, plugin_store_raw().get(CLAVE_RECAPS), ahora_ms,
+                                   ajustes["recap_claude"])
+        if ventana and ajustes["recap_claude"] \
+                and espera_recap(filas, entradas, minutos, desde, ahora_ms):
             return
+        # recap-claude: lo que ya salio con su recap y volvio a terminar sin uno nuevo no se
+        # repite. Se cierra igual, con lo demas.
+        mostrados = recaps_mostrados(con)
+        quedan = [i for i, f in enumerate(filas) if not repetido(f, entradas[i], mostrados)]
+        if quedan:
+            huella = ventana or "0:" + hashlib.sha1(
+                ",".join(f["req_id"] for f in filas).encode()).hexdigest()[:16]
+            vistas = [filas[i] for i in quedan]
+            notas = [entradas[i] for i in quedan]
+            texto = texto_terminados(tx, vistas, entradas=notas)
+            if not aviso_encola(con, id_orca("terminados", huella), TIPO_ORCA, texto):
+                return
+            anota_mostrados(con, mostrados, vistas, notas, texto, ahora_ms)
         con.executemany("update aviso set estado='resumido', updated_at=? where req_id=? and "
                         "estado=?", [(ahora_caso(), f["req_id"], ESTADO_ACUMULADO)
                                      for f in filas])
