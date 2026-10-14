@@ -21,6 +21,7 @@
  */
 import { join } from 'node:path'
 import { VARIABLE_APROBADOR } from './aprobador.mjs'
+import { hiloParaPanel } from './hilo.mjs'
 
 /** Lo que el panel puede pedir. Son codigos estables: el panel los escribe y el worker
  *  los lee, asi que renombrar uno rompe el canal en silencio. */
@@ -41,7 +42,9 @@ export const CASO_ACCION = Object.freeze({
   // un proyecto que el piso freno. El dueno lo aprueba o lo retira desde el panel; un
   // agente no puede aprobarlo.
   APROBAR_RETENIDO: 'aprobar-retenido',
-  CANCELAR_RETENIDO: 'cancelar-retenido'
+  CANCELAR_RETENIDO: 'cancelar-retenido',
+  // La conversacion del caso para el panel lateral (panel-caso-movil): solo lectura.
+  HILO: 'hilo'
 })
 
 /** Los veredictos buenos y los malos propios de este canal. Los errores de `wa-scope
@@ -57,6 +60,7 @@ export const CASO_VEREDICTO = Object.freeze({
   IGNORADO: 'ignorado',
   PROYECTO_CAMBIADO: 'proyecto-cambiado',
   CANCELADO: 'cancelado',
+  HILO: 'hilo',
   ARGS: 'E_ARGS',
   VERSION: 'E_VERSION',
   // La accion no corresponde a lo que el caso propone (enviar un trabajo, ejecutar una
@@ -398,6 +402,15 @@ export function crearAccionesCaso ({ run, herramienta, motivoDe, lanzarTriage, l
       try { hecho = JSON.parse(r.stdout || 'null')?.cancelled === true } catch { /* no */ }
       if (!hecho) throw new Rechazo('send-no-draft', `${id} was not waiting any more`)
       return { ok: true, code: CASO_VEREDICTO.CANCELADO, reqId: id }
+    }),
+
+    // Los mensajes del caso y sus adjuntos, para leerlos en el panel. No firma ni mueve nada:
+    // solo `caso ver`. Las rutas se quedan en el worker (hilo.mjs).
+    [CASO_ACCION.HILO]: aceptarRechazo(async (pedido) => {
+      const id = idDeCaso(pedido)
+      const c = await ver(id)
+      const { mensajes, omitidos } = await hiloParaPanel(c.hilo)
+      return { ok: true, code: CASO_VEREDICTO.HILO, caseId: id, mensajes, omitidos }
     }),
 
     // El proyecto en UNA bandera `--proyecto=`: vacio es "sin proyecto". Que este en el
