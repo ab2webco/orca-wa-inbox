@@ -12256,10 +12256,34 @@ def ahora_orca_s():
     return time.time()
 
 
-def ventana_digest(minutos, t):
+def ventana_digest(minutos, t, desde_min=0):
     """El numero de la ventana de `minutos` en que cae `t`, contada desde la medianoche local
-    (con 60 minutos son las horas en punto del reloj de esta maquina)."""
-    return int((t + time.localtime(t).tm_gmtoff) // (minutos * 60))
+    (con 60 minutos son las horas en punto del reloj de esta maquina), o desde `desde_min`
+    minutos pasada la medianoche."""
+    return int((t + time.localtime(t).tm_gmtoff - desde_min * 60) // (minutos * 60))
+
+
+# menos-ruido M1: con el resumen una vez al dia, el dia termina cuando empiezan las horas de
+# silencio (sin ellas, a la medianoche). Ese resumen sale aunque el silencio ya empezo, dentro
+# de esta gracia: un tick que llega despues (el equipo dormido) espera al fin del silencio.
+MINUTOS_DIA = 1440
+GRACIA_FIN_DEL_DIA_MIN = 60
+
+
+def fin_del_dia(minutos, silencio):
+    """Desde que minuto se cuenta la ventana del resumen: el inicio del silencio con el resumen
+    una vez al dia, y la medianoche en cualquier otro caso."""
+    return silencio[0] if minutos == MINUTOS_DIA and silencio else 0
+
+
+def frena_silencio(minutos, silencio, minuto):
+    """Si las horas de silencio frenan el resumen en `minuto`: siempre adentro, salvo el de una
+    vez al dia en la primera `GRACIA_FIN_DEL_DIA_MIN` del silencio."""
+    if not en_silencio(silencio, minuto):
+        return False
+    if minutos == MINUTOS_DIA and silencio:
+        return (minuto - silencio[0]) % MINUTOS_DIA >= GRACIA_FIN_DEL_DIA_MIN
+    return True
 
 
 def desde_digest():
@@ -12379,7 +12403,9 @@ def orca_resumen_terminados(con, ajustes, tx):
     Cuenta como un aviso para el tope. Con `resumen_min` 0 lo que quedo juntado sale de una
     vez y de ahi en mas cada termino sale suelto."""
     minutos = ajustes["resumen_min"]
-    ventana = f"{minutos}:{ventana_digest(minutos, ahora_orca_s())}" if minutos else None
+    desde = fin_del_dia(minutos, ajustes["silencio"])
+    ventana = (f"{minutos}:{ventana_digest(minutos, ahora_orca_s(), desde)}"
+               + (f"@{desde}" if desde else "")) if minutos else None
     llave = desde_digest()
     if ventana:
         fila = con.execute("select value from settings where key=?", (llave,)).fetchone()
@@ -12390,7 +12416,7 @@ def orca_resumen_terminados(con, ajustes, tx):
                         (TIPO_ORCA, ESTADO_ACUMULADO, cuenta_activa(),
                          numero_aprobacion() or "")).fetchall()
     if filas:
-        if en_silencio(ajustes["silencio"], hora_local()) \
+        if frena_silencio(minutos, ajustes["silencio"], hora_local()) \
                 or orca_ultima_hora(con) >= ajustes["tope"]:
             return
         huella = ventana or "0:" + hashlib.sha1(

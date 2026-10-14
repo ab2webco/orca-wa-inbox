@@ -23,7 +23,12 @@ Out of scope: the Informes redesign (not approved yet).
 
 ## Checklist
 
-- [ ] M1 Finished-agent digest: 60-minute default, end-of-day option.
+- [x] M1 Finished-agent digest: the code default was already 60 (since 2026-10-12); the
+  owner's 15 is his own stored setting, changed in the panel, never by the plugin. New:
+  1440 is once a day and ends when quiet hours start (midnight without them); it goes out
+  in the first hour of the quiet period, a later tick waits for the quiet end. Panel help
+  says so in es/en/pt. Orca section RED 109/113, GREEN 113/113; panels RED 1705/1708,
+  GREEN 1708/1708.
 - [x] M2 Commitment rule only for real promises: a date, day or time counts with a promise
   verb, as a stated deadline (PLAZO) or as a sentence that is only the date; briefs keep
   any date. Jev's question says a past date is not a promise. Table RED 50/57, GREEN

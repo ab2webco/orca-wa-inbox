@@ -8421,6 +8421,11 @@ for (const [idioma, nombre, leyenda, nunca, bloqueado] of [['es-419', 'ES', /Orc
   // Visto en la captura a 390: la etiqueta larga bajaba a otra linea, lejos de su interruptor.
   // En esta tarjeta la etiqueta se parte en su sitio, al lado del interruptor.
   const fila = doc.getElementById('orca-waiting').closest('.switch-row')
+  // menos-ruido M1: 1440 es una vez al dia, y la ayuda dice cuando sale.
+  const diario = { ES: /1440.*una vez al dia.*silencio/i, EN: /1440.*once a day.*quiet/i,
+    PT: /1440.*uma vez por dia.*silencio/i }[nombre]
+  ok(`${nombre}: la ayuda del resumen dice que 1440 es una vez al dia, al empezar el silencio`,
+    diario.test(t('orca-digest-help')), t('orca-digest-help'))
   ok(`${nombre}: la etiqueta larga no se separa de su interruptor`,
     window.getComputedStyle(fila).flexWrap === 'nowrap' &&
     parseFloat(window.getComputedStyle(doc.getElementById('orca-waiting-label')).minWidth) === 0,

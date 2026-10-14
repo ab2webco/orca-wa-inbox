@@ -12048,8 +12048,9 @@ for texto, esperado in (
     ok(f"orden: trabajo {texto[:60]!r} -> {esperado}", salio == esperado, f"salio {salio}")
 for texto, direccion, esperado in (
         ("Nunca le pediremos su contrasena por aqui", "salida", []),
-        # Una fecha en lo que sale es un hecho de la respuesta, la preceda lo que la preceda.
-        ("No prometemos nada para el viernes", "salida", ["commitment"]),
+        # menos-ruido M2: una fecha sola ya no es compromiso; lo es con una promesa. Negar que
+        # se promete algo no lo promete.
+        ("No prometemos nada para el viernes", "salida", []),
         ("Hoy no puedo, manana lo tienes", "salida", ["commitment"]),
         ("Subimos el arreglo a la rama fix/demo-token-leak", "salida", []),
         ("Le paso el token por otro medio", "salida", ["credential"]),
@@ -13416,6 +13417,43 @@ try:
            and "terminaron: " not in resumenes[0]["texto"], f"{enviados}")
         vuelta(ws, con)
         ok("R2: y otro tick no repite ninguno", len(enviados) == 2, f"{len(enviados)}")
+        con.close()
+
+    # menos-ruido M1: el resumen una vez al dia (1440 minutos) sale al final del dia, cuando
+    # empiezan las horas de silencio, y no al pasar la medianoche (que caia en silencio y lo
+    # mandaba a la manana siguiente). Un tick que llega mucho despues espera al fin del silencio.
+    with tempfile.TemporaryDirectory() as home:
+        ws, con, enviados, falsa, reloj = prepara_resumen(home, finishedDigestMinutes="1440",
+                                                          quietStart="22:00", quietEnd="07:00")
+        mediodia = reloj[0]
+        ws.hora_local = lambda: 12 * 60 + 31
+        pon_paneles(home, turnos(reloj, pA=(WT_ALFA, 100), pB=(WT_BETA, 100)))
+        vuelta(ws, con)
+        reloj[0] = mediodia + 9 * 3600 + 20 * 60
+        ws.hora_local = lambda: 21 * 60 + 50
+        vuelta(ws, con)
+        ok("M1: una vez al dia, durante el dia no sale nada", enviados == []
+           and len(filas_de(con, "acumulado")) == 2, f"{estados_orca(con)}")
+        reloj[0] = mediodia + 9 * 3600 + 35 * 60
+        ws.hora_local = lambda: 22 * 60 + 5
+        vuelta(ws, con)
+        terminados = [e for e in enviados if e["req"].startswith("aviso-o-terminados-")]
+        ok("M1: al empezar las horas de silencio sale el resumen del dia, una vez",
+           len(terminados) == 1 and "alfa-demo" in terminados[0]["texto"]
+           and "beta-demo" in terminados[0]["texto"], f"{enviados}")
+        vuelta(ws, con)
+        ok("M1: y otro tick no lo repite", len(enviados) == 1, f"{len(enviados)}")
+        pon_paneles(home, turnos(reloj, pC=(WT_ALFA, 100)))
+        vuelta(ws, con)
+        reloj[0] += 25 * 3600
+        ws.hora_local = lambda: 23 * 60 + 30
+        vuelta(ws, con)
+        ok("M1: un tick que llega pasada la primera hora del silencio espera",
+           len(enviados) == 1 and len(filas_de(con, "acumulado")) == 1, f"{estados_orca(con)}")
+        ws.hora_local = lambda: 7 * 60 + 30
+        vuelta(ws, con)
+        ok("M1: y sale al terminar el silencio", len(enviados) == 2
+           and enviados[-1]["req"].startswith("aviso-o-terminados-"), f"{enviados}")
         con.close()
 
     # R2: el tope por hora. El resumen cuenta como un aviso, y si la hora esta llena espera.
