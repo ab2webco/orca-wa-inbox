@@ -30,7 +30,7 @@ away with the content, and at phone width the detail opens inside the list, cram
 - [x] P2 Panel conversation section (`test/panels.test.mjs`).
 - [x] P3 Sticky header and full-screen sheet on narrow widths (`test/panels.test.mjs`).
 - [x] P4 Mobile fixes: filters and history (`test/panels.test.mjs`).
-- [ ] P5 Screenshots 1440/768/390/320, light and dark; full checks; release.
+- [x] P5 Screenshots 1440/768/390/320, light and dark; full checks; release.
 
 ## Acceptance criteria
 
@@ -44,3 +44,14 @@ away with the content, and at phone width the detail opens inside the list, cram
 
 - `node test/worker.test.mjs`, `node test/panels.test.mjs`, `scripts/check-panels`,
   `scripts/check-voseo`, `scripts/check-datos-reales`, screenshots.
+
+## Release
+
+v4.30.8. Checks on the final code: check-casos 2461/2461, panels 1738/1738, worker 728/728,
+almacen 357/357, envio 138/138, sidecar-mensajes 142/142, sidecar-pairing 129/129,
+sidecar-build 11/11, manifest 112/112, resolver 55/55, userdata 25/25, check-closing 36/36,
+check-lid 51/51, check-clis, check-panels, check-voseo, check-prompts, check-resolver,
+check-harness, check-datos-reales. RED observed for P1 to P4 before the code. Screens looked
+at: `tablero-conversacion` and `tablero-conversacion-abajo` at 1440, 768, 390 and 320, light
+and dark; `tablero-poblado` at 320. A real preview was made from a stored image (12 KB data
+URI, 69 ms). Not verified live: the Orca mobile app itself.
