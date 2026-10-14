@@ -31,6 +31,25 @@ const NO_ES_CONVERSACION = /@(newsletter|broadcast)$/
 const ENVOLTURAS = ['ephemeralMessage', 'viewOnceMessage', 'viewOnceMessageV2',
   'viewOnceMessageV2Extension', 'documentWithCaptionMessage', 'editedMessage']
 
+// Lo que viaja como mensaje y no es algo que alguien escribio: una reaccion, un borrado o
+// una edicion (llegan aparte, por `messages.update`), el voto de una encuesta, un mensaje
+// fijado o guardado. Lista CERRADA de exclusion, como `NO_ES_CONVERSACION`: un tipo nuevo
+// que no este aca se guarda. Guardados como fila abrian un caso "sin texto" y el agente
+// contestaba que el mensaje llego vacio (un ❤️, 2026-10-13).
+const DE_CONTROL = new Set(['reactionMessage', 'encReactionMessage', 'protocolMessage',
+  'pollUpdateMessage', 'pinInChatMessage', 'keepInChatMessage'])
+// Lo que acompana a cualquier mensaje y no es su contenido.
+const METADATOS = new Set(['messageContextInfo', 'senderKeyDistributionMessage'])
+
+/** Si el mensaje no trae nada que leer: solo control, o nada (una notificacion del grupo,
+ *  o lo que todavia no se pudo descifrar y llega otra vez cuando se descifra). */
+export function esDeControl (mensaje) {
+  const c = contenidoDe(mensaje)
+  if (!c || typeof c !== 'object') return true
+  const partes = Object.keys(c).filter((k) => c[k] != null && !METADATOS.has(k))
+  return partes.every((k) => DE_CONTROL.has(k))
+}
+
 // De mimetype a extension. wa-transcribe recibe una RUTA y nada mas, y ffmpeg abre por
 // contenido pero los motores de voz miran el nombre: un `.bin` deja el audio sin leer
 // lejos de aca, que es justo el fallo que §11-C4 manda no volver a producir.
@@ -306,6 +325,7 @@ export function filaDeMensaje (wa, { cuenta, identidades }) {
   const stanzaId = wa?.key?.id
   if (!chatJid || !stanzaId) return null
   if (!esConversacion(chatJid)) return null
+  if (esDeControl(wa.message)) return null
 
   const grupo = esGrupo(chatJid)
   const fromMe = wa.key.fromMe ? 1 : 0

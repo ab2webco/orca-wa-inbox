@@ -680,9 +680,13 @@ def listar_borradores(salida_json):
     con = almacen()
     if con is None:
         niega(SIN_TRANSPORTE, SIN_TRANSPORTE_DETALLE)
+    # El borrador de una linea desvinculada no se puede aprobar (no hay transporte): no se
+    # lista (linea-desvinculada, D4).
+    activas = wa_store.lineas_activas_en_disco()
+    solo_activas = (f" and account in ({','.join('?' * len(activas))})" if activas else "")
     filas = con.execute(
-        "select req_id, chat_name, body, created_at from envio where estado=? "
-        "order by created_at, rowid", (BORRADOR,)).fetchall()
+        f"select req_id, chat_name, body, created_at from envio where estado=?{solo_activas} "
+        "order by created_at, rowid", (BORRADOR, *activas)).fetchall()
     if salida_json:
         import json
         print(json.dumps([{"req_id": f["req_id"], "chat": f["chat_name"],

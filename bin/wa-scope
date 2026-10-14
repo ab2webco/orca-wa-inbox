@@ -51,7 +51,7 @@ from wa_settings import (  # noqa: E402
     plugin_store_raw as plugin_store_crudo, vista_de_linea, escribir_en_linea, de_otra_linea,
     AJUSTES_DE_LINEA, NO_HEREDAN,
     ajustes_propios,
-    tableros_de_lineas, quitar_copia_de_la_principal,
+    tableros_de_lineas, podar_lineas_idas, quitar_copia_de_la_principal,
     plugin_store_targets, settings_from_plugin, user_data_roots, valida_ajuste)
 from wa_settings import jev_en_linea, linea_de_avisos  # noqa: E402
 import wa_store  # noqa: E402  (solo lectura: de capture.db se lee la linea activa)
@@ -941,8 +941,13 @@ def plugin_store_write(scope, agent_name=None, activity=None, health=None,
             # atendidos. Sin un tablero valido no hay insignia. Con varias lineas
             # es la suma de los tableros de todas: lo que espera al dueno espera en
             # cualquiera de sus numeros.
+            # Solo las lineas activas (linea-desvinculada, D1): lo guardado de una que se
+            # desvinculo se quita, y nunca cuenta.
+            activas = wa_store.lineas_activas_en_disco()
+            podar_lineas_idas(data, activas, principal)
             cuentas = [c for c in [insignia_de(data.get("board"))]
-                       + [insignia_de(b) for b in tableros_de_lineas(data)] if c is not None]
+                       + [insignia_de(b) for b in tableros_de_lineas(data, activas, principal)]
+                       if c is not None]
             if not cuentas:
                 data.pop("navBadge", None)
             else:
@@ -12509,6 +12514,15 @@ def cmd_tick(con, a):
             if con.in_transaction:
                 con.rollback()
             print(f"wa-scope: worker beat not checked: {exc}", file=sys.stderr)
+        # Lo que una linea desvinculada dejo en vuelo lo cierra la principal: el tick de esa
+        # linea ya no corre (linea-desvinculada, D4).
+        if es_linea_principal():
+            try:
+                cierra_lo_de_lineas_idas(con)
+            except sqlite3.Error as exc:
+                if con.in_transaction:
+                    con.rollback()
+                print(f"wa-scope: unlinked line leftovers not closed: {exc}", file=sys.stderr)
         # La entrada de respaldo: el worker la dispara al llegar cada mensaje; si ese
         # evento se perdio, el minuto la recoge. Una falla suya no frena el resto.
         try:
@@ -14452,6 +14466,33 @@ def entrega_respuesta(con, cli, f, entrada, vivas, resumen):
                 return
     suelta_trabajador(cli, f)
     despacho_cierra(con, f["id"], "continuado")
+
+
+MOTIVO_LINEA_IDA = "linea-desvinculada"
+AVISO_EN_ESPERA = ("pendiente", "preparando", "acumulado")
+
+
+def cierra_lo_de_lineas_idas(con):
+    """Lo que una linea desvinculada dejo en vuelo (linea-desvinculada, D4). Solo su tick lo
+    cerraba, y ya no corre: sus despachos en vuelo protegian para siempre su terminal y su
+    espacio de la limpieza, y sus avisos pendientes no vencian. La principal los cancela con
+    el motivo. Sin lineas activas conocidas no toca nada. Devuelve (despachos, avisos)."""
+    activas = wa_store.lineas_activas_en_disco()
+    if not activas:
+        return 0, 0
+    marcas = ",".join("?" * len(activas))
+    filas = con.execute(
+        "select d.id from caso_despacho d join caso c on c.case_id = d.case_id where "
+        f"d.estado in ({','.join('?' * len(DESPACHO_EN_VUELO))}) and c.account not in ({marcas})",
+        (*DESPACHO_EN_VUELO, *activas)).fetchall()
+    for f in filas:
+        despacho_cierra(con, f["id"], "cancelado", MOTIVO_LINEA_IDA)
+    cur = con.execute(
+        "update aviso set estado='fallido', motivo=?, updated_at=? where "
+        f"estado in ({','.join('?' * len(AVISO_EN_ESPERA))}) and account not in ({marcas})",
+        (MOTIVO_LINEA_IDA, ahora_caso(), *AVISO_EN_ESPERA, *activas))
+    con.commit()
+    return len(filas), cur.rowcount
 
 
 def tick_vigila(con, resumen, inicio=None):

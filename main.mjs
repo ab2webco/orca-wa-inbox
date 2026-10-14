@@ -1191,21 +1191,32 @@ async function aplicarJev(orca, jev, llave, { forzar = false } = {}) {
 /** Jev en cada linea (todo-por-linea, P6). Pura. La principal lo tiene en la raiz
  *  (`jevEnabled`); cada otra, en `ajustesPorLinea[<cuenta>].jevEnabled`, y la que no lo
  *  tiene propio sigue a la principal, con la misma regla que wa-scope. Solo `true` es
- *  encendido. `alguna` es si el espejo de la llave tiene que existir. */
-export function jevPorLinea (raiz, contenedor) {
+ *  encendido. `alguna` es si el espejo de la llave tiene que existir. Con `vinculadas` (las
+ *  cuentas del registro) una linea que ya no esta vinculada no cuenta (linea-desvinculada,
+ *  D3); null es "no se sabe" y cuentan todas, como antes. */
+export function jevPorLinea (raiz, contenedor, vinculadas = null) {
   const principal = raiz === true
   const todo = contenedor && typeof contenedor === 'object' && !Array.isArray(contenedor)
     ? contenedor : {}
   const lineas = {}
   for (const [cuenta, propios] of Object.entries(todo)) {
     if (!propios || typeof propios !== 'object' || Array.isArray(propios)) continue
+    if (Array.isArray(vinculadas) && !vinculadas.includes(cuenta)) continue
     lineas[cuenta] = 'jevEnabled' in propios ? propios.jevEnabled === true : principal
   }
   return { principal, lineas, alguna: principal || Object.values(lineas).some(Boolean) }
 }
 
 async function leerJev(orca) {
-  return jevPorLinea(await leer(orca, JEV_ENABLED_KEY), await leer(orca, AJUSTES_POR_LINEA_KEY))
+  return jevPorLinea(await leer(orca, JEV_ENABLED_KEY), await leer(orca, AJUSTES_POR_LINEA_KEY),
+    cuentasVinculadas(await leer(orca, LINEAS_KEY)))
+}
+
+/** Las cuentas del registro de lineas (`lineas`), o null si no hay registro con cuentas: una
+ *  instalacion de una sola linea, o una de antes del registro. */
+export function cuentasVinculadas (valor) {
+  const cuentas = leerRegistro(valor).map((l) => l.cuenta).filter(Boolean)
+  return cuentas.length ? cuentas : null
 }
 
 /** Lo que dicen los ajustes ahora mismo, aplicado: al arrancar y en cada revision de
@@ -2028,6 +2039,66 @@ export function sembrarAjustesDeLinea (contenedor, cuenta, raiz) {
   return { ...todo, [cuenta]: propios }
 }
 
+// Lo que cada linea que no es la principal guarda aparte (`CLAVES_DE_LINEA` y sus
+// contenedores en wa_settings.py). La principal lo tiene en la raiz.
+export const CLAVES_DE_LINEA = Object.freeze(['scope', 'activity', 'health', 'board', 'reports',
+  'chats', 'chatsAccount', 'senders', 'groupMembers'])
+const CONTENEDOR_PROPIO = Object.freeze({ scope: ALCANCE_POR_LINEA_KEY, reports: 'informesPorLinea' })
+const CONTENEDOR_DE_LINEA = 'porLinea'
+const CONTENEDORES_DE_LINEA = Object.freeze([CONTENEDOR_DE_LINEA,
+  ...Object.values(CONTENEDOR_PROPIO), AJUSTES_POR_LINEA_KEY])
+const SKILLS_LINE_KEY = 'skillsLine'
+
+const esObjeto = (v) => Boolean(v) && typeof v === 'object' && !Array.isArray(v)
+
+/** Lo que hay que escribir en el storage cuando la linea `quitada` se desvincula
+ *  (linea-desvinculada, D2). Pura: recibe las claves leidas y devuelve `{clave: valor}` solo
+ *  con lo que cambia; null es "sin valor" (el host no borra claves).
+ *
+ *  La linea sale de cada contenedor por linea y de la eleccion de las skills: si no, la
+ *  insignia la sigue contando y volver a vincular el numero revive permisos que el dueno ya
+ *  corto (la misma regla que `accounts --forget`). Con `nueva`, la quitada era la principal y
+ *  `nueva` pasa a serlo: lo suyo pasa a la raiz, que es donde la principal lo lee, y sale de
+ *  los contenedores. Un ajuste que `nueva` no tenia propio era el de la raiz y no se escribe;
+ *  lo que no se hereda (`NO_HEREDAN`) sin uno propio vuelve al de fabrica. */
+export function quitarLineaDelStorage (datos, quitada, nueva) {
+  const todo = esObjeto(datos) ? datos : {}
+  const cambios = {}
+  const sinLas = (clave, cuentas) => {
+    const contenedor = todo[clave]
+    if (!esObjeto(contenedor) || !cuentas.some((c) => c in contenedor)) return
+    const resto = { ...contenedor }
+    for (const c of cuentas) delete resto[c]
+    cambios[clave] = resto
+  }
+  const salen = nueva ? [quitada, nueva] : [quitada]
+  if (nueva) {
+    const deLinea = esObjeto(todo[CONTENEDOR_DE_LINEA]?.[nueva]) ? todo[CONTENEDOR_DE_LINEA][nueva] : {}
+    for (const clave of CLAVES_DE_LINEA) {
+      const propio = CONTENEDOR_PROPIO[clave]
+      if (propio) {
+        const valor = esObjeto(todo[propio]) ? todo[propio][nueva] : undefined
+        cambios[clave] = valor === undefined ? (clave === 'scope' ? {} : null) : valor
+      } else {
+        cambios[clave] = clave in deLinea ? deLinea[clave] : null
+      }
+    }
+    const ajustes = esObjeto(todo[AJUSTES_POR_LINEA_KEY]?.[nueva]) ? todo[AJUSTES_POR_LINEA_KEY][nueva] : {}
+    for (const clave of AJUSTES_DE_LINEA) {
+      if (clave in ajustes) cambios[clave] = ajustes[clave]
+      else if (NO_HEREDAN.includes(clave)) cambios[clave] = null
+    }
+  }
+  for (const clave of CONTENEDORES_DE_LINEA) sinLas(clave, salen)
+  if (todo[SKILLS_LINE_KEY] === quitada) cambios[SKILLS_LINE_KEY] = null
+  return cambios
+}
+
+/** Las claves que `quitarLineaDelStorage` lee. */
+export function clavesParaQuitarLinea () {
+  return [...CLAVES_DE_LINEA, ...AJUSTES_DE_LINEA, ...CONTENEDORES_DE_LINEA, SKILLS_LINE_KEY]
+}
+
 /** Los tipos de linea (L5). `support` es la de siempre y el tipo de toda linea existente;
  *  `personal` existe en el contrato pero queda apagado hasta la parte 2 del plan. */
 export const TIPOS_DE_LINEA = Object.freeze(['support', 'personal'])
@@ -2735,6 +2806,26 @@ export default function activate(orca) {
     return desvincularLinea(linea, { porElDueno: true })
   }
 
+  /** Lo de la linea `quitada` sale del storage y, si era la principal, lo de `nueva` pasa a
+   *  la raiz (`quitarLineaDelStorage`), con el candado del storage que usa wa-scope. Un fallo
+   *  se dice en el log y no frena el desvincular: la sesion ya se corto. */
+  async function quitarDelStorage (quitada, nueva) {
+    try {
+      await conCandado(async () => {
+        const datos = {}
+        for (const key of clavesParaQuitarLinea()) {
+          const r = await orca.host.call('storage.get', { key })
+          if (r?.value !== undefined) datos[key] = r.value
+        }
+        for (const [key, value] of Object.entries(quitarLineaDelStorage(datos, quitada, nueva))) {
+          await orca.host.call('storage.set', { key, value })
+        }
+      })
+    } catch (error) {
+      orca.log(`unlinked line data not cleared (${motivoDe(error)})`)
+    }
+  }
+
   /** Desvincular UNA linea. `porElDueno` es el boton: la linea sale del registro y del
    *  conjunto de activas del almacen. Sin el es la credencial muerta: se tira y la MISMA
    *  linea vuelve a pedir su QR en su lugar. Con una sola linea las dos terminan igual que
@@ -2781,6 +2872,13 @@ export default function activate(orca) {
       if (eraPrincipal) {
         ultimoPrincipal = (nueva !== null && estadosSecundarios[nueva]) || estadoLimpio()
         if (nueva !== null) delete estadosSecundarios[nueva]
+      }
+      if (cuenta) {
+        sembradas.delete(cuenta)
+        const cuentaNueva = eraPrincipal && nueva !== null
+          ? registro.find((r) => r.carpeta === nueva)?.cuenta ?? null
+          : null
+        await quitarDelStorage(cuenta, cuentaNueva)
       }
       await publicarRegistro()
       await publicarSecundarios()
