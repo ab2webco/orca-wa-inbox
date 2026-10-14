@@ -4587,7 +4587,12 @@ console.log('\nactivity.html — tablero: el detalle del caso')
   card.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
   ok('Enter sobre la tarjeta lo abre', !detalle(doc).hidden && detalle(doc).dataset.case === '2')
   ok('las tarjetas se alcanzan con Tab', card.tabIndex === 0)
-  ok('abrir y cerrar el detalle no escribe nada', enviados.every((e) => e.action !== 'storage.set'))
+  // Lo unico que escribe es el pedido de leer su conversacion (panel-caso-movil): nada que
+  // firme, mueva o cambie un caso.
+  ok('abrir y cerrar el detalle no escribe nada mas que el pedido de leer su conversacion',
+    enviados.filter((e) => e.action === 'storage.set').every((e) =>
+      e.params.key === 'scopeRequest' && e.params.value?.action === 'hilo'),
+  JSON.stringify(enviados.filter((e) => e.action === 'storage.set').map((e) => e.params.value?.action)))
 
   // El caso que desaparece del tablero se lleva su detalle.
   const m = await abrirTablero({ board: tablero([tarjeta()]) })
@@ -4714,12 +4719,23 @@ console.log('\nactivity.html — tablero: que botones ofrece cada caso (T6)')
 // El host que contesta como el worker: lee `scopeRequest` y deja SU veredicto. Sin esto
 // el panel esperaria para siempre; con esto se prueba cada camino sin un worker de verdad.
 const conWorker = (respuesta, { demoraMs = 0 } = {}) => {
+  // `pedidos`: lo que pidio el dueno. `todos`: tambien la conversacion que el detalle lee
+  // sola al abrirse (panel-caso-movil); un `respuesta` fijo la contesta vacia.
   const pedidos = []
+  const todos = []
   const gancho = (d, storage) => {
     if (d.action === 'storage.set' && d.params.key === 'scopeRequest' && d.params.value &&
         !d.params.value.tombstone) {
       const pedido = d.params.value
-      pedidos.push(pedido)
+      todos.push(pedido)
+      if (pedido.action === 'hilo' && typeof respuesta !== 'function') {
+        setTimeout(() => {
+          storage.scopeResult = { at: new Date().toISOString(), requestId: pedido.id,
+            action: pedido.action, ok: true, code: 'hilo', caseId: pedido.caseId, mensajes: [], omitidos: 0 }
+        }, demoraMs)
+        return undefined
+      }
+      if (pedido.action !== 'hilo') pedidos.push(pedido)
       setTimeout(() => {
         const r = typeof respuesta === 'function' ? respuesta(pedido, storage) : respuesta
         if (r) storage.scopeResult = { at: new Date().toISOString(), requestId: pedido.id,
@@ -4728,7 +4744,7 @@ const conWorker = (respuesta, { demoraMs = 0 } = {}) => {
     }
     return undefined
   }
-  return { pedidos, gancho }
+  return { pedidos, todos, gancho }
 }
 const abrirConWorker = async (cards, worker, extra = {}, idioma = 'es-419') => {
   const storage = { board: tablero(cards), ...extra }
@@ -8479,6 +8495,155 @@ for (const [idioma, nombre, leyenda, nunca, bloqueado] of [['es-419', 'ES', /Orc
       S.pt.orcaClaudeRecapLabel !== S.en.orcaClaudeRecapLabel &&
       S.pt.orcaClaudeRecapHelp !== S.en.orcaClaudeRecapHelp)
   }
+}
+
+// ───────── panel-caso-movil: la conversacion del caso, la X que no se va y el movil ─────────
+const PNG_1X1 = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
+const HILO = {
+  ok: true, code: 'hilo', caseId: 1, omitidos: 0,
+  mensajes: [
+    { quien: 'Cliente Uno', fecha: '2026-10-14 09:01', propio: false, texto: 'Les mando la foto del error',
+      adjunto: { tipo: 'imagen', bytes: 213000, nombre: '3EB0FOTO.jpg', vista: PNG_1X1 } },
+    { quien: 'Cliente Uno', fecha: '2026-10-14 09:02', propio: false, texto: '',
+      adjunto: { tipo: 'documento', bytes: 2048, nombre: '3EB0DOC.pdf' } },
+    { quien: 'Soporte', fecha: '2026-10-14 09:05', propio: true, texto: 'Ya lo revisamos' }
+  ]
+}
+/** Un worker que contesta `hilo` con lo que se le pase y lo demas como `conWorker`. */
+const conHilo = (hilo, otra = { ok: true, code: 'enviado' }) =>
+  conWorker((pedido) => (pedido.action === 'hilo' ? hilo : otra))
+console.log('\nactivity.html — panel-caso-movil: la conversacion del caso en el detalle')
+{
+  const w = conHilo(HILO)
+  const { doc } = await abrirConWorker([tarjeta()], w)
+  abrirDetalle(doc, 1)
+  await espera()
+  ok('P2: abrir un caso pide su conversacion, una vez', w.todos.filter((p) => p.action === 'hilo').length === 1 &&
+    w.todos.find((p) => p.action === 'hilo').caseId === 1, JSON.stringify(w.todos))
+  await hastaPanel(() => detalle(doc).querySelectorAll('.det-hilo .hilo-msg').length === 3)
+  const msgs = [...detalle(doc).querySelectorAll('.det-hilo .hilo-msg')]
+  ok('P2: la conversacion muestra cada mensaje con quien y cuando',
+    msgs.length === 3 && /Cliente Uno/.test(msgs[0].textContent) && /09:01/.test(msgs[0].textContent) &&
+    /Les mando la foto del error/.test(msgs[0].textContent) && msgs[2].classList.contains('propio'),
+  detalle(doc).querySelector('.det-hilo')?.textContent)
+  const img = msgs[0].querySelector('img')
+  ok('P2: la imagen se ve con su vista previa, y dice su nombre y tamano',
+    img && img.getAttribute('src') === PNG_1X1 && img.getAttribute('alt') === '3EB0FOTO.jpg' &&
+    /Imagen · 208 KB · 3EB0FOTO\.jpg/.test(msgs[0].textContent), msgs[0].innerHTML)
+  ok('P2: un documento dice su tipo, tamano y nombre, sin imagen',
+    !msgs[1].querySelector('img') && /Documento · 2 KB · 3EB0DOC\.pdf/.test(msgs[1].textContent),
+    msgs[1].textContent)
+  const w2 = conHilo(HILO)
+  const otra = await abrirConWorker([tarjeta()], w2)
+  abrirDetalle(otra.doc, 1)
+  await hastaPanel(() => detalle(otra.doc).querySelectorAll('.hilo-msg').length === 3)
+  otra.doc.getElementById('refresh').click()
+  await espera(); await espera()
+  ok('P2: repintar el tablero no la vuelve a pedir', w2.todos.filter((p) => p.action === 'hilo').length === 1,
+    JSON.stringify(w2.todos))
+}
+{
+  const hostil = '<img src=x onerror="window.__xss2=1"><b>negrita</b>'
+  const w = conHilo({ ok: true, code: 'hilo', caseId: 1, omitidos: 4, mensajes: [
+    { quien: hostil, fecha: '2026-10-14 09:01', propio: false, texto: hostil,
+      adjunto: { tipo: 'imagen', bytes: 10, nombre: hostil, vista: 'javascript:alert(1)' } }] })
+  const { doc, window } = await abrirConWorker([tarjeta()], w)
+  abrirDetalle(doc, 1)
+  await hastaPanel(() => detalle(doc).querySelectorAll('.hilo-msg').length === 1)
+  ok('P2: el texto del cliente se ve literal y una vista que no es data:image no se pinta',
+    detalle(doc).querySelectorAll('.det-hilo img, .det-hilo b').length === 0 &&
+    detalle(doc).querySelector('.hilo-msg').textContent.includes(hostil) && window.__xss2 === undefined,
+  detalle(doc).querySelector('.det-hilo')?.innerHTML)
+  ok('P2: dice cuantos mensajes anteriores no se muestran',
+    /4 mensajes anteriores/.test(detalle(doc).querySelector('.det-hilo').textContent),
+    detalle(doc).querySelector('.det-hilo')?.textContent)
+}
+{
+  let veces = 0
+  const w = conWorker((pedido) => {
+    if (pedido.action !== 'hilo') return { ok: true, code: 'enviado' }
+    veces += 1
+    return veces === 1 ? { ok: false, code: 'E_NOT_FOUND' } : HILO
+  })
+  const { doc } = await abrirConWorker([tarjeta()], w)
+  abrirDetalle(doc, 1)
+  await hastaPanel(() => !!detalle(doc).querySelector('.det-hilo button[data-hilo-reintentar]'))
+  ok('P2: si no se pudo leer, lo dice y ofrece reintentar',
+    /No se pudieron leer los mensajes/.test(detalle(doc).querySelector('.det-hilo').textContent),
+    detalle(doc).querySelector('.det-hilo')?.textContent)
+  detalle(doc).querySelector('.det-hilo button[data-hilo-reintentar]').click()
+  await hastaPanel(() => detalle(doc).querySelectorAll('.hilo-msg').length === 3)
+  ok('P2: reintentar la vuelve a pedir y la muestra', veces === 2 &&
+    detalle(doc).querySelectorAll('.hilo-msg').length === 3)
+}
+{
+  // Un worker ocupado que no contesta la conversacion: el dueno igual puede enviar.
+  const w = conWorker((pedido) => (pedido.action === 'hilo' ? null : { ok: true, code: 'enviado' }))
+  const { doc } = await abrirConWorker([tarjeta()], w)
+  abrirDetalle(doc, 1)
+  ok('P2: mientras carga lo dice', /Cargando los mensajes/.test(detalle(doc).querySelector('.det-hilo')?.textContent || ''),
+    detalle(doc).querySelector('.det-hilo')?.textContent)
+  botonDe(doc, 1, 'enviar').click()
+  await hastaPanel(() => /Enviado/.test(mensajeDe(doc, 1)?.textContent || ''), 8000)
+  ok('P2: una accion del dueno no espera a la conversacion', w.pedidos.some((p) => p.action === 'enviar') &&
+    /Enviado/.test(mensajeDe(doc, 1)?.textContent || ''), mensajeDe(doc, 1)?.textContent)
+}
+for (const [idioma, nombre, titulo] of [['en', 'EN', /Conversation/], ['pt-BR', 'PT', /Conversa/]]) {
+  const w = conHilo(HILO)
+  const { doc } = await abrirConWorker([tarjeta()], w, {}, idioma)
+  abrirDetalle(doc, 1)
+  await hastaPanel(() => detalle(doc).querySelectorAll('.hilo-msg').length === 3)
+  ok(`P2: ${nombre}: la conversacion en su idioma`, titulo.test(detalle(doc).querySelector('.det-hilo').textContent) &&
+    !/\{|undefined/.test(detalle(doc).querySelector('.det-hilo').textContent),
+  detalle(doc).querySelector('.det-hilo')?.textContent)
+}
+
+console.log('\nactivity.html — panel-caso-movil: la X a la vista y la hoja en lo angosto')
+{
+  const { doc, window } = await abrirTablero({ board: tablero([tarjeta()]) })
+  abrirDetalle(doc, 1)
+  const cab = detalle(doc).querySelector('.det-head')
+  ok('P3: la cabecera del detalle, con la X, queda fija arriba al desplazarse',
+    window.getComputedStyle(cab).position === 'sticky' && window.getComputedStyle(cab).top === '0px' &&
+    !!cab.querySelector('.det-close'), window.getComputedStyle(cab).position)
+  ok('P3: a lo ancho el detalle no es una hoja', !detalle(doc).classList.contains('hoja'))
+}
+{
+  const { doc, window } = await abrirTablero({ board: tablero([tarjeta(), tarjeta({ case_id: 2, title: 'Otro caso' })]) })
+  window.matchMedia = (q) => ({ matches: /max-width: 768px/.test(q), media: q, addListener () {}, removeListener () {} })
+  doc.querySelector('#board-view button[data-vista="list"]').click()
+  abrirDetalle(doc, 1)
+  const caja = detalle(doc)
+  ok('P3: en lo angosto el caso se abre como hoja a pantalla completa, fuera de la lista',
+    caja.classList.contains('hoja') && !caja.classList.contains('en-linea') &&
+    caja.getAttribute('role') === 'dialog' && caja.getAttribute('aria-modal') === 'true' &&
+    !doc.getElementById('board-list').contains(caja), caja.className)
+  ok('P3: la hoja ocupa la pantalla y se desplaza sola', window.getComputedStyle(caja).position === 'fixed' &&
+    window.getComputedStyle(caja).overflowY === 'auto', window.getComputedStyle(caja).position)
+  ok('P3: lo de atras no se desplaza mientras esta abierta', doc.body.classList.contains('con-hoja'))
+  ok('P3: el foco va a la X', doc.activeElement === caja.querySelector('.det-close'),
+    doc.activeElement?.className)
+  doc.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+  ok('P3: Escape la cierra y devuelve el foco a la tarjeta', caja.hidden && !doc.body.classList.contains('con-hoja') &&
+    doc.activeElement === doc.querySelector('.card[data-case="1"]'), doc.activeElement?.outerHTML?.slice(0, 80))
+  abrirDetalle(doc, 2)
+  detalle(doc).querySelector('.det-close').click()
+  ok('P3: la X tambien la cierra', detalle(doc).hidden && !doc.body.classList.contains('con-hoja'))
+}
+
+console.log('\nactivity.html — panel-caso-movil: lo angosto no se corta')
+{
+  const { doc, window } = await abrirTablero({ board: tablero([tarjeta()]) })
+  const css = [...doc.querySelectorAll('style')].map((x) => x.textContent).join('\n')
+  const angosto = /@media \(max-width: 768px\) \{([\s\S]*?)\n      \}/.exec(css)?.[1] || ''
+  ok('P4: en lo angosto las etapas se acomodan en varias filas en vez de cortarse',
+    /\.chips \{[^}]*flex-wrap: wrap/.test(angosto), angosto.slice(0, 200))
+  ok('P4: en lo angosto cada paso de la historia pone quien y cuando debajo de lo que paso',
+    /\.det-hist li \{[^}]*flex-wrap: wrap/.test(angosto), '')
+  abrirDetalle(doc, 1)
+  ok('P4: el detalle sigue en su sitio a lo ancho', !detalle(doc).classList.contains('hoja') &&
+    !doc.body.classList.contains('con-hoja'))
+  void window
 }
 
 // ───────── L4/L5: varias lineas a la vez (odd/tasks/varias-lineas-y-segundo-cerebro.md) ─────────

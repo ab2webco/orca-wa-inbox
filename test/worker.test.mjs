@@ -5805,6 +5805,82 @@ console.log('\nworker: P9 — las reglas y el catalogo de cada linea')
   }
 }
 
+// ───────── panel-caso-movil P1: la conversacion del caso para el panel lateral ─────────
+// `hilo` (solo lectura) devuelve los mensajes del caso y sus adjuntos: tipo, tamano y nombre,
+// nunca la ruta; una imagen trae su vista previa en `data:` si cabe en los 64 KB del host.
+{
+  const { hiloParaPanel } = await import('../hilo.mjs')
+  const PNG_1X1 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
+  const dirMedia = join(RAIZ, 'media-hilo', 'pn-573000000012')
+  mkdirSync(dirMedia, { recursive: true })
+  const foto = join(dirMedia, '3EB0FOTO.png')
+  writeFileSync(foto, Buffer.from(PNG_1X1, 'base64'))
+  const doc = join(dirMedia, '3EB0DOC.pdf')
+  writeFileSync(doc, 'x'.repeat(2048))
+  const msg = (n, extra = {}) => ({ stanza_id: `S${n}`, date: `2026-10-14 09:${String(n % 60).padStart(2, '0')}`,
+    ts: 1792000000 + n, from_me: false, sender: 'Cliente Uno', text: `mensaje ${n}`,
+    media: null, en_caso: true, respondido: false, ...extra })
+  const hilo = [
+    msg(1, { text: 'Les mando la foto del error' , media: { type: 'imagen', bytes: 68, path: foto } }),
+    msg(2, { text: '', media: { type: 'documento', bytes: 2048, path: doc } }),
+    msg(3, { from_me: true, sender: 'Soporte', text: 'Ya lo revisamos' }),
+    msg(4, { text: 'Nota de voz', transcripcion: true, media: { type: 'audio', bytes: 9000, path: join(dirMedia, 'no-existe.ogg') } })
+  ]
+  const f = herramientasCaso('caso-hilo', { casos: { 7: casoDe({ hilo }) } })
+  const orca = hostFalso(f.dir, { chats: [] })
+  const { apagar } = await arranca(orca)
+  const v = await pideCaso(orca, { action: 'hilo', caseId: 7 })
+  const ms = v && Array.isArray(v.mensajes) ? v.mensajes : []
+  ok('P1: hilo contesta que si, con los mensajes del caso en orden',
+    v && v.ok === true && v.code === 'hilo' && v.caseId === 7 && ms.length === 4 &&
+    ms.map((m) => m.texto).join('|') === 'Les mando la foto del error||Ya lo revisamos|Nota de voz',
+    JSON.stringify(v).slice(0, 400))
+  ok('P1: cada mensaje dice quien, cuando, si es propio y si es transcripcion',
+    ms[0].quien === 'Cliente Uno' && ms[2].propio === true && ms[0].propio === false &&
+    ms[0].fecha === '2026-10-14 09:01' && ms[3].transcripcion === true, JSON.stringify(ms))
+  ok('P1: el adjunto dice tipo, tamano y nombre, y la imagen trae su vista previa',
+    ms[0].adjunto?.tipo === 'imagen' && ms[0].adjunto.bytes === 68 &&
+    ms[0].adjunto.nombre === '3EB0FOTO.png' &&
+    ms[0].adjunto.vista === 'data:image/png;base64,' + PNG_1X1 &&
+    ms[1].adjunto?.tipo === 'documento' && ms[1].adjunto.nombre === '3EB0DOC.pdf' && !ms[1].adjunto.vista &&
+    ms[3].adjunto?.tipo === 'audio' && !ms[3].adjunto.vista, JSON.stringify(ms))
+  ok('P1: ninguna ruta llega al panel', !JSON.stringify(v).includes(dirMedia) &&
+    !JSON.stringify(v).includes('"path"'), JSON.stringify(v).slice(0, 300))
+  ok('P1: leer la conversacion no firma ni mueve nada', f.scope().map(verbo).join(',') === 'ver' &&
+    f.send().length === 0, JSON.stringify(f.scope()))
+  const malo = await pideCaso(orca, { action: 'hilo', caseId: 'siete' })
+  ok('P1: un caso que no es un numero se rechaza con E_ARGS', malo && malo.ok === false &&
+    malo.code === 'E_ARGS', JSON.stringify(malo))
+  apagar()
+  await dormir(300)
+
+  // El presupuesto: el host corta en 64 KB por mensaje. Se guardan los mas nuevos enteros, y
+  // a una imagen que no cabe se le quita la vista previa antes que el mensaje.
+  const largo = Array.from({ length: 80 }, (_, i) => msg(i + 1, { text: 'z'.repeat(1500) }))
+  const r = await hiloParaPanel(largo, async () => null)
+  const bytes = Buffer.byteLength(JSON.stringify(r))
+  ok('P1: una conversacion larga cabe en el presupuesto y dice cuantos quedaron fuera',
+    bytes <= 56000 && r.omitidos > 0 && r.mensajes.length + r.omitidos === 80 &&
+    r.mensajes[r.mensajes.length - 1].texto.length === 1500 &&
+    r.mensajes[r.mensajes.length - 1].fecha === largo[79].date, `${bytes} ${r.omitidos}`)
+  const fotos = Array.from({ length: 12 }, (_, i) => msg(i + 1, {
+    media: { type: 'imagen', bytes: 300000, path: `/srv/ejemplo/media/f${i}.jpg` } }))
+  const pesada = 'data:image/jpeg;base64,' + 'A'.repeat(12000)
+  const r2 = await hiloParaPanel(fotos, async () => pesada)
+  const conVista = r2.mensajes.filter((m) => m.adjunto.vista).length
+  ok('P1: con muchas fotos, las que no caben quedan sin vista previa pero el mensaje sigue',
+    Buffer.byteLength(JSON.stringify(r2)) <= 56000 && r2.mensajes.length === 12 &&
+    r2.omitidos === 0 && conVista > 0 && conVista < 12 &&
+    r2.mensajes[11].adjunto.vista === pesada &&
+    r2.mensajes.filter((m) => !m.adjunto.vista).every((m) => m.adjunto.sinVista === true),
+  `${conVista} ${Buffer.byteLength(JSON.stringify(r2))}`)
+  const r3 = await hiloParaPanel([msg(1, { media: { type: 'imagen', bytes: 9, path: '/srv/ejemplo/x.jpg' } })],
+    async () => { throw new Error('sips not found') })
+  ok('P1: si no se puede hacer la vista previa, el adjunto sale igual, sin ella',
+    r3.mensajes.length === 1 && r3.mensajes[0].adjunto.nombre === 'x.jpg' && !r3.mensajes[0].adjunto.vista,
+    JSON.stringify(r3))
+}
+
 rmSync(RAIZ, { recursive: true, force: true })
 
 console.log(`\n${pruebas - fallos}/${pruebas} en verde`)
