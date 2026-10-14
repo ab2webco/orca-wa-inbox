@@ -12588,6 +12588,12 @@ def cmd_tick(con, a):
                 if con.in_transaction:
                     con.rollback()
                 print(f"wa-scope: unlinked line leftovers not closed: {exc}", file=sys.stderr)
+        try:
+            poda_textos(con)
+        except sqlite3.Error as exc:
+            if con.in_transaction:
+                con.rollback()
+            print(f"wa-scope: old text not pruned: {exc}", file=sys.stderr)
         # La entrada de respaldo: el worker la dispara al llegar cada mensaje; si ese
         # evento se perdio, el minuto la recoge. Una falla suya no frena el resto.
         try:
@@ -14558,6 +14564,53 @@ def cierra_lo_de_lineas_idas(con):
         (MOTIVO_LINEA_IDA, ahora_caso(), *AVISO_EN_ESPERA, *activas))
     con.commit()
     return len(filas), cur.rowcount
+
+
+# menos-ruido M5: el almacen borra los mensajes de mas de `capture_days`, y scope.db guardaba
+# sus copias para siempre. Una vez por dia, lo cerrado de la linea mas viejo que ese plazo se
+# queda sin texto; las filas quedan, porque los informes cuentan casos, tiempos y avisos.
+PODA_TEXTOS_CADA_S = 86400
+PODA_TEXTOS = "poda_textos_at"
+
+
+def poda_textos(con):
+    """Vacia el texto de lo cerrado de la linea activa mas viejo que su `capture_days`, una
+    vez por dia. Devuelve cuantas filas toco, o None si hoy ya corrio."""
+    cuenta = cuenta_activa()
+    llave = f"{PODA_TEXTOS}@{cuenta}"
+    fila = con.execute("select value from settings where key=?", (llave,)).fetchone()
+    try:
+        if fila and time.time() - float(fila["value"]) < PODA_TEXTOS_CADA_S:
+            return None
+    except (TypeError, ValueError):
+        pass
+    dias = wa_store.entero(wa_store.ajustes(cuenta), "capture_days")
+    corte = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(time.time() - dias * 86400))
+    vuelo = ",".join("?" * len(DESPACHO_EN_VUELO))
+    espera = AVISO_EN_ESPERA + ("contestando",)
+    casos = "select case_id from caso where account=?"
+    tocadas = 0
+    for sql, args in (
+        ("update caso set resumen=null, propuesta=null where account=? and etapa in "
+         "('cerrado', 'respondido') and updated_at < ? and (resumen is not null or "
+         "propuesta is not null)", (cuenta, corte)),
+        (f"update aviso set texto='' where account=? and at < ? and texto <> '' and estado "
+         f"not in ({','.join('?' * len(espera))})", (cuenta, corte, *espera)),
+        (f"update caso_avance set texto='' where case_id in ({casos}) and at < ? and "
+         "texto <> '' and estado <> 'pendiente'", (cuenta, corte)),
+        ("update transcripcion set texto=null where account=? and at < ? and texto is not null",
+         (cuenta, corte)),
+        ("update juicio set jev=null, rafaga=null where account=? and at < ? and "
+         "(jev is not null or rafaga is not null)", (cuenta, corte)),
+        (f"update caso_despacho set instrucciones=null, informes=null where case_id in ({casos}) "
+         f"and updated_at < ? and estado not in ({vuelo}) and (instrucciones is not null or "
+         "informes is not null)", (cuenta, corte, *DESPACHO_EN_VUELO)),
+    ):
+        tocadas += con.execute(sql, args).rowcount
+    con.execute("insert into settings (key, value) values (?, ?) on conflict(key) do update "
+                "set value=excluded.value", (llave, str(time.time())))
+    con.commit()
+    return tocadas
 
 
 def tick_vigila(con, resumen, inicio=None):

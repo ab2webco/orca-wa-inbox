@@ -5965,6 +5965,95 @@ ok("cada regla sin agente tiene su texto en el tablero, en los tres idiomas",
    and all(_tablero.count(f'"noAgent_{r}": ') == 3 for r in _reglas_sin_agente),
    str([r for r in _reglas_sin_agente if _tablero.count(f'"noAgent_{r}": ') != 3]))
 
+# ── menos-ruido M5: scope.db no guarda el texto de las conversaciones mas que el almacen ──
+# El almacen borra lo de mas de `capture_days`; scope.db guardaba para siempre las copias: el
+# resumen y la respuesta de cada caso, el texto de los avisos y de los avances, lo transcrito,
+# el veredicto de Jev y el brief y los informes del agente. Pasado ese plazo, lo cerrado se
+# queda sin texto y conserva la fila (los informes cuentan casos, tiempos y avisos).
+print("\nscope.db borra el texto de lo cerrado mas viejo que capture_days (menos-ruido M5)")
+if NODE:
+    with tempfile.TemporaryDirectory() as home:
+        llegan(home, A, [msg(PERSONA, "R0", "hola", 1)])
+        js(home, "config", "capture_days", "30")
+        ids = {}
+        for nombre in ("viejo", "nuevo", "abierto"):
+            js(home, "caso", "crear", "--chat", PERSONA, "--stanza", f"R-{nombre}",
+               "--actor", "automatizacion")
+            ids[nombre] = caso_de_stanza(home, f"R-{nombre}")["case_id"]
+        con = db_de(home)
+        cuenta = con.execute("select account from caso where case_id=?",
+                             (ids["viejo"],)).fetchone()[0]
+        hace = {"viejo": "-40 days", "nuevo": "-5 days", "abierto": "-40 days"}
+        for nombre, cid in ids.items():
+            sello = f"datetime('now', '{hace[nombre]}', 'localtime')"
+            etapa = "recibido" if nombre == "abierto" else "cerrado"
+            con.execute(f"update caso set etapa=?, resumen=?, propuesta=?, updated_at={sello} "
+                        "where case_id=?", (etapa, f"resumen {nombre}",
+                                            json.dumps({"respuesta": f"respuesta {nombre}"}),
+                                            cid))
+            con.execute(f"insert into aviso (req_id, tipo, case_id, account, chat_jid, texto, "
+                        f"estado, at, updated_at) values (?, 'respuesta', ?, ?, ?, ?, ?, "
+                        f"{sello}, {sello})", (f"aviso-{nombre}", cid, cuenta, PERSONA,
+                                               f"aviso {nombre}",
+                                               "pendiente" if nombre == "abierto" else "enviado"))
+            con.execute(f"insert into caso_avance (case_id, n, req_id, texto, actor, estado, at) "
+                        f"values (?, 1, ?, ?, 'agente', 'enviado', {sello})",
+                        (cid, f"avance-{nombre}", f"avance {nombre}"))
+            con.execute(f"insert into transcripcion (account, chat_jid, stanza_id, ok, texto, at) "
+                        f"values (?, ?, ?, 1, ?, {sello})",
+                        (cuenta, PERSONA, f"T-{nombre}", f"transcrito {nombre}"))
+            con.execute(f"insert into juicio (account, chat_jid, stanza_id, clase, origen, at, jev, "
+                        f"rafaga) values (?, ?, ?, 'card', 'jev', {sello}, ?, ?)",
+                        (cuenta, PERSONA, f"J-{nombre}", json.dumps({"skip": False}),
+                         json.dumps([f"J-{nombre}"])))
+            con.execute(f"insert into caso_despacho (case_id, evento_id, estado, instrucciones, "
+                        f"informes, created_at, updated_at) values (?, ?, ?, ?, ?, {sello}, "
+                        f"{sello})", (cid, 9000 + cid,
+                                      "activo" if nombre == "abierto" else "reportado",
+                                      f"brief {nombre}", json.dumps([{"resumen": nombre}])))
+        con.commit()
+        filas_antes = {t: cuenta_filas for t, cuenta_filas in (
+            (t, con.execute(f"select count(*) from {t}").fetchone()[0])
+            for t in ("caso", "aviso", "caso_avance", "transcripcion", "juicio", "caso_despacho"))}
+        con.close()
+        tick(home)
+        con = db_de(home)
+
+        def uno(sql, *args):
+            return con.execute(sql, args).fetchone()
+
+        v, n, ab = ids["viejo"], ids["nuevo"], ids["abierto"]
+        ok("M5: un caso cerrado mas viejo que capture_days queda sin resumen ni respuesta",
+           tuple(uno("select resumen, propuesta from caso where case_id=?", v)) == (None, None),
+           f"{tuple(uno('select resumen, propuesta from caso where case_id=?', v))}")
+        ok("M5: y su aviso, su avance, lo transcrito, el veredicto y el brief, sin texto",
+           uno("select texto from aviso where req_id='aviso-viejo'")[0] == ""
+           and uno("select texto from caso_avance where req_id='avance-viejo'")[0] == ""
+           and uno("select texto from transcripcion where stanza_id='T-viejo'")[0] is None
+           and tuple(uno("select jev, rafaga from juicio where stanza_id='J-viejo'"))
+           == (None, None)
+           and tuple(uno("select instrucciones, informes from caso_despacho where case_id=?", v))
+           == (None, None))
+        ok("M5: lo de dentro del plazo queda igual",
+           uno("select resumen from caso where case_id=?", n)[0] == "resumen nuevo"
+           and uno("select texto from aviso where req_id='aviso-nuevo'")[0] == "aviso nuevo"
+           and uno("select texto from caso_avance where req_id='avance-nuevo'")[0]
+           == "avance nuevo"
+           and uno("select texto from transcripcion where stanza_id='T-nuevo'")[0]
+           == "transcrito nuevo"
+           and uno("select jev from juicio where stanza_id='J-nuevo'")[0] is not None
+           and uno("select instrucciones from caso_despacho where case_id=?", n)[0]
+           == "brief nuevo")
+        ok("M5: lo abierto no se toca aunque sea viejo: el caso, su aviso pendiente y su despacho",
+           uno("select resumen from caso where case_id=?", ab)[0] == "resumen abierto"
+           and uno("select texto from aviso where req_id='aviso-abierto'")[0] == "aviso abierto"
+           and uno("select instrucciones from caso_despacho where case_id=?", ab)[0]
+           == "brief abierto")
+        ok("M5: ninguna fila se borra: los informes siguen contando",
+           all(con.execute(f"select count(*) from {t}").fetchone()[0] == c
+               for t, c in filas_antes.items()))
+        con.close()
+
 
 
 # ── Un grupo no dirigido solo despierta al agente por un pedido; observar no redacta ────────

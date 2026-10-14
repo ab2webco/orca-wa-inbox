@@ -77,7 +77,10 @@ Tres cosas que no son detalles de implementación:
 - **El almacén tiene tope y caducidad** (`capture_max`, `capture_days`, editables), con
   permisos `0600`. Un almacén sin tope es un archivo de conversaciones ajenas que nadie
   borra. Cuando el tope muerde, se dice: el panel lo muestra y `wa-read state` trae
-  cuánto se desalojó y cuándo.
+  cuánto se desalojó y cuándo. El mismo `capture_days` vale para las copias de
+  `scope.db`: una vez al día, lo cerrado más viejo que ese plazo se queda sin texto (el
+  resumen y la respuesta del caso, avisos, avances, transcripciones, veredictos de Jev y
+  briefs), y las filas quedan para los informes.
 - **La llave es `(línea, conversación, mensaje)`.** La misma conversación vista desde
   dos líneas suyas es el mismo identificador de WhatsApp, y servir el cuerpo de una al
   preguntar por la otra sería contestar sobre una conversación ajena.

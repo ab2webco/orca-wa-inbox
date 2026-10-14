@@ -41,7 +41,10 @@ Out of scope: the Informes redesign (not approved yet).
   (one live case: six holds). Now the line's fixed acknowledgement goes out once instead,
   also in `model`; nothing changes when something already reached the client. Subset RED
   84/86, GREEN 86/86.
-- [ ] M5 scope.db retention.
+- [x] M5 scope.db retention: once a day each line's tick empties the text of what is closed
+  and older than that line's `capture_days` (case summary and reply, notices, updates,
+  transcripts, Jev verdicts, agent briefs and reports); rows stay for the reports, open
+  work is never touched. Same knob as the capture store, no new setting. RED 3/5, GREEN 5/5.
 - [x] M6 Failed notice retried on its own line: the 15 `send-wrong-line` failures in the
   owner's data all predate linea-viva V6 (last on 2026-10-10 08:02; since then 20 notices
   left correctly through the other line). What remained: a `send-wrong-line` was final.
