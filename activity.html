@@ -417,15 +417,16 @@
 
       /* El detalle: el panel de un elemento de Plane, al costado del tablero. */
       .board-detail { flex: 0 0 380px; width: 380px; min-width: 0; position: sticky; top: 8px;
-             max-height: calc(100vh - 16px); overflow: auto; padding: 12px 14px 16px;
+             max-height: calc(100vh - 16px); overflow: auto; padding: 0 14px 16px;
              border: 1px solid var(--border, var(--fb-border)); border-radius: var(--radius-md);
              background: var(--card, var(--fb-card));
              color: var(--card-foreground, var(--foreground, var(--fb-foreground)));
              box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05); }
       /* La cabecera (id, etapa y la X) queda fija arriba mientras el detalle se desplaza: la X
-         no se va con el contenido (panel-caso-movil). Cubre el relleno de arriba de la caja. */
+         no se va con el contenido (panel-caso-movil). La caja no lleva relleno arriba: lo lleva
+         la cabecera, porque lo pegado se queda dentro del relleno de quien se desplaza. */
       .det-head { display: flex; align-items: center; gap: 8px; position: sticky; top: 0;
-             z-index: 3; margin: -12px -14px 0; padding: 12px 14px 8px;
+             z-index: 3; margin: 0 -14px; padding: 12px 14px 8px;
              background: var(--card, var(--fb-card));
              border-bottom: 1px solid transparent; }
       /* En lo angosto el caso se abre como hoja a pantalla completa, con su propio
@@ -433,8 +434,8 @@
       .board-detail.hoja { position: fixed; inset: 0; z-index: 30; width: auto; flex: none;
              max-height: none; height: 100%; overflow-y: auto; overscroll-behavior: contain;
              margin: 0; border: 0; border-radius: 0; box-shadow: none;
-             padding: 12px 16px calc(24px + env(safe-area-inset-bottom, 0px)); }
-      .board-detail.hoja .det-head { margin: -12px -16px 0; padding: 12px 16px 8px;
+             padding: 0 16px calc(24px + env(safe-area-inset-bottom, 0px)); }
+      .board-detail.hoja .det-head { margin: 0 -16px; padding: 12px 16px 8px;
              border-bottom-color: var(--border, var(--fb-border)); }
       .board-detail.hoja .det-close { width: 40px; height: 40px; font-size: 22px; }
       body.con-hoja { overflow: hidden; }

@@ -22,14 +22,14 @@ away with the content, and at phone width the detail opens inside the list, cram
   scroll, the header fixed at the top, Escape and the close button closing it, and the page
   behind not scrolling.
 - Mobile fixes seen in the 390 px screenshots: the stage filters wrap instead of being cut,
-  the history rows stack the who/when under the what, the id column narrows.
+  and the history rows put who and when under what happened.
 
 ## Checklist
 
 - [x] P1 Worker action `hilo` with previews and the 64 KB budget (`test/worker.test.mjs`).
 - [x] P2 Panel conversation section (`test/panels.test.mjs`).
 - [x] P3 Sticky header and full-screen sheet on narrow widths (`test/panels.test.mjs`).
-- [x] P4 Mobile fixes: filters, history, id column (`test/panels.test.mjs`).
+- [x] P4 Mobile fixes: filters and history (`test/panels.test.mjs`).
 - [ ] P5 Screenshots 1440/768/390/320, light and dark; full checks; release.
 
 ## Acceptance criteria

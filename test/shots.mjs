@@ -24,6 +24,7 @@ const { chromium } = req('playwright')
 import { mkdir, rm } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { crc32, deflateSync } from 'node:zlib'
 import { informeDeEjemplo, informeVacio } from './informes-ejemplo.mjs'
 
 const RAIZ = join(dirname(fileURLToPath(import.meta.url)), '..')
@@ -583,6 +584,51 @@ const TABLERO_PERIODO_VACIO = tableroDe(terminados('cerrado', 3, 300).map((c) =>
 // primer paso de los guiones para que cada uno diga desde donde arranca.
 const ABRIR_TABLERO = 'void 0'
 
+/** Un PNG de prueba (un degradado), para la vista previa de un adjunto: dibujado aca, sin
+ *  ninguna foto de verdad. */
+function pngDePrueba (ancho, alto) {
+  const bloque = (tipo, datos) => {
+    const largo = Buffer.alloc(4)
+    largo.writeUInt32BE(datos.length)
+    const cuerpo = Buffer.concat([Buffer.from(tipo), datos])
+    const suma = Buffer.alloc(4)
+    suma.writeUInt32BE(crc32(cuerpo))
+    return Buffer.concat([largo, cuerpo, suma])
+  }
+  const cab = Buffer.alloc(13)
+  cab.writeUInt32BE(ancho, 0)
+  cab.writeUInt32BE(alto, 4)
+  cab[8] = 8; cab[9] = 2
+  const filas = []
+  for (let y = 0; y < alto; y++) {
+    const fila = Buffer.alloc(1 + ancho * 3)
+    for (let x = 0; x < ancho; x++) {
+      fila[1 + x * 3] = 40 + Math.round(150 * x / ancho)
+      fila[2 + x * 3] = 90 + Math.round(100 * y / alto)
+      fila[3 + x * 3] = 170
+    }
+    filas.push(fila)
+  }
+  const png = Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), bloque('IHDR', cab),
+    bloque('IDAT', deflateSync(Buffer.concat(filas))), bloque('IEND', Buffer.alloc(0))])
+  return 'data:image/png;base64,' + png.toString('base64')
+}
+// La conversacion de un caso como la contesta el worker (`hilo`): una foto con su vista
+// previa, un documento, una nota de voz transcrita y la respuesta de la linea.
+const HILO_DE_EJEMPLO = { ok: true, code: 'hilo', caseId: 1, omitidos: 2, mensajes: [
+  { quien: 'Cliente Norte', fecha: '2026-09-17 13:51', propio: false,
+    texto: 'Otro proveedor nos lo deja en 1.400. Les mando la cotizacion y una foto del contrato.' },
+  { quien: 'Cliente Norte', fecha: '2026-09-17 13:52', propio: false, texto: '',
+    adjunto: { tipo: 'imagen', bytes: 218582, nombre: '3EB0A1B2C3D4.jpg', vista: pngDePrueba(240, 160) } },
+  { quien: 'Cliente Norte', fecha: '2026-09-17 13:52', propio: false, texto: '',
+    adjunto: { tipo: 'documento', bytes: 5209375, nombre: 'cotizacion-proveedor.pdf' } },
+  { quien: 'Cliente Norte', fecha: '2026-09-17 13:55', propio: false, transcripcion: true,
+    texto: 'Necesitamos una respuesta hoy, porque el viernes renovamos.',
+    adjunto: { tipo: 'audio', bytes: 41230, nombre: '3EB0F9E8D7C6.ogg' } },
+  { quien: 'Soporte', fecha: '2026-09-17 13:58', propio: true,
+    texto: 'Recibido, lo revisamos y le confirmamos hoy mismo.' }
+] }
+
 // Textos de la longitud y la forma de los de verdad: un nombre sin espacios donde partir,
 // un parrafo largo y una URL. Es lo que desborda una columna de 160 px.
 const LARGO = 'Necesitamos que revisen la integración completa del módulo de ' +
@@ -1119,6 +1165,24 @@ const PANELES = [
     enTodosLosAnchos: true, espera: 400, datos: conTablero(tableroDe(TABLERO_CASOS)),
     guion: ABRIR_TABLERO + `;
       document.querySelector('.card[data-case="1"]').click()`
+  },
+  {
+    // panel-caso-movil: la conversacion del caso en el detalle, con la vista previa de una
+    // foto; en lo angosto el caso es una hoja a pantalla completa con la X fija arriba.
+    nombre: 'tablero-conversacion', archivo: 'activity.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, espera: 600, datos: conTablero(tableroDe(TABLERO_CASOS)),
+    stub: { veredictoAccion: HILO_DE_EJEMPLO },
+    guion: ABRIR_TABLERO + `;
+      document.querySelector('.card[data-case="1"]').click()`
+  },
+  {
+    // La misma, desplazada hasta abajo: la cabecera con la X sigue a la vista.
+    nombre: 'tablero-conversacion-abajo', archivo: 'activity.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, espera: 900, soloPantalla: true, datos: conTablero(tableroDe(TABLERO_CASOS)),
+    stub: { veredictoAccion: HILO_DE_EJEMPLO },
+    guion: ABRIR_TABLERO + `;
+      document.querySelector('.card[data-case="1"]').click();
+      setTimeout(function () { var d = document.getElementById('board-detail'); d.scrollTop = d.scrollHeight }, 500)`
   },
   {
     // Lo atrasado de un chat que ya se atendio despues (sin-responder): cerrado sin el agente,
@@ -2116,7 +2180,9 @@ async function main() {
         }
 
         const nombre = `${panel.nombre}-${idioma.tag}-${tema}-${ancho}.png`
-        await pagina.screenshot({ path: join(SALIDA, nombre), fullPage: true })
+        // Una hoja fija (`soloPantalla`) se fotografia como la ve el telefono: la pantalla y no
+        // la pagina entera, que estira la hoja y esconde si su cabecera queda fija.
+        await pagina.screenshot({ path: join(SALIDA, nombre), fullPage: !panel.soloPantalla })
         tomadas += 1
         console.log(`  ${nombre}`)
         await pagina.close()
