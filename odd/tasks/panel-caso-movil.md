@@ -26,10 +26,10 @@ away with the content, and at phone width the detail opens inside the list, cram
 
 ## Checklist
 
-- [ ] P1 Worker action `hilo` with previews and the 64 KB budget (`test/worker.test.mjs`).
-- [ ] P2 Panel conversation section (`test/panels.test.mjs`).
-- [ ] P3 Sticky header and full-screen sheet on narrow widths (`test/panels.test.mjs`).
-- [ ] P4 Mobile fixes: filters, history, id column (`test/panels.test.mjs`).
+- [x] P1 Worker action `hilo` with previews and the 64 KB budget (`test/worker.test.mjs`).
+- [x] P2 Panel conversation section (`test/panels.test.mjs`).
+- [x] P3 Sticky header and full-screen sheet on narrow widths (`test/panels.test.mjs`).
+- [x] P4 Mobile fixes: filters, history, id column (`test/panels.test.mjs`).
 - [ ] P5 Screenshots 1440/768/390/320, light and dark; full checks; release.
 
 ## Acceptance criteria

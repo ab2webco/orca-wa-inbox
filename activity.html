@@ -422,7 +422,46 @@
              background: var(--card, var(--fb-card));
              color: var(--card-foreground, var(--foreground, var(--fb-foreground)));
              box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05); }
-      .det-head { display: flex; align-items: center; gap: 8px; }
+      /* La cabecera (id, etapa y la X) queda fija arriba mientras el detalle se desplaza: la X
+         no se va con el contenido (panel-caso-movil). Cubre el relleno de arriba de la caja. */
+      .det-head { display: flex; align-items: center; gap: 8px; position: sticky; top: 0;
+             z-index: 3; margin: -12px -14px 0; padding: 12px 14px 8px;
+             background: var(--card, var(--fb-card));
+             border-bottom: 1px solid transparent; }
+      /* En lo angosto el caso se abre como hoja a pantalla completa, con su propio
+         desplazamiento; lo de atras no se mueve mientras esta abierta. */
+      .board-detail.hoja { position: fixed; inset: 0; z-index: 30; width: auto; flex: none;
+             max-height: none; height: 100%; overflow-y: auto; overscroll-behavior: contain;
+             margin: 0; border: 0; border-radius: 0; box-shadow: none;
+             padding: 12px 16px calc(24px + env(safe-area-inset-bottom, 0px)); }
+      .board-detail.hoja .det-head { margin: -12px -16px 0; padding: 12px 16px 8px;
+             border-bottom-color: var(--border, var(--fb-border)); }
+      .board-detail.hoja .det-close { width: 40px; height: 40px; font-size: 22px; }
+      body.con-hoja { overflow: hidden; }
+      /* La conversacion del caso: los mensajes y sus adjuntos (panel-caso-movil). */
+      .hilo-lista { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column;
+             gap: 8px; }
+      .hilo-msg { max-width: 92%; padding: 6px 10px; border-radius: var(--radius-md);
+             background: color-mix(in srgb, var(--muted, var(--fb-muted)) 60%, transparent);
+             overflow-wrap: anywhere; }
+      .hilo-msg.propio { align-self: flex-end;
+             background: color-mix(in srgb, var(--primary, var(--fb-primary)) 10%, transparent); }
+      .hilo-cab { display: flex; flex-wrap: wrap; gap: 0 6px; font-size: 11px;
+             color: var(--muted-foreground, var(--fb-muted-foreground)); }
+      .hilo-quien { font-weight: 600; color: var(--foreground, var(--fb-foreground)); }
+      .hilo-texto { margin: 2px 0 0; line-height: 1.45; white-space: pre-wrap; }
+      .hilo-marca { margin: 2px 0 0; font-size: 11px;
+             color: var(--muted-foreground, var(--fb-muted-foreground)); }
+      .hilo-adj { margin: 6px 0 0; }
+      .hilo-adj img { display: block; max-width: 100%; max-height: 240px; height: auto;
+             border-radius: calc(var(--radius-md) * 0.75);
+             border: 1px solid var(--border, var(--fb-border)); }
+      .hilo-adj figcaption { margin-top: 4px; font-size: 11px; overflow-wrap: anywhere;
+             color: var(--muted-foreground, var(--fb-muted-foreground)); }
+      .hilo-estado { margin: 0; font-size: 12px;
+             color: var(--muted-foreground, var(--fb-muted-foreground)); }
+      .hilo-estado.mala { color: var(--destructive, var(--fb-destructive)); }
+      .det-hilo .btn { margin-top: 6px; }
       /* La pastilla de etapa: `rounded-full border px-2 py-0.5 text-[10px] font-medium`. */
       .etapa-pill { display: inline-flex; align-items: center; gap: 5px; padding: 1px 8px;
              font-size: 10px; font-weight: 500; border-radius: 9999px;
@@ -701,19 +740,22 @@
       }
       .rep-mas { margin: 6px 0 0; font-size: 11px; color: var(--muted-foreground, var(--fb-muted-foreground)); }
 
-      /* Hasta 768 px la lista es la vista natural y el detalle se abre en el lugar, debajo
-         de lo elegido. El buscador toma la fila entera. */
+      /* Hasta 768 px la lista es la vista natural y el detalle se abre como hoja a pantalla
+         completa (`.hoja`). El buscador toma la fila entera. */
       @media (max-width: 768px) {
         .board-body { flex-direction: column; align-items: stretch; }
         .board-detail { position: static; width: auto; flex: none; max-height: none; }
-        .board-detail.en-linea { border: 0; border-radius: 0; box-shadow: none;
-             background: color-mix(in srgb, var(--muted, var(--fb-muted)) 35%, transparent); }
         .search { flex-basis: 100%; }
         #board-shown { margin-left: auto; }
         .btn { min-height: 32px; padding: 0 12px; }
         .card.fila { grid-template-columns: 40px minmax(0, 1fr) auto; gap: 4px 8px; }
         /* Con el detalle abierto justo debajo, la fila no repite lo que el detalle dice. */
         .card.fila.elegida .fila-main > :not(.card-title):not(.card-meta) { display: none; }
+        /* Las etapas se acomodan en varias filas: cortadas, las del final no se veian. */
+        .chips { flex-wrap: wrap; overflow-x: visible; }
+        /* Cada paso de la historia: lo que paso arriba, quien y cuando debajo. */
+        .det-hist li { flex-wrap: wrap; gap: 0 8px; }
+        .det-hist li > :first-child { flex: 1 1 100%; }
       }
     </style>
   </head>
@@ -978,6 +1020,21 @@
               "detJev": "Revision de Jev",
               "detActions": "Acciones",
               "detHistory": "Historia",
+              "detConversation": "Conversacion",
+              "hiloCargando": "Cargando los mensajes…",
+              "hiloError": "No se pudieron leer los mensajes.",
+              "hiloReintentar": "Reintentar",
+              "hiloVacio": "No hay mensajes guardados de este caso.",
+              "hiloOmitidos": "{n} mensajes anteriores no se muestran aqui.",
+              "hiloLinea": "Enviado por la linea",
+              "hiloTranscripcion": "transcripcion de la nota de voz",
+              "hiloSinVista": "sin vista previa",
+              "hiloTipo_imagen": "Imagen",
+              "hiloTipo_sticker": "Sticker",
+              "hiloTipo_audio": "Audio",
+              "hiloTipo_video": "Video",
+              "hiloTipo_documento": "Documento",
+              "hiloTipoOtro": "Adjunto",
               "detPrio": "Prioridad",
               "jevSignals": "Senales",
               "flagOther": "otra senal",
@@ -1352,6 +1409,21 @@
               "detJev": "Jev review",
               "detActions": "Actions",
               "detHistory": "History",
+              "detConversation": "Conversation",
+              "hiloCargando": "Loading the messages…",
+              "hiloError": "The messages could not be read.",
+              "hiloReintentar": "Try again",
+              "hiloVacio": "No messages are stored for this case.",
+              "hiloOmitidos": "{n} earlier messages are not shown here.",
+              "hiloLinea": "Sent by the line",
+              "hiloTranscripcion": "voice note transcription",
+              "hiloSinVista": "no preview",
+              "hiloTipo_imagen": "Image",
+              "hiloTipo_sticker": "Sticker",
+              "hiloTipo_audio": "Audio",
+              "hiloTipo_video": "Video",
+              "hiloTipo_documento": "Document",
+              "hiloTipoOtro": "Attachment",
               "detPrio": "Priority",
               "jevSignals": "Signals",
               "flagOther": "another signal",
@@ -1726,6 +1798,21 @@
               "detJev": "Revisao do Jev",
               "detActions": "Acoes",
               "detHistory": "Historico",
+              "detConversation": "Conversa",
+              "hiloCargando": "Carregando as mensagens…",
+              "hiloError": "Nao foi possivel ler as mensagens.",
+              "hiloReintentar": "Tentar de novo",
+              "hiloVacio": "Nao ha mensagens guardadas deste caso.",
+              "hiloOmitidos": "{n} mensagens anteriores nao aparecem aqui.",
+              "hiloLinea": "Enviado pela linha",
+              "hiloTranscripcion": "transcricao da nota de voz",
+              "hiloSinVista": "sem pre-visualizacao",
+              "hiloTipo_imagen": "Imagem",
+              "hiloTipo_sticker": "Figurinha",
+              "hiloTipo_audio": "Audio",
+              "hiloTipo_video": "Video",
+              "hiloTipo_documento": "Documento",
+              "hiloTipoOtro": "Anexo",
               "detPrio": "Prioridade",
               "jevSignals": "Sinais",
               "flagOther": "outro sinal",
@@ -2666,29 +2753,158 @@
       /** Deja el pedido y espera SU veredicto, por id. Sin el id el panel pintaria la
        *  respuesta que quedo del clic anterior como si fuera la de este. `null` = el
        *  plugin no contesto. */
-      function pedirAccion (pedido) {
+      function escribirPedido (pedido) {
         pedido.id = 'ac-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8)
         pedido.at = new Date().toISOString()
-        return call('storage.set', { key: 'scopeRequest', value: pedido }).then(function (r) {
+        return call('storage.set', { key: 'scopeRequest', value: pedido })
+      }
+
+      /** El veredicto de `id`, o null si no llego en `ms`, o undefined si `sigue()` dijo que
+       *  ya no hace falta esperarlo. */
+      function esperarVeredicto (id, ms, sigue) {
+        var fin = Date.now() + ms
+        return new Promise(function (resolve) {
+          ;(function vuelta () {
+            if (sigue && !sigue()) { resolve(undefined); return }
+            call('storage.get', { key: 'scopeResult' }).then(function (v) {
+              var dato = stored(v)
+              if (esObjeto(dato) && dato.requestId === id) { resolve(dato); return }
+              if (Date.now() > fin) { resolve(null); return }
+              setTimeout(vuelta, ACCION_SONDEO_MS)
+            })
+          })()
+        })
+      }
+
+      function pedirAccion (pedido) {
+        // Lo que pide el dueno pasa antes que la conversacion que el detalle lee solo: el canal
+        // es uno, y esa lectura se vuelve a pedir cuando esto termine (panel-caso-movil).
+        accionesEnVuelo += 1
+        if (hiloEnVuelo) hiloEnVuelo.cancelado = true
+        return escribirPedido(pedido).then(function (r) {
           if (!r || !r.ok) return { ok: false, code: 'no-escritura' }
-          var fin = Date.now() + ACCION_ESPERA_MS
-          return new Promise(function (resolve) {
-            ;(function vuelta () {
-              call('storage.get', { key: 'scopeResult' }).then(function (v) {
-                var dato = stored(v)
-                if (esObjeto(dato) && dato.requestId === pedido.id) { resolve(dato); return }
-                if (Date.now() > fin) { resolve(null); return }
-                setTimeout(vuelta, ACCION_SONDEO_MS)
-              })
-            })()
-          })
+          return esperarVeredicto(pedido.id, ACCION_ESPERA_MS)
         }).then(function (v) {
           // Sin veredicto el pedido sigue escrito, y un envio que nadie atendio no puede
           // salir despues por su cuenta: se reemplaza por una lapida, que el worker limpia.
           if (!v) call('storage.set', { key: 'scopeRequest',
             value: { id: pedido.id, at: new Date().toISOString(), tombstone: true } })
           return v
+        }).then(function (v) {
+          accionesEnVuelo -= 1
+          if (!accionesEnVuelo && seleccion && hilos[seleccion] && hilos[seleccion].estado === 'pendiente') {
+            cargarHilo(seleccion)
+          }
+          return v
         })
+      }
+
+      // ── La conversacion del caso abierto (panel-caso-movil) ──
+      // `hilos[id]`: {estado: cargando | pendiente | listo | error, mensajes, omitidos}. Se
+      // pide al abrir el caso, por el mismo canal que las acciones, y es solo lectura: si no
+      // llega, se dice y se ofrece reintentar; nunca deja una lapida.
+      var hilos = {}
+      var hiloEnVuelo = null
+      var accionesEnVuelo = 0
+      var HILO_ESPERA_MS = 30000
+
+      function cargarHilo (id) {
+        if (accionesEnVuelo > 0) { hilos[id] = { estado: 'pendiente' }; return }
+        if (hiloEnVuelo) hiloEnVuelo.cancelado = true
+        var vuelo = { cancelado: false }
+        hiloEnVuelo = vuelo
+        hilos[id] = { estado: 'cargando' }
+        var pedido = { action: 'hilo', caseId: Number(id) }
+        escribirPedido(pedido).then(function (r) {
+          if (!r || !r.ok) return null
+          return esperarVeredicto(pedido.id, HILO_ESPERA_MS, function () { return !vuelo.cancelado })
+        }).then(function (v) {
+          if (hiloEnVuelo === vuelo) hiloEnVuelo = null
+          if (v === undefined) {
+            if (hilos[id] && hilos[id].estado === 'cargando') hilos[id] = { estado: 'pendiente' }
+          } else if (v && v.ok === true && Array.isArray(v.mensajes)) {
+            hilos[id] = { estado: 'listo', mensajes: v.mensajes,
+              omitidos: Number.isInteger(v.omitidos) && v.omitidos > 0 ? v.omitidos : 0 }
+          } else {
+            hilos[id] = { estado: 'error' }
+          }
+          pintarHilo(id)
+        })
+      }
+
+      function pintarHilo (id) {
+        var caja = el('board-detail')
+        var viejo = caja.querySelector('.det-hilo')
+        if (!viejo || caja.dataset.case !== id) return
+        caja.replaceChild(hiloNodo(id), viejo)
+      }
+
+      function tamanoTexto (n) {
+        if (!Number.isInteger(n) || n < 0) return ''
+        if (n < 1024) return n + ' B'
+        if (n < 1024 * 1024) return Math.round(n / 1024) + ' KB'
+        return (n / (1024 * 1024)).toFixed(1) + ' MB'
+      }
+
+      function adjuntoNodo (a) {
+        var fig = crear('figure', 'hilo-adj')
+        var vista = typeof a.vista === 'string' && /^data:image\/(png|jpeg|webp|gif);base64,/.test(a.vista)
+          ? a.vista : null
+        var nombre = typeof a.nombre === 'string' ? a.nombre : ''
+        if (vista) {
+          var img = document.createElement('img')
+          img.setAttribute('src', vista)
+          img.setAttribute('alt', nombre)
+          img.setAttribute('loading', 'lazy')
+          fig.appendChild(img)
+        }
+        var clave = 'hiloTipo_' + a.tipo
+        var partes = [Object.prototype.hasOwnProperty.call(STRINGS.es, clave) ? t(clave) : t('hiloTipoOtro')]
+        var tam = tamanoTexto(a.bytes)
+        if (tam) partes.push(tam)
+        if (nombre) partes.push(nombre)
+        if (a.sinVista === true) partes.push(t('hiloSinVista'))
+        fig.appendChild(crear('figcaption', null, partes.join(' · ')))
+        return fig
+      }
+
+      function hiloNodo (id) {
+        var s = seccion('det-hilo', t('detConversation'))
+        var h = hilos[id] || { estado: 'cargando' }
+        if (h.estado === 'cargando' || h.estado === 'pendiente') {
+          s.appendChild(crear('p', 'hilo-estado', t('hiloCargando')))
+          return s
+        }
+        if (h.estado === 'error') {
+          s.appendChild(crear('p', 'hilo-estado mala', t('hiloError')))
+          var otra = crear('button', 'btn', t('hiloReintentar'))
+          otra.type = 'button'
+          otra.dataset.hiloReintentar = '1'
+          otra.addEventListener('click', function () { cargarHilo(id); pintarHilo(id) })
+          s.appendChild(otra)
+          return s
+        }
+        if (h.omitidos) s.appendChild(crear('p', 'hilo-estado', fmt('hiloOmitidos', h.omitidos)))
+        var mensajes = h.mensajes.filter(esObjeto)
+        if (!mensajes.length) {
+          s.appendChild(crear('p', 'hilo-estado', t('hiloVacio')))
+          return s
+        }
+        var lista = crear('ul', 'hilo-lista')
+        mensajes.forEach(function (m) {
+          var li = crear('li', 'hilo-msg' + (m.propio === true ? ' propio' : ''))
+          var cab = crear('div', 'hilo-cab')
+          var quien = typeof m.quien === 'string' && m.quien ? m.quien : (m.propio === true ? t('hiloLinea') : '')
+          if (quien) cab.appendChild(crear('span', 'hilo-quien', quien))
+          if (typeof m.fecha === 'string' && m.fecha) cab.appendChild(crear('span', 'hilo-fecha', m.fecha))
+          li.appendChild(cab)
+          if (typeof m.texto === 'string' && m.texto) li.appendChild(crear('p', 'hilo-texto', m.texto))
+          if (m.transcripcion === true) li.appendChild(crear('p', 'hilo-marca', t('hiloTranscripcion')))
+          if (esObjeto(m.adjunto)) li.appendChild(adjuntoNodo(m.adjunto))
+          lista.appendChild(li)
+        })
+        s.appendChild(lista)
+        return s
       }
 
       function repintar () { renderBoard(tableroActual, true); ajustarAlto() }
@@ -3861,6 +4077,8 @@
           }
           caja.appendChild(sa)
         }
+        if (!hilos[id]) cargarHilo(id)
+        caja.appendChild(hiloNodo(id))
         var historia = historiaNodo(c)
         if (historia) {
           var sh = seccion(null, t('detHistory'))
@@ -3871,7 +4089,12 @@
 
       function abrirCaso (c) {
         seleccion = String(c.case_id)
+        // Abrir de nuevo es leer de nuevo: lo que el cliente mando despues tiene que verse.
+        delete hilos[seleccion]
         repintar()
+        // En la hoja el foco va a la X: es lo que cierra y lo primero que lee un lector.
+        var x = el('board-detail').classList.contains('hoja') && el('board-detail').querySelector('.det-close')
+        if (x) x.focus()
       }
 
       function cerrarDetalle () {
@@ -4045,20 +4268,22 @@
       }
 
       /** A lo ancho el detalle va al costado, como el panel de un elemento en Plane. En lo
-       *  angosto se abre en el lugar: debajo de la fila elegida en la lista, o debajo de las
-       *  columnas en el tablero. */
+       *  angosto se abre como hoja a pantalla completa, con la cabecera y la X fijas arriba
+       *  (panel-caso-movil): abierto en el lugar quedaba largo y la X se iba con el scroll. */
       function ubicarDetalle () {
         var caja = el('board-detail')
         var cuerpo = el('board-body')
-        var fila = seleccion && estrecho() && vistaEfectiva() === 'list'
-          ? el('board-list').querySelector('.card[data-case="' + seleccion + '"]') : null
-        if (fila) {
-          fila.parentNode.insertBefore(caja, fila.nextSibling)
-          caja.classList.add('en-linea')
+        if (caja.parentNode !== cuerpo) cuerpo.appendChild(caja)
+        var hoja = !!seleccion && !caja.hidden && estrecho()
+        caja.classList.toggle('hoja', hoja)
+        if (hoja) {
+          caja.setAttribute('role', 'dialog')
+          caja.setAttribute('aria-modal', 'true')
         } else {
-          if (caja.parentNode !== cuerpo) cuerpo.appendChild(caja)
-          caja.classList.remove('en-linea')
+          caja.removeAttribute('role')
+          caja.removeAttribute('aria-modal')
         }
+        document.body.classList.toggle('con-hoja', hoja)
       }
 
       el('board-search').addEventListener('input', function () {
