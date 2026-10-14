@@ -35,7 +35,12 @@ Out of scope: the Informes redesign (not approved yet).
   es/en/pt). "ok", "si", "dale", "listo" still reach the agent. Owner data: no short
   pleasantry case reached an agent, so this guards the Jev-off path. Subset RED 0/6 +
   label missing, GREEN 14/14.
-- [ ] M4 Held progress message rewritten, not dropped.
+- [x] M4 Held progress message rewritten, not dropped: the rewrite-once hint already existed
+  (avisos-retenidos A3) and the owner's data shows agents rewrote; what was lost is the
+  case where the first message and its rewrite were both held and the client got nothing
+  (one live case: six holds). Now the line's fixed acknowledgement goes out once instead,
+  also in `model`; nothing changes when something already reached the client. Subset RED
+  84/86, GREEN 86/86.
 - [ ] M5 scope.db retention.
 - [ ] M6 Failed notice retried on its own line.
 

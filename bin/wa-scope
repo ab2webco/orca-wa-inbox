@@ -5518,12 +5518,34 @@ def avance_manda(con, fila):
         motivos = "; ".join(f"{q}: {c}" for q, c in motivos_del_freno(detalle)) or codigo
         avance_marca(con, cid, n, "retenido", motivos[:LARGO_MOTIVO],
                      f"avance {n} retenido, no enviado: {motivos}"[:LARGO_MOTIVO])
+        avance_sin_salida(con, cid, n)
         return {"estado": "retenido", "motivo": motivos, "req_id": req}
     if codigo in ENVIO_BLOQUEA or codigo == "send-denied":
         avance_marca(con, cid, n, "omitido", codigo, f"avance {n} omitido: {codigo}")
         return {"estado": "omitido", "motivo": codigo, "req_id": req}
     # La linea caida, sin firma, sin veredicto a tiempo: el tick pregunta con el mismo id.
     return {"estado": "pendiente", "motivo": codigo, "req_id": req}
+
+
+def avance_sin_salida(con, cid, n):
+    """menos-ruido M4: la reescritura de un avance retenido tambien se retuvo (`PISTA_DESCARTA`)
+    y al cliente no le llego nada del caso. Visto en vivo: seis avances retenidos de un caso y
+    el cliente sin nada. En vez de quedar en nada, sale el acuse fijo de la linea, una vez,
+    aunque el chat este en `model`: lo manda el tick como un respaldo."""
+    previo = con.execute("select estado from caso_avance where case_id=? and n<? order by n desc "
+                         "limit 1", (cid, n)).fetchone()
+    if not previo or previo["estado"] != "retenido":
+        return
+    caso_toma(con)
+    try:
+        if not caso_ya_escribio(con, caso_de(con, cid), {}):
+            auto_registra(con, cid, "acuse")
+            con.execute("update respuesta_auto set razon=? where case_id=? and tipo='acuse' and "
+                        "estado='pendiente' and razon is null", (RAZON_AVANCE_RETENIDO, cid))
+        con.commit()
+    except BaseException:
+        con.rollback()
+        raise
 
 
 def avance_intenta(con, fila):
@@ -6780,6 +6802,9 @@ def auto_omite(con, caso, scope, ajustes, tipo):
 # primer mensaje es del agente), o del caso ya salio (o esta saliendo) otro mensaje.
 RAZON_PRIMER_AGENTE = "primer-mensaje-del-agente"
 RAZON_YA_SALIO = "ya-salio-un-mensaje"
+# El acuse que sale porque el primer mensaje del agente y su reescritura se retuvieron
+# (menos-ruido M4): un respaldo tambien en `model`.
+RAZON_AVANCE_RETENIDO = "primer-mensaje-retenido"
 
 # Decision c del dueno (2026-10-05): el acuse no cae en medio de una conversacion. No sale en
 # el caso del dueno (`auto_omite`), y ninguno sale si la linea escribio en ese chat en los
@@ -6903,7 +6928,8 @@ Manda los acuses y saludos pendientes, antes que cualquier propuesta: son lo que
     cliente espera ya. Cada uno sale por `wa-send` con su id fijo, asi que un reintento no
     entrega dos."""
     filas = [dict(r) for r in con.execute(
-        "select ra.case_id, ra.tipo, ra.req_id, ra.estado from respuesta_auto ra join caso c "
+        "select ra.case_id, ra.tipo, ra.req_id, ra.estado, ra.razon from respuesta_auto ra "
+        "join caso c "
         "on c.case_id=ra.case_id where ra.estado in ('pendiente', 'enviando') and c.account=? "
         "order by ra.at, ra.case_id", (cuenta_activa(),))]
     if not filas:
@@ -6920,9 +6946,16 @@ Manda los acuses y saludos pendientes, antes que cualquier propuesta: son lo que
     for fila in filas:
         caso = casos[fila["case_id"]]
         modo = primer_modo(scope.get(caso["chat_jid"]), ajustes)[0]
-        if (fila["tipo"] == "acuse" and modo == "model_with_ack_fallback") != respaldo:
+        tras_retenido = fila["tipo"] == "acuse" and fila.get("razon") == RAZON_AVANCE_RETENIDO
+        if (fila["tipo"] == "acuse" and modo == "model_with_ack_fallback"
+                or tras_retenido) != respaldo:
             continue
-        if fila["tipo"] == "acuse" and modo == "model":
+        if tras_retenido and modo != "model_with_ack_fallback":
+            if fila.get("estado") != "enviando" and caso_ya_escribio(con, caso, estados):
+                tick_auto_cierra(con, fila, "omitido", RAZON_YA_SALIO,
+                                 f"acuse omitido: {RAZON_YA_SALIO}")
+                continue
+        elif fila["tipo"] == "acuse" and modo == "model":
             # El primer mensaje es del agente: el acuse que quedo de antes no sale.
             tick_auto_cierra(con, fila, "omitido", RAZON_PRIMER_AGENTE,
                              f"acuse omitido: {RAZON_PRIMER_AGENTE}", necesita_agente=1)

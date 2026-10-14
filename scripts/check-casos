@@ -5088,6 +5088,59 @@ if NODE:
             finally:
                 sidecar.cerrar()
 
+        # menos-ruido M4: el primer mensaje retenido y su reescritura tambien: visto en vivo,
+        # seis avances retenidos de un caso y el cliente sin nada. En vez de descartarlo, sale
+        # el acuse fijo de la linea (una vez), aunque el chat este en `model`. Si algo ya le
+        # llego al cliente, nada cambia.
+        with tempfile.TemporaryDirectory() as home:
+            pon_llave(home)
+            llegan(home, A, [msg(PERSONA, "V9", "revisa este caso por favor", 3)])
+            js(home, "agent", "Agente De Ejemplo")
+            js(home, "set", PERSONA, "--provider", "ninguno", "--mode", "responder",
+               "--first-reply", "model")
+            sidecar = SidecarFalso(home)
+            try:
+                ingiere(home)
+                cid = caso_de_stanza(home, "V9")["case_id"]
+                acuse = f"caso-{cid}-acuse"
+                p = avance(home, cid, "Le queda listo manana a las 3pm, se lo aseguro.")
+                ok("M4: el primer mensaje retenido todavia no manda el acuse: queda la reescritura",
+                   (envio_de_avance(p) or {}).get("estado") == "retenido"
+                   and auto_de(home, cid) is None, f"{envio_de_avance(p)} {auto_de(home, cid)}")
+                p = avance(home, cid, "Ya fue escuchado su audio y esta todo resuelto.")
+                tick(home)
+                ok("M4: retenida tambien la reescritura, sale el acuse fijo en su lugar",
+                   (envio_de_avance(p) or {}).get("estado") == "retenido"
+                   and sidecar.entregados.count(acuse) == 1
+                   and (auto_de(home, cid) or {}).get("estado") == "enviado",
+                   f"{sidecar.entregados} {auto_de(home, cid)}")
+                tick(home)
+                ok("M4: y una sola vez", sidecar.entregados.count(acuse) == 1,
+                   f"{sidecar.entregados}")
+            finally:
+                sidecar.cerrar()
+
+        with tempfile.TemporaryDirectory() as home:
+            pon_llave(home)
+            llegan(home, A, [msg(PERSONA, "V10", "revisa este caso por favor", 3)])
+            js(home, "agent", "Agente De Ejemplo")
+            js(home, "set", PERSONA, "--provider", "ninguno", "--mode", "responder",
+               "--first-reply", "model")
+            sidecar = SidecarFalso(home)
+            try:
+                ingiere(home)
+                cid = caso_de_stanza(home, "V10")["case_id"]
+                avance(home, cid, PRIMERO)
+                avances_atras(home, cid, 11)
+                avance(home, cid, "Le queda listo manana a las 3pm, se lo aseguro.")
+                avance(home, cid, "Ya fue escuchado su audio y esta todo resuelto.")
+                tick(home)
+                ok("M4: si el cliente ya tuvo un mensaje, dos retenidos no mandan el acuse",
+                   f"caso-{cid}-acuse" not in sidecar.entregados and auto_de(home, cid) is None,
+                   f"{sidecar.entregados} {auto_de(home, cid)}")
+            finally:
+                sidecar.cerrar()
+
         # Sin la linea, el avance queda pendiente y lo manda el tick cuando vuelve.
         with tempfile.TemporaryDirectory() as home:
             pon_llave(home)
