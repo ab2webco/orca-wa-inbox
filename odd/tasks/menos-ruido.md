@@ -67,3 +67,11 @@ screens touched by M1 are photographed (reduced set).
 `scripts/check-casos`, `scripts/check-clis`, `scripts/check-lid`, the node suites
 (`panels`, `worker`, `almacen`, `envio`, `manifest`, `resolver`, `userdata`,
 `sidecar-*`).
+
+## Release
+
+v4.30.6 (with feat/baileys-mensajes): check-casos 2444/2444, check-clis 550, check-lid 51/51,
+check-datos-reales, check-panels, check-voseo, check-prompts, check-resolver, check-harness
+103, check-closing 36/36, manifest 112, resolver 55, userdata 25, sidecar-build 11,
+sidecar-pairing 129, sidecar-mensajes 142, almacen 357, envio 138, panels 1708, worker 719.
+Shots looked at: config-avisos-orca es light 390 and es dark 1440.
