@@ -16,7 +16,10 @@ export const TIPO_MEDIA = Object.freeze({
   videoMessage: 'video',
   audioMessage: 'audio',
   documentMessage: 'documento',
-  stickerMessage: 'sticker'
+  stickerMessage: 'sticker',
+  // La nota de video (el video redondo) es un `VideoMessage` con otro nombre: se baja y se
+  // lee como video. Los tipos siguen siendo cinco.
+  ptvMessage: 'video'
 })
 
 // Lo que NO es una conversacion. Lista CERRADA de exclusion, nunca una lista blanca de
@@ -36,8 +39,10 @@ const ENVOLTURAS = ['ephemeralMessage', 'viewOnceMessage', 'viewOnceMessageV2',
 // fijado o guardado. Lista CERRADA de exclusion, como `NO_ES_CONVERSACION`: un tipo nuevo
 // que no este aca se guarda. Guardados como fila abrian un caso "sin texto" y el agente
 // contestaba que el mensaje llego vacio (un ❤️, 2026-10-13).
+// Una llamada de grupo (Baileys la sube como `{ call }`) y el contenedor de un album (cada
+// foto o video del album llega aparte, como su propio mensaje) tampoco.
 const DE_CONTROL = new Set(['reactionMessage', 'encReactionMessage', 'protocolMessage',
-  'pollUpdateMessage', 'pinInChatMessage', 'keepInChatMessage'])
+  'pollUpdateMessage', 'pinInChatMessage', 'keepInChatMessage', 'call', 'albumMessage'])
 // Lo que acompana a cualquier mensaje y no es su contenido.
 const METADATOS = new Set(['messageContextInfo', 'senderKeyDistributionMessage'])
 
@@ -233,11 +238,17 @@ export function citaA (contextInfo, identidades) {
   return false
 }
 
-/** El contenido de verdad, sacando las envolturas de efimero / ver-una-vez / editado. */
+/** El contenido de verdad, sacando las envolturas de efimero / ver-una-vez / editado, y
+ *  cualquier otra que traiga el mensaje adentro (`FutureProofMessage` del proto: el sticker
+ *  animado, el que nombra al grupo, el hijo de un album, la encuesta V4...). Una lista fija
+ *  dejaba esos en blanco: el mensaje existia y se leia vacio. */
 export function contenidoDe (mensaje) {
   let actual = mensaje
   for (let vuelta = 0; actual && vuelta < 5; vuelta += 1) {
-    const envoltura = ENVOLTURAS.find((nombre) => actual[nombre]?.message)
+    const envoltura = ENVOLTURAS.find((nombre) => actual[nombre]?.message) ||
+      Object.keys(actual).find((nombre) => !METADATOS.has(nombre) &&
+        actual[nombre] && typeof actual[nombre] === 'object' &&
+        actual[nombre].message && typeof actual[nombre].message === 'object')
     if (!envoltura) return actual
     actual = actual[envoltura].message
   }
@@ -258,6 +269,79 @@ export function textoDe (mensaje) {
     return c.buttonsResponseMessage.selectedDisplayText
   }
   if (typeof c.listResponseMessage?.title === 'string') return c.listResponseMessage.title
+  if (typeof c.templateButtonReplyMessage?.selectedDisplayText === 'string') {
+    return c.templateButtonReplyMessage.selectedDisplayText
+  }
+  if (typeof c.interactiveResponseMessage?.body?.text === 'string') {
+    return c.interactiveResponseMessage.body.text
+  }
+  return descripcionDe(c)
+}
+
+// Las encuestas, en cada version del proto que trae la pregunta (la V4 es una envoltura).
+const ENCUESTAS = ['pollCreationMessage', 'pollCreationMessageV2', 'pollCreationMessageV3',
+  'pollCreationMessageV5']
+
+const textoLimpio = (v) => typeof v === 'string' && v.trim() ? v.trim() : null
+
+function coordenadas (m) {
+  return typeof m?.degreesLatitude === 'number' && typeof m?.degreesLongitude === 'number'
+    ? `(${m.degreesLatitude}, ${m.degreesLongitude})` : null
+}
+
+/** El primer telefono de una vCard, como viene escrito. */
+function telefonoDeVcard (vcard) {
+  const m = typeof vcard === 'string' ? vcard.match(/^TEL[^:\n]*:(.+)$/m) : null
+  return m ? m[1].trim() : null
+}
+
+function contacto (c) {
+  return [textoLimpio(c?.displayName), telefonoDeVcard(c?.vcard)].filter(Boolean).join(' ')
+}
+
+/** Lo que alguien mando que no es texto ni uno de los cinco adjuntos, en una linea legible
+ *  entre corchetes: una encuesta, una ubicacion, un contacto, un evento, una invitacion a un
+ *  grupo. La lee el agente; nunca sale al cliente. Sin esto el cuerpo quedaba vacio y el
+ *  caso se abria "sin texto". */
+function descripcionDe (c) {
+  const linea = (etiqueta, ...partes) => {
+    const resto = partes.filter(Boolean).join(' ')
+    return resto ? `[${etiqueta}] ${resto}` : `[${etiqueta}]`
+  }
+  const encuesta = ENCUESTAS.map((k) => c[k]).find((m) => m && typeof m === 'object')
+  if (encuesta) {
+    const opciones = (Array.isArray(encuesta.options) ? encuesta.options : [])
+      .map((o) => textoLimpio(o?.optionName)).filter(Boolean)
+    const pregunta = textoLimpio(encuesta.name)
+    return linea('poll', pregunta && opciones.length ? `${pregunta}: ${opciones.join(' / ')}`
+      : pregunta || opciones.join(' / '))
+  }
+  if (c.locationMessage) {
+    const l = c.locationMessage
+    const lugar = [textoLimpio(l.name), textoLimpio(l.address), textoLimpio(l.comment)]
+      .filter(Boolean).join(', ')
+    return linea('location', lugar, coordenadas(l))
+  }
+  if (c.liveLocationMessage) {
+    return linea('live location', textoLimpio(c.liveLocationMessage.caption),
+      coordenadas(c.liveLocationMessage))
+  }
+  if (c.contactMessage) return linea('contact', contacto(c.contactMessage))
+  if (c.contactsArrayMessage) {
+    const lista = Array.isArray(c.contactsArrayMessage.contacts)
+      ? c.contactsArrayMessage.contacts.map(contacto).filter(Boolean) : []
+    return linea('contacts', lista.join('; ') || textoLimpio(c.contactsArrayMessage.displayName))
+  }
+  if (c.eventMessage) {
+    const e = c.eventMessage
+    return linea('event', [textoLimpio(e.name), textoLimpio(e.description),
+      textoLimpio(e.location?.name)].filter(Boolean).join(' — '))
+  }
+  if (c.groupInviteMessage) {
+    const g = c.groupInviteMessage
+    return linea('group invite', [textoLimpio(g.groupName), textoLimpio(g.caption)]
+      .filter(Boolean).join(' — '))
+  }
   return ''
 }
 
@@ -269,7 +353,10 @@ export function contextoDe (mensaje) {
   for (const tipo of Object.keys(TIPO_MEDIA)) {
     if (c[tipo]?.contextInfo) return c[tipo].contextInfo
   }
-  return c.contextInfo || null
+  // Cualquier otro tipo cuelga el suyo de su propio campo: una respuesta que cita un aviso
+  // con una ubicacion o un contacto perdia la cita.
+  const otro = Object.values(c).find((v) => v && typeof v === 'object' && v.contextInfo)
+  return otro?.contextInfo || c.contextInfo || null
 }
 
 /** El adjunto, si lo hay: tipo, mimetype, tamano y con que extension guardarlo. */

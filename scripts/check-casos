@@ -1647,6 +1647,8 @@ ok("la fecha pide un momento dicho, y 'we will confirm' ya no es ejemplo de prom
 ok("acusar recibo, decir que lo revisa o que cuenta lo que encuentre no es promesa",
    "Acknowledging the message" in _fecha and "report back" in _fecha
    and "is not a promise" in _fecha, _fecha)
+ok("una fecha que dice cuando paso algo no es promesa (menos-ruido M2)",
+   "when something happened" in _fecha and "is not a promise either" in _fecha, _fecha)
 ok("el estado sin verificar es lo arreglado, resuelto o terminado",
    "fixed, resolved, changed or finished" in _estado, _estado)
 ok("recibirlo, revisarlo ahora o pasarlo a una persona es su propio trabajo, no un estado",
@@ -2810,6 +2812,23 @@ for texto, direccion, esperado in (
         ("hoy vamos a dejarlo listo", "salida", ["commitment"]),
         ("queda listo hoy", "salida", ["commitment"]),
         ("vou te enviar hoje", "salida", ["commitment"]),
+        # menos-ruido M2: una fecha, un dia o una hora solos describen; prometen en una frase
+        # que promete (queda, te lo mando, will...), en un plazo dicho (a mas tardar, by,
+        # en 2 horas) o en una frase que no es mas que la fecha ("El viernes."). Visto en
+        # vivo: 33 de 47 respuestas retenidas por nombrar una fecha sin prometer nada.
+        ("la reunión fue el lunes", "salida", []),
+        ("lo recibí el 12/10 y ya está en la cola", "salida", []),
+        ("the meeting was on Monday", "salida", []),
+        ("tu correo del 5 de octubre ya llegó", "salida", []),
+        ("el error empezó a las 10:30", "salida", []),
+        ("recibimos tu correo del viernes", "salida", []),
+        ("mañana es feriado en Colombia", "salida", []),
+        ("El viernes.", "salida", ["commitment"]),
+        ("Mañana a las 3.", "salida", ["commitment"]),
+        ("Mañana sin falta", "salida", ["commitment"]),
+        ("no later than Friday", "salida", ["commitment"]),
+        ("lo tendrás el lunes", "salida", ["commitment"]),
+        ("nos vemos el jueves a las 4", "salida", ["commitment"]),
         ("le confirmo que sale", "salida", []),
         ("te confirmo apenas lo vea el equipo", "salida", []),
         ("¿Para qué fecha lo necesitas?", "salida", []),
@@ -5069,6 +5088,59 @@ if NODE:
             finally:
                 sidecar.cerrar()
 
+        # menos-ruido M4: el primer mensaje retenido y su reescritura tambien: visto en vivo,
+        # seis avances retenidos de un caso y el cliente sin nada. En vez de descartarlo, sale
+        # el acuse fijo de la linea (una vez), aunque el chat este en `model`. Si algo ya le
+        # llego al cliente, nada cambia.
+        with tempfile.TemporaryDirectory() as home:
+            pon_llave(home)
+            llegan(home, A, [msg(PERSONA, "V9", "revisa este caso por favor", 3)])
+            js(home, "agent", "Agente De Ejemplo")
+            js(home, "set", PERSONA, "--provider", "ninguno", "--mode", "responder",
+               "--first-reply", "model")
+            sidecar = SidecarFalso(home)
+            try:
+                ingiere(home)
+                cid = caso_de_stanza(home, "V9")["case_id"]
+                acuse = f"caso-{cid}-acuse"
+                p = avance(home, cid, "Le queda listo manana a las 3pm, se lo aseguro.")
+                ok("M4: el primer mensaje retenido todavia no manda el acuse: queda la reescritura",
+                   (envio_de_avance(p) or {}).get("estado") == "retenido"
+                   and auto_de(home, cid) is None, f"{envio_de_avance(p)} {auto_de(home, cid)}")
+                p = avance(home, cid, "Ya fue escuchado su audio y esta todo resuelto.")
+                tick(home)
+                ok("M4: retenida tambien la reescritura, sale el acuse fijo en su lugar",
+                   (envio_de_avance(p) or {}).get("estado") == "retenido"
+                   and sidecar.entregados.count(acuse) == 1
+                   and (auto_de(home, cid) or {}).get("estado") == "enviado",
+                   f"{sidecar.entregados} {auto_de(home, cid)}")
+                tick(home)
+                ok("M4: y una sola vez", sidecar.entregados.count(acuse) == 1,
+                   f"{sidecar.entregados}")
+            finally:
+                sidecar.cerrar()
+
+        with tempfile.TemporaryDirectory() as home:
+            pon_llave(home)
+            llegan(home, A, [msg(PERSONA, "V10", "revisa este caso por favor", 3)])
+            js(home, "agent", "Agente De Ejemplo")
+            js(home, "set", PERSONA, "--provider", "ninguno", "--mode", "responder",
+               "--first-reply", "model")
+            sidecar = SidecarFalso(home)
+            try:
+                ingiere(home)
+                cid = caso_de_stanza(home, "V10")["case_id"]
+                avance(home, cid, PRIMERO)
+                avances_atras(home, cid, 11)
+                avance(home, cid, "Le queda listo manana a las 3pm, se lo aseguro.")
+                avance(home, cid, "Ya fue escuchado su audio y esta todo resuelto.")
+                tick(home)
+                ok("M4: si el cliente ya tuvo un mensaje, dos retenidos no mandan el acuse",
+                   f"caso-{cid}-acuse" not in sidecar.entregados and auto_de(home, cid) is None,
+                   f"{sidecar.entregados} {auto_de(home, cid)}")
+            finally:
+                sidecar.cerrar()
+
         # Sin la linea, el avance queda pendiente y lo manda el tick cuando vuelve.
         with tempfile.TemporaryDirectory() as home:
             pon_llave(home)
@@ -5844,6 +5916,143 @@ if NODE:
         falso.cerrar()
         os.environ.clear()
         os.environ.update(antes)
+
+# ── menos-ruido M3: sin veredicto de Jev, un gracias solo no despierta al agente ───────────
+# Con Jev apagado o caido todo llegaba al agente, tambien un "gracias 🙏". Una rafaga que no
+# es mas que un agradecimiento (o solo emojis) se cierra con su regla (`cortesia`). "ok",
+# "si", "dale" o "listo" no estan: contestan una pregunta del agente y siguen llegando.
+print("\nsin Jev, un gracias o un emoji solo no despierta al agente (menos-ruido M3)")
+if NODE:
+    def abre_sin_jev(home, mensajes):
+        llegan(home, A, mensajes)
+        js(home, "agent", "Agente De Ejemplo")
+        js(home, "set", PERSONA, "--provider", "ninguno", "--mode", "responder")
+        js(home, "config", "ack", "off")
+        js(home, "config", "greeting", "off")
+        ingiere(home)
+
+    for texto in ("gracias", "Muchas gracias!! 🙏", "👍", "thanks a lot", "obrigado 🙌",
+                  "mil gracias, de verdad"):
+        with tempfile.TemporaryDirectory() as home:
+            abre_sin_jev(home, [msg(PERSONA, "K1", texto, 5)])
+            c = caso_de_stanza(home, "K1")
+            ok(f"{texto!r} sin Jev se cierra sin agente, con su regla",
+               c and c["etapa"] == "cerrado" and para_el_agente(home) == []
+               and tarjeta(home, c["case_id"])["no_agent_rule"] == "cortesia",
+               f"{c and c['etapa']} {c and tarjeta(home, c['case_id']).get('no_agent_rule')}")
+    for texto in ("ok", "si", "dale", "listo", "gracias, ¿y lo del lunes?",
+                  "gracias, revisa el formulario por favor"):
+        with tempfile.TemporaryDirectory() as home:
+            abre_sin_jev(home, [msg(PERSONA, "K2", texto, 5)])
+            c = caso_de_stanza(home, "K2")
+            ok(f"{texto!r} sin Jev sigue llegando al agente",
+               c and c["etapa"] != "cerrado" and int(c["case_id"]) in para_el_agente(home),
+               f"{c and c['etapa']} {para_el_agente(home)}")
+    with tempfile.TemporaryDirectory() as home:
+        abre_sin_jev(home, [msg(PERSONA, "K3", "gracias", 5, media="image",
+                                ruta=archivo_media(home, "f.jpg"), bytes=10)])
+        c = caso_de_stanza(home, "K3")
+        ok("un gracias con una foto sigue llegando al agente",
+           c and c["etapa"] != "cerrado", f"{c and c['etapa']}")
+
+_motor = WA_SCOPE.read_text(encoding="utf-8")
+_reglas_sin_agente = re.findall(r'^    "([a-z_]+)": "', _motor[_motor.index("SIN_AGENTE = {"):
+                                                            _motor.index("CLASES_QUE_PIDEN = (")],
+                                re.M)
+_tablero = (RAIZ / "activity.html").read_text(encoding="utf-8")
+ok("cada regla sin agente tiene su texto en el tablero, en los tres idiomas",
+   "cortesia" in _reglas_sin_agente
+   and all(_tablero.count(f'"noAgent_{r}": ') == 3 for r in _reglas_sin_agente),
+   str([r for r in _reglas_sin_agente if _tablero.count(f'"noAgent_{r}": ') != 3]))
+
+# ── menos-ruido M5: scope.db no guarda el texto de las conversaciones mas que el almacen ──
+# El almacen borra lo de mas de `capture_days`; scope.db guardaba para siempre las copias: el
+# resumen y la respuesta de cada caso, el texto de los avisos y de los avances, lo transcrito,
+# el veredicto de Jev y el brief y los informes del agente. Pasado ese plazo, lo cerrado se
+# queda sin texto y conserva la fila (los informes cuentan casos, tiempos y avisos).
+print("\nscope.db borra el texto de lo cerrado mas viejo que capture_days (menos-ruido M5)")
+if NODE:
+    with tempfile.TemporaryDirectory() as home:
+        llegan(home, A, [msg(PERSONA, "R0", "hola", 1)])
+        js(home, "config", "capture_days", "30")
+        ids = {}
+        for nombre in ("viejo", "nuevo", "abierto"):
+            js(home, "caso", "crear", "--chat", PERSONA, "--stanza", f"R-{nombre}",
+               "--actor", "automatizacion")
+            ids[nombre] = caso_de_stanza(home, f"R-{nombre}")["case_id"]
+        con = db_de(home)
+        linea_r = con.execute("select account from caso where case_id=?",
+                             (ids["viejo"],)).fetchone()[0]
+        hace = {"viejo": "-40 days", "nuevo": "-5 days", "abierto": "-40 days"}
+        for nombre, cid in ids.items():
+            sello = f"datetime('now', '{hace[nombre]}', 'localtime')"
+            etapa = "recibido" if nombre == "abierto" else "cerrado"
+            con.execute(f"update caso set etapa=?, resumen=?, propuesta=?, updated_at={sello} "
+                        "where case_id=?", (etapa, f"resumen {nombre}",
+                                            json.dumps({"respuesta": f"respuesta {nombre}"}),
+                                            cid))
+            con.execute(f"insert into aviso (req_id, tipo, case_id, account, chat_jid, texto, "
+                        f"estado, at, updated_at) values (?, 'respuesta', ?, ?, ?, ?, ?, "
+                        f"{sello}, {sello})", (f"aviso-{nombre}", cid, linea_r, PERSONA,
+                                               f"aviso {nombre}",
+                                               "pendiente" if nombre == "abierto" else "enviado"))
+            con.execute(f"insert into caso_avance (case_id, n, req_id, texto, actor, estado, at) "
+                        f"values (?, 1, ?, ?, 'agente', 'enviado', {sello})",
+                        (cid, f"avance-{nombre}", f"avance {nombre}"))
+            con.execute(f"insert into transcripcion (account, chat_jid, stanza_id, ok, texto, at) "
+                        f"values (?, ?, ?, 1, ?, {sello})",
+                        (linea_r, PERSONA, f"T-{nombre}", f"transcrito {nombre}"))
+            con.execute(f"insert into juicio (account, chat_jid, stanza_id, clase, origen, at, jev, "
+                        f"rafaga) values (?, ?, ?, 'card', 'jev', {sello}, ?, ?)",
+                        (linea_r, PERSONA, f"J-{nombre}", json.dumps({"skip": False}),
+                         json.dumps([f"J-{nombre}"])))
+            con.execute(f"insert into caso_despacho (case_id, evento_id, estado, instrucciones, "
+                        f"informes, created_at, updated_at) values (?, ?, ?, ?, ?, {sello}, "
+                        f"{sello})", (cid, 9000 + cid,
+                                      "activo" if nombre == "abierto" else "reportado",
+                                      f"brief {nombre}", json.dumps([{"resumen": nombre}])))
+        con.commit()
+        filas_antes = {t: cuenta_filas for t, cuenta_filas in (
+            (t, con.execute(f"select count(*) from {t}").fetchone()[0])
+            for t in ("caso", "aviso", "caso_avance", "transcripcion", "juicio", "caso_despacho"))}
+        con.close()
+        tick(home)
+        con = db_de(home)
+
+        def uno(sql, *args):
+            return con.execute(sql, args).fetchone()
+
+        v, n, ab = ids["viejo"], ids["nuevo"], ids["abierto"]
+        ok("M5: un caso cerrado mas viejo que capture_days queda sin resumen ni respuesta",
+           tuple(uno("select resumen, propuesta from caso where case_id=?", v)) == (None, None),
+           f"{tuple(uno('select resumen, propuesta from caso where case_id=?', v))}")
+        ok("M5: y su aviso, su avance, lo transcrito, el veredicto y el brief, sin texto",
+           uno("select texto from aviso where req_id='aviso-viejo'")[0] == ""
+           and uno("select texto from caso_avance where req_id='avance-viejo'")[0] == ""
+           and uno("select texto from transcripcion where stanza_id='T-viejo'")[0] is None
+           and tuple(uno("select jev, rafaga from juicio where stanza_id='J-viejo'"))
+           == (None, None)
+           and tuple(uno("select instrucciones, informes from caso_despacho where case_id=?", v))
+           == (None, None))
+        ok("M5: lo de dentro del plazo queda igual",
+           uno("select resumen from caso where case_id=?", n)[0] == "resumen nuevo"
+           and uno("select texto from aviso where req_id='aviso-nuevo'")[0] == "aviso nuevo"
+           and uno("select texto from caso_avance where req_id='avance-nuevo'")[0]
+           == "avance nuevo"
+           and uno("select texto from transcripcion where stanza_id='T-nuevo'")[0]
+           == "transcrito nuevo"
+           and uno("select jev from juicio where stanza_id='J-nuevo'")[0] is not None
+           and uno("select instrucciones from caso_despacho where case_id=?", n)[0]
+           == "brief nuevo")
+        ok("M5: lo abierto no se toca aunque sea viejo: el caso, su aviso pendiente y su despacho",
+           uno("select resumen from caso where case_id=?", ab)[0] == "resumen abierto"
+           and uno("select texto from aviso where req_id='aviso-abierto'")[0] == "aviso abierto"
+           and uno("select instrucciones from caso_despacho where case_id=?", ab)[0]
+           == "brief abierto")
+        ok("M5: ninguna fila se borra: los informes siguen contando",
+           all(con.execute(f"select count(*) from {t}").fetchone()[0] == c
+               for t, c in filas_antes.items()))
+        con.close()
 
 
 
@@ -11839,8 +12048,9 @@ for texto, esperado in (
     ok(f"orden: trabajo {texto[:60]!r} -> {esperado}", salio == esperado, f"salio {salio}")
 for texto, direccion, esperado in (
         ("Nunca le pediremos su contrasena por aqui", "salida", []),
-        # Una fecha en lo que sale es un hecho de la respuesta, la preceda lo que la preceda.
-        ("No prometemos nada para el viernes", "salida", ["commitment"]),
+        # menos-ruido M2: una fecha sola ya no es compromiso; lo es con una promesa. Negar que
+        # se promete algo no lo promete.
+        ("No prometemos nada para el viernes", "salida", []),
         ("Hoy no puedo, manana lo tienes", "salida", ["commitment"]),
         ("Subimos el arreglo a la rama fix/demo-token-leak", "salida", []),
         ("Le paso el token por otro medio", "salida", ["credential"]),
@@ -13209,6 +13419,43 @@ try:
         ok("R2: y otro tick no repite ninguno", len(enviados) == 2, f"{len(enviados)}")
         con.close()
 
+    # menos-ruido M1: el resumen una vez al dia (1440 minutos) sale al final del dia, cuando
+    # empiezan las horas de silencio, y no al pasar la medianoche (que caia en silencio y lo
+    # mandaba a la manana siguiente). Un tick que llega mucho despues espera al fin del silencio.
+    with tempfile.TemporaryDirectory() as home:
+        ws, con, enviados, falsa, reloj = prepara_resumen(home, finishedDigestMinutes="1440",
+                                                          quietStart="22:00", quietEnd="07:00")
+        mediodia = reloj[0]
+        ws.hora_local = lambda: 12 * 60 + 31
+        pon_paneles(home, turnos(reloj, pA=(WT_ALFA, 100), pB=(WT_BETA, 100)))
+        vuelta(ws, con)
+        reloj[0] = mediodia + 9 * 3600 + 20 * 60
+        ws.hora_local = lambda: 21 * 60 + 50
+        vuelta(ws, con)
+        ok("M1: una vez al dia, durante el dia no sale nada", enviados == []
+           and len(filas_de(con, "acumulado")) == 2, f"{estados_orca(con)}")
+        reloj[0] = mediodia + 9 * 3600 + 35 * 60
+        ws.hora_local = lambda: 22 * 60 + 5
+        vuelta(ws, con)
+        terminados = [e for e in enviados if e["req"].startswith("aviso-o-terminados-")]
+        ok("M1: al empezar las horas de silencio sale el resumen del dia, una vez",
+           len(terminados) == 1 and "alfa-demo" in terminados[0]["texto"]
+           and "beta-demo" in terminados[0]["texto"], f"{enviados}")
+        vuelta(ws, con)
+        ok("M1: y otro tick no lo repite", len(enviados) == 1, f"{len(enviados)}")
+        pon_paneles(home, turnos(reloj, pC=(WT_ALFA, 100)))
+        vuelta(ws, con)
+        reloj[0] += 25 * 3600
+        ws.hora_local = lambda: 23 * 60 + 30
+        vuelta(ws, con)
+        ok("M1: un tick que llega pasada la primera hora del silencio espera",
+           len(enviados) == 1 and len(filas_de(con, "acumulado")) == 1, f"{estados_orca(con)}")
+        ws.hora_local = lambda: 7 * 60 + 30
+        vuelta(ws, con)
+        ok("M1: y sale al terminar el silencio", len(enviados) == 2
+           and enviados[-1]["req"].startswith("aviso-o-terminados-"), f"{enviados}")
+        con.close()
+
     # R2: el tope por hora. El resumen cuenta como un aviso, y si la hora esta llena espera.
     with tempfile.TemporaryDirectory() as home:
         ws, con, enviados, falsa, reloj = prepara_resumen(home, waiting="on", hourlyCap="1")
@@ -14237,15 +14484,22 @@ if NODE:
            == [(SEGUNDA, SEGUNDA, "enviado")], f"{filas}")
 
         # Ninguna linea lo alcanza: el chat del dueno en la otra linea, pero sin poder contestar
-        # alli. Sale por la del caso, como antes, y `wa-send` dice por que.
+        # alli. menos-ruido M6: el aviso espera, como cuando el chat no esta autorizado (lo
+        # arregla el dueno en el panel), en vez de quedar fallido; y cuando el dueno lo deja
+        # contestar alli, sale por esa linea.
         jsl(home, SEGUNDA, "mode", DUENO_DM, "observar")
         nadie, _ = caso_en_linea(home, A, "V6A4", "Listo, son $30.")
         p, r = con_sidecars(home, lambda: tick(home))
         filas = avisos_de(home, nadie)
-        ok("sin una linea que llegue al chat del dueno, el aviso queda fallido con su motivo",
-           len(filas) == 1 and filas[0]["estado"] == "fallido"
-           and (filas[0]["motivo"] or "").startswith("send-wrong-line")
+        ok("sin una linea que llegue al chat del dueno, el aviso espera en vez de fallar",
+           len(filas) == 1 and filas[0]["estado"] == "pendiente"
            and isinstance(r, dict), f"{filas} {p.stderr[-300:]}")
+        jsl(home, SEGUNDA, "mode", DUENO_DM, "responder")
+        con_sidecars(home, lambda: tick(home))
+        filas = avisos_de(home, nadie)
+        ok("y sale por la linea del chat del dueno cuando el dueno lo deja contestar alli",
+           [(f["estado"], f.get("sale_por")) for f in filas] == [("enviado", SEGUNDA)],
+           f"{filas}")
 
     # Una sola linea: el aviso sale por ella, como siempre.
     with tempfile.TemporaryDirectory() as home:

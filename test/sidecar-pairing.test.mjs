@@ -17,7 +17,7 @@ import { decidirTrasCierre, calcularEsperaMs, intentoTrasEvento, mensajeQr, qrVe
   PARCHES_DE_LIBRETA, CIERRES_REPETIDOS_TOPE, CIERRES_VENTANA_MS,
   QR_ROTACION_MS, QR_VIGENCIA_MS, SALIDA, LATIDO_LINEA_MS, mensajeLatido,
   ALMACEN_LATIDO_MS, anotarLinea, LINEA_SECUNDARIA_ENV, CUENTA_PREVIA_ENV, rutaRegistro,
-  authDeSocket, curarLinea
+  authDeSocket, curarLinea, versionDeWhatsApp
 } from '../sidecar/src/index.js'
 import { crearCacheDeReintentos } from '../sidecar/src/envio.js'
 import { crearRegistro, FALLO_DE_DESCIFRADO } from '../sidecar/src/registro.js'
@@ -364,6 +364,54 @@ console.log('\nsidecar: la lista de conversaciones tiene que poder LLEGAR')
     o.qrTimeout === QR_ROTACION_MS, String(o.qrTimeout))
   ok('y la vigencia que viaja con cada QR es mayor que esa rotacion',
     QR_VIGENCIA_MS > QR_ROTACION_MS, `vigencia=${QR_VIGENCIA_MS} rotacion=${QR_ROTACION_MS}`)
+}
+
+console.log('\nsidecar: lo que el socket no descifra, los cierres de red y la version (baileys-mensajes, B)')
+{
+  // Un canal o una difusion no son conversaciones (`NO_ES_CONVERSACION`): descifrarlos solo
+  // para tirarlos despues gasta trabajo y sesiones de Signal. Baileys los ignora en la
+  // entrada con `shouldIgnoreJid` (lib/Socket/messages-recv.js).
+  const o = opcionesDeSocket({ version: [2, 3000, 1], auth: {}, browser: [] })
+  ok('el socket ignora canales y difusiones (estados incluidos)',
+    typeof o.shouldIgnoreJid === 'function' && o.shouldIgnoreJid('123@newsletter') === true &&
+    o.shouldIgnoreJid('status@broadcast') === true && o.shouldIgnoreJid('123@broadcast') === true)
+  ok('y nunca una conversacion: directo, grupo, lid o @status',
+    o.shouldIgnoreJid('573001112233@s.whatsapp.net') === false &&
+    o.shouldIgnoreJid('120363000000000000@g.us') === false &&
+    o.shouldIgnoreJid('199887766554433@lid') === false &&
+    o.shouldIgnoreJid('573001112233@status') === false && o.shouldIgnoreJid(undefined) === false)
+
+  // Con `true` (el defecto de Baileys) el dueno sale "en linea" todo el tiempo que el
+  // plugin corre y su telefono puede dejar de avisarle. Con `false` Baileys manda
+  // 'unavailable' al conectar (lib/Socket/chats.js) y recibir no cambia.
+  ok('conectar no pone al dueno en linea',
+    o.markOnlineOnConnect === false, String(o.markOnlineOnConnect))
+
+  // 428 (connectionClosed) y 503 (unavailableService) son la red o el servidor: se
+  // reconecta igual, pero el panel dice "socket caido" y no "desconocido".
+  for (const codigo of [428, 503]) {
+    const d = decidirTrasCierre(codigo, 1, 1)
+    ok(`un cierre ${codigo} reconecta y se nombra socket caido`,
+      d.reconectar === true && d.borrarCredenciales === false && d.motivo === MOTIVO.SOCKET_CAIDO,
+      JSON.stringify(d))
+  }
+
+  // La version de WhatsApp Web: `fetchLatestBaileysVersion` va a GitHub sin plazo y cada
+  // arranque la esperaba. Con plazo, una red lenta arranca con la que trae Baileys.
+  const rapida = await versionDeWhatsApp(async () => ({ version: [2, 3000, 9], isLatest: true }), 200)
+  ok('la version que contesta a tiempo es la que se usa',
+    JSON.stringify(rapida) === JSON.stringify({ version: [2, 3000, 9], fuente: 'red' }), JSON.stringify(rapida))
+  const inicio = Date.now()
+  const lenta = await versionDeWhatsApp(() => new Promise((resolve) => setTimeout(
+    () => resolve({ version: [2, 3000, 9], isLatest: true }), 2000)), 100)
+  ok('una que no contesta a tiempo no frena el arranque: queda la de Baileys',
+    lenta.version === undefined && lenta.fuente === 'por-defecto' && Date.now() - inicio < 1500,
+    JSON.stringify(lenta))
+  const fallida = await versionDeWhatsApp(async () => ({ version: [2, 3000, 1], isLatest: false }), 200)
+  ok('y si la busqueda fallo (isLatest false) tambien',
+    fallida.version === undefined && fallida.fuente === 'por-defecto', JSON.stringify(fallida))
+  const rota = await versionDeWhatsApp(async () => { throw new Error('sin red') }, 200)
+  ok('y si lanza, igual', rota.version === undefined && rota.fuente === 'por-defecto')
 }
 
 console.log('\nsidecar: los reintentos de Baileys 7 (getMessage, msgRetryCounterCache, llaves)')

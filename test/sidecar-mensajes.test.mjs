@@ -232,6 +232,52 @@ console.log('\nfilaDeMensaje: de un WAMessage a una fila del almacen')
   ok('y una imagen sin texto tambien: tiene un adjunto que leer',
     control('I1', { imageMessage: { mimetype: 'image/jpeg', fileLength: 10 } })?.mediaTipo === 'imagen')
 
+  // Lo que alguien SI mando pero no es texto ni uno de los cinco adjuntos: sin cuerpo, el
+  // caso se abria "sin texto" y el agente contestaba que llego vacio. Cada uno trae un
+  // cuerpo legible entre corchetes, que lee el agente (nunca sale al cliente).
+  const cuerpo = (id, message) => control(id, message)?.body
+  ok('una encuesta trae su pregunta y sus opciones, en cualquiera de sus versiones',
+    cuerpo('E1', { pollCreationMessage: { name: 'Almuerzo', options: [{ optionName: 'Si' }, { optionName: 'No' }] } }) ===
+      '[poll] Almuerzo: Si / No' &&
+    cuerpo('E2', { pollCreationMessageV3: { name: 'Hora', options: [{ optionName: '9' }] } }) === '[poll] Hora: 9' &&
+    cuerpo('E3', { pollCreationMessageV5: { name: 'Sede', options: [] } }) === '[poll] Sede')
+  ok('una ubicacion trae su nombre, su direccion y sus coordenadas',
+    cuerpo('U1', { locationMessage: { degreesLatitude: 4.6, degreesLongitude: -74.08, name: 'Oficina',
+      address: 'Calle 1 # 2-3' } }) === '[location] Oficina, Calle 1 # 2-3 (4.6, -74.08)' &&
+    cuerpo('U2', { liveLocationMessage: { degreesLatitude: 1, degreesLongitude: 2, caption: 'Voy en camino' } }) ===
+      '[live location] Voy en camino (1, 2)')
+  ok('un contacto trae su nombre y su telefono; varios, cada uno',
+    cuerpo('C1', { contactMessage: { displayName: 'Soporte Demo',
+      vcard: 'BEGIN:VCARD\nFN:Soporte Demo\nTEL;type=CELL:+57 300 000 0000\nEND:VCARD' } }) ===
+      '[contact] Soporte Demo +57 300 000 0000' &&
+    cuerpo('C2', { contactsArrayMessage: { contacts: [{ displayName: 'Uno' }, { displayName: 'Dos' }] } }) ===
+      '[contacts] Uno; Dos')
+  ok('un evento trae su nombre, su descripcion y su lugar',
+    cuerpo('V1', { eventMessage: { name: 'Revision', description: 'Del sitio', location: { name: 'Sala 2' } } }) ===
+      '[event] Revision — Del sitio — Sala 2')
+  ok('una invitacion a un grupo trae el nombre del grupo y su texto',
+    cuerpo('G1', { groupInviteMessage: { groupName: 'Equipo Demo', caption: 'Unete' } }) ===
+      '[group invite] Equipo Demo — Unete')
+  ok('la respuesta a un boton o a un mensaje interactivo trae el texto elegido',
+    cuerpo('B1', { templateButtonReplyMessage: { selectedDisplayText: 'Confirmar' } }) === 'Confirmar' &&
+    cuerpo('B2', { interactiveResponseMessage: { body: { text: 'Opcion 2' } } }) === 'Opcion 2')
+  const nota = control('N1', { ptvMessage: { mimetype: 'video/mp4', fileLength: 20 } })
+  ok('una nota de video es un video: se baja y se lee como tal',
+    nota?.mediaTipo === 'video' && nota?.mediaExt === '.mp4', JSON.stringify(nota))
+  ok('un sticker animado o un mensaje que nombra al grupo traen lo de adentro',
+    control('L1', { lottieStickerMessage: { message: { stickerMessage: { mimetype: 'image/webp' } } } })
+      ?.mediaTipo === 'sticker' &&
+    cuerpo('L2', { groupMentionedMessage: { message: { extendedTextMessage: { text: 'hola equipo' } } } }) ===
+      'hola equipo' &&
+    cuerpo('L3', { associatedChildMessage: { message: { conversation: 'adentro' } } }) === 'adentro')
+  ok('una llamada de grupo y el contenedor de un album no son mensajes (cada foto llega sola)',
+    control('K1', { call: { callKey: 'x' } }) === null &&
+    control('K2', { albumMessage: { expectedImageCount: 2 } }) === null)
+  const citaUbicacion = control('Q1', { locationMessage: { degreesLatitude: 1, degreesLongitude: 2,
+    contextInfo: { stanzaId: 'AVISO-1' } } })
+  ok('una respuesta que cita un aviso con otro tipo de mensaje conserva la cita',
+    citaUbicacion?.citaId === 'AVISO-1', JSON.stringify(citaUbicacion))
+
   // messageTimestamp llega como Long de protobufjs en mensajes reales.
   const conLong = filaDeMensaje({
     key: { remoteJid: grupo, fromMe: false, id: 'L1' },

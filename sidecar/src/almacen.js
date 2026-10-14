@@ -44,6 +44,9 @@ import { cuentaDeIdentidad, jidDeChat, parLidTelefono } from './mensajes.js'
 // es lo que el panel traduce).
 export const ESQUEMA_VERSION = 1
 
+// De donde sale el nombre de un contacto, de menor a mayor (`nombrarContacto`).
+export const RANGO_FUENTE = Object.freeze({ apodo: 1, verificado: 2, libreta: 3 })
+
 // Cuanto puede estar una fila en `enviando` antes de darla por cortada (linea-viva-2,
 // W1). Un `sendMessage` vivo contesta en segundos; dos minutos es un sidecar que murio a
 // mitad. El MISMO numero vive en `bin/wa-scope` (ENVIANDO_VENCE_S), que deja de contar esa
@@ -120,6 +123,21 @@ create table if not exists grupo_miembro (
   admin      integer not null default 0,
   updated_at integer not null,
   primary key (account, chat_jid, member_jid)
+);
+
+-- CONTABILIDAD. Los nombres de la libreta del telefono (nombres-de-libreta), por cada forma
+-- del contacto (telefono y LID), aunque no haya directo: casi todos los miembros de los
+-- grupos nunca le escribieron al dueno, y sin esto su nombre se perdia al reiniciar.
+-- fuente: 'libreta' (lo que el dueno guardo en su telefono), 'verificado' (el nombre de
+-- una cuenta de empresa) o 'apodo' (el que la persona se puso en WhatsApp). Una fuente
+-- menor no pisa una mayor. Un jid y un nombre, nunca un cuerpo.
+create table if not exists contacto (
+  account    text not null,
+  jid        text not null,
+  nombre     text not null,
+  fuente     text not null,
+  updated_at integer not null,
+  primary key (account, jid)
 );
 
 -- CONTENIDO. Solo de conversaciones autorizadas. La llave lleva la CUENTA adelante
@@ -858,6 +876,24 @@ class Almacen {
        where account = ? and chat_jid = ?
          and (chat_name is null or chat_name = '' or chat_name = chat_jid)`)
       .run(limpio, cuenta, chatJid)
+    return (r.changes || 0) > 0
+  }
+
+  /** El nombre de un contacto de la libreta, aunque no tenga directo. Una fuente menor
+   *  ('apodo' < 'verificado' < 'libreta') no pisa una mayor; la misma, si. Devuelve si
+   *  cambio algo. */
+  nombrarContacto ({ cuenta, jid, nombre, fuente, ahora = Date.now() }) {
+    const limpio = typeof nombre === 'string' ? nombre.trim() : ''
+    if (!cuenta || !jid || !limpio || limpio === jid || !(fuente in RANGO_FUENTE)) return false
+    const rango = (columna) => `case ${columna} when 'libreta' then 3 when 'verificado' then 2 ` +
+      'else 1 end'
+    const r = this.con.prepare(`insert into contacto (account, jid, nombre, fuente, updated_at)
+      values (?,?,?,?,?)
+      on conflict(account, jid) do update set nombre=excluded.nombre, fuente=excluded.fuente,
+        updated_at=excluded.updated_at
+        where ${rango('excluded.fuente')} >= ${rango('contacto.fuente')}
+          and (contacto.nombre <> excluded.nombre or contacto.fuente <> excluded.fuente)`)
+      .run(cuenta, jid, limpio, fuente, Math.floor(ahora / 1000))
     return (r.changes || 0) > 0
   }
 

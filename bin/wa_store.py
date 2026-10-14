@@ -440,15 +440,21 @@ def nombre_de(fila):
     return fila["chat_name"] or fila["chat_jid"]
 
 
-def quien(fila):
-    """Quien escribio. El nombre visible primero; si no hay, el numero pelado, que es
-    mas util que un jid entero con su servidor."""
+def quien(fila, nombres=None, cuenta=None):
+    """Quien escribio. Como el dueno lo guardo en su telefono (`nombres`, la libreta),
+    despues el nombre que trajo el mensaje, despues el apodo guardado; si no hay ninguno, el
+    numero pelado, que es mas util que un jid entero con su servidor."""
     if fila["from_me"]:
         return "YO"
+    jid = fila["sender_jid"] or ""
+    cuenta = cuenta or (fila["account"] if "account" in fila.keys() else None)
+    guardado = nombres.nombre(cuenta, jid, (FUENTE_LIBRETA,)) if nombres else None
+    if guardado:
+        return guardado
     if fila["sender_name"]:
         return fila["sender_name"]
-    jid = fila["sender_jid"] or ""
-    return jid.split("@")[0].split(":")[0] or "?"
+    apodo = nombres.nombre(cuenta, jid) if nombres else None
+    return apodo or jid.split("@")[0].split(":")[0] or "?"
 
 
 def clase_de(fila):
@@ -553,6 +559,7 @@ def inbox(con, dias, limite, ventana, solo="todos", linea=None, stanzas=None):
     # `juicio` es chica frente al limite de la bandeja y abrir un archivo aparte por
     # mensaje seria el mismo costo que el cache existe para evitar.
     veredictos = veredictos_cacheados()
+    nombres = NombresDeLibreta(con)
 
     salida = []
     for r in filas:
@@ -565,7 +572,7 @@ def inbox(con, dias, limite, ventana, solo="todos", linea=None, stanzas=None):
             # La linea viaja con cada fila: la MISMA conversacion puede estar en dos
             # lineas propias, y contestar desde la equivocada no se deshace (§11-A1).
             "account": r["account"],
-            "sender": quien(r),
+            "sender": quien(r, nombres),
             # El id del remitente, sin el dispositivo: es lo que dice si escribio uno de
             # los numeros del dueno (T22.1). El nombre se repite y cambia; esto no.
             "sender_jid": jid_sin_dispositivo(r["sender_jid"]),
@@ -590,17 +597,17 @@ def inbox(con, dias, limite, ventana, solo="todos", linea=None, stanzas=None):
         if r["cita_id"]:
             item["cita_id"] = r["cita_id"]
         item["adjuntos_cerca"] = adjuntos_cerca(con, r["account"], r["chat_jid"],
-                                                r["ts"], ventana)
+                                                r["ts"], ventana, nombres)
         item["audios"] = [a["path"] for a in item["adjuntos_cerca"] if a["type"] == "audio"]
         cerca = texto_cerca(con, r["account"], r["chat_jid"], r["ts"], ventana,
-                            r["stanza_id"])
+                            r["stanza_id"], nombres)
         if cerca:
             item["contexto_cerca"] = cerca
         salida.append(item)
     return salida
 
 
-def adjuntos_cerca(con, cuenta, chat_jid, cuando, minutos):
+def adjuntos_cerca(con, cuenta, chat_jid, cuando, minutos, nombres=None):
     """Adjuntos del mismo chat dentro de +/- N minutos.
 
     §11-C5: "el pie casi nunca llega en el mismo mensaje que la mencion: se manda la
@@ -617,12 +624,13 @@ def adjuntos_cerca(con, cuenta, chat_jid, cuando, minutos):
                  and ts between ? and ?
            order by ts""",
         (cuenta, chat_jid, cuando - minutos * 60, cuando + minutos * 60)).fetchall()
-    return [{"date": ts(r["ts"]), "sender": quien(r), "type": r["media_type"],
+    nombres = nombres if nombres is not None else NombresDeLibreta(con)
+    return [{"date": ts(r["ts"]), "sender": quien(r, nombres, cuenta), "type": r["media_type"],
              "caption": (r["body"] or "").replace("\n", " "), "path": r["media_path"]}
             for r in filas]
 
 
-def texto_cerca(con, cuenta, chat_jid, cuando, minutos, excepto):
+def texto_cerca(con, cuenta, chat_jid, cuando, minutos, excepto, nombres=None):
     """Lo que se dijo alrededor. Un problema contado en cinco mensajes tiene que
     llegarle al agente como UNA conversacion: sin los vecinos, cada mensaje se lee como
     un caso aparte y se abren cinco tarjetas donde va una (§11-B3)."""
@@ -634,7 +642,8 @@ def texto_cerca(con, cuenta, chat_jid, cuando, minutos, excepto):
                  and body <> '' and stanza_id <> ? and ts between ? and ?
            order by ts limit 20""",
         (cuenta, chat_jid, excepto, cuando - minutos * 60, cuando + minutos * 60)).fetchall()
-    return [{"date": ts(r["ts"]), "sender": quien(r),
+    nombres = nombres if nombres is not None else NombresDeLibreta(con)
+    return [{"date": ts(r["ts"]), "sender": quien(r, nombres, cuenta),
              "text": (r["body"] or "").replace("\n", " ")} for r in filas]
 
 
@@ -914,10 +923,11 @@ def remitentes(con, linea=None, limite=400):
     reciente al mas viejo. Solo ids y nombres, nunca el texto de nadie."""
     donde, args = filtro_linea(linea)
     filas = con.execute(
-        f"""select m.sender_jid, m.sender_name, m.ts, c.chat_name, c.chat_jid
+        f"""select m.account, m.sender_jid, m.sender_name, m.ts, c.chat_name, c.chat_jid
             from mensaje m join chat c on c.account = m.account and c.chat_jid = m.chat_jid
             where m.from_me = 0 and m.sender_jid is not null {donde}
             order by m.ts desc limit 20000""", args).fetchall()
+    nombres = NombresDeLibreta(con)
     vistos = {}
     for r in filas:
         jid = jid_sin_dispositivo(r["sender_jid"])
@@ -927,7 +937,10 @@ def remitentes(con, linea=None, limite=400):
         if item is None:
             if len(vistos) >= limite:
                 continue
-            item = vistos[jid] = {"id": jid, "name": r["sender_name"] or "", "chats": [],
+            # Como el dueno lo guardo en su telefono primero (nombres-de-libreta).
+            guardado = nombres.nombre(r["account"], jid, (FUENTE_LIBRETA,))
+            item = vistos[jid] = {"id": jid, "name": guardado or r["sender_name"] or
+                                  nombres.nombre(r["account"], jid) or "", "chats": [],
                                   "last": ts(r["ts"])}
         if not item["name"] and r["sender_name"]:
             item["name"] = r["sender_name"]
@@ -952,6 +965,53 @@ def companeros_de(cuenta, jid, pares, inversos=None):
     return [propio] + ([otro] if otro and otro != propio else [])
 
 
+# De donde sale el nombre de un contacto (`contacto.fuente`, que escribe el sidecar), de
+# menor a mayor: lo que la persona se puso, el nombre verificado de una empresa, y lo que el
+# dueno guardo en su telefono.
+FUENTE_LIBRETA = "libreta"
+RANGO_FUENTE = {"apodo": 1, "verificado": 2, FUENTE_LIBRETA: 3}
+
+
+class NombresDeLibreta:
+    """Los nombres de la libreta del telefono (`contacto`, nombres-de-libreta), leidos UNA
+    vez con los pares LID-telefono: el nombre de una persona sale por su id o por el otro
+    del par, aunque nunca le haya escrito al dueno. Un almacen de antes de la tabla no tiene
+    ninguno, y eso no es un error."""
+
+    def __init__(self, con):
+        self.pares = telefonos_de_lid(con)
+        self.inversos = {(c, pn): lid for (c, lid), pn in self.pares.items()}
+        self.por_cuenta = {}
+        self.por_jid = {}
+        try:
+            filas = con.execute("select account, jid, nombre, fuente from contacto").fetchall()
+        except sqlite3.Error:
+            filas = []
+        for f in filas:
+            rango = RANGO_FUENTE.get(f["fuente"], 0)
+            if not rango or not f["nombre"]:
+                continue
+            dato = (rango, f["fuente"], f["nombre"])
+            self.por_cuenta[(f["account"], f["jid"])] = dato
+            previo = self.por_jid.get(f["jid"])
+            if previo is None or rango > previo[0]:
+                self.por_jid[f["jid"]] = dato
+
+    def nombre(self, cuenta, jid, fuentes=None):
+        """El mejor nombre de `jid` (o del otro de su par) en la linea `cuenta`; sin cuenta,
+        en cualquiera. Con `fuentes`, solo de esas. None si no hay."""
+        if cuenta:
+            ids = companeros_de(cuenta, jid, self.pares, self.inversos)
+            datos = [self.por_cuenta.get((cuenta, i)) for i in ids]
+        else:
+            propio = jid_sin_dispositivo(jid)
+            otros = [v for (c, k), v in self.pares.items() if k == propio] + \
+                [k for (c, pn), k in self.inversos.items() if pn == propio]
+            datos = [self.por_jid.get(i) for i in [propio, *otros] if i]
+        datos = [d for d in datos if d and (fuentes is None or d[1] in fuentes)]
+        return max(datos, key=lambda d: d[0])[2] if datos else None
+
+
 class _Libreta:
     """Lo que hace falta para nombrar a los miembros de los grupos de una linea, leido UNA
     vez: los pares LID-telefono, el ultimo `sender_name` de cada remitente y el nombre de
@@ -959,6 +1019,7 @@ class _Libreta:
 
     def __init__(self, con, cuenta):
         self.cuenta = cuenta
+        self.nombres = NombresDeLibreta(con)
         self.pares = telefonos_de_lid(con)
         self.inversos = {(c, pn): lid for (c, lid), pn in self.pares.items()}
         self.propios = chats_propios(con)
@@ -980,8 +1041,12 @@ class _Libreta:
 
     def fila(self, jid, admin):
         ids = companeros_de(self.cuenta, jid, self.pares, self.inversos)
-        nombre = next((self.por_mensaje[i] for i in ids if i in self.por_mensaje), "") or \
-            next((self.por_libreta[i] for i in ids if i in self.por_libreta), "")
+        # Como el dueno lo guardo en su telefono primero (nombres-de-libreta); despues el
+        # nombre de su ultimo mensaje, el de su directo y el apodo guardado.
+        nombre = self.nombres.nombre(self.cuenta, jid, (FUENTE_LIBRETA,)) or \
+            next((self.por_mensaje[i] for i in ids if i in self.por_mensaje), "") or \
+            next((self.por_libreta[i] for i in ids if i in self.por_libreta), "") or \
+            self.nombres.nombre(self.cuenta, jid) or ""
         telefono = next((t for t in (telefono_de(self.cuenta, i, self.pares) for i in ids)
                          if t), None)
         return {"id": ids[0], "name": nombre, "phone": telefono, "wa_admin": bool(admin)}
@@ -1081,8 +1146,10 @@ def chat(con, fila, limite, dias=None):
             from mensaje
             where account = ? and chat_jid = ? and revocado = 0 {donde}
             order by ts desc limit ?""", args + [limite]).fetchall()
+    nombres = NombresDeLibreta(con)
     return [{"date": ts(r["ts"]), "chat": nombre_de(fila), "chat_id": fila["id"],
-             "sender": quien(r), "text": (r["body"] or "").replace("\n", " "),
+             "sender": quien(r, nombres, fila["account"]),
+             "text": (r["body"] or "").replace("\n", " "),
              "media": r["media_path"] or None}
             for r in reversed(filas)]
 
@@ -1148,9 +1215,10 @@ def nuevos(con, fila, base):
                   {corte}
             order by m.ts, m.rowid""",
         [fila["account"], fila["chat_jid"]] + args).fetchall()
+    nombres = NombresDeLibreta(con)
     return [{"date": ts(r["ts"]), "ts": r["ts"], "stanza_id": r["stanza_id"],
              "chat": nombre_de(fila), "chat_id": fila["id"], "chat_jid": fila["chat_jid"],
-             "account": fila["account"], "sender": quien(r),
+             "account": fila["account"], "sender": quien(r, nombres, fila["account"]),
              "text": (r["body"] or "").replace("\n", " "), "media": r["media_path"] or None}
             for r in filas]
 
@@ -1168,7 +1236,9 @@ def media(con, fila, limite):
                  and media_path is not null and media_path <> ''
            order by ts desc limit ?""",
         (fila["account"], fila["chat_jid"], limite)).fetchall()
-    return [{"date": ts(r["ts"]), "chat": nombre_de(fila), "sender": quien(r),
+    nombres = NombresDeLibreta(con)
+    return [{"date": ts(r["ts"]), "chat": nombre_de(fila),
+             "sender": quien(r, nombres, fila["account"]),
              "type": r["media_type"], "bytes": r["media_bytes"],
              "caption": (r["body"] or "").replace("\n", " "),
              "path": r["media_path"], "exists": os.path.exists(r["media_path"] or "")}

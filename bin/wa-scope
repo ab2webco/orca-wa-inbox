@@ -5518,12 +5518,34 @@ def avance_manda(con, fila):
         motivos = "; ".join(f"{q}: {c}" for q, c in motivos_del_freno(detalle)) or codigo
         avance_marca(con, cid, n, "retenido", motivos[:LARGO_MOTIVO],
                      f"avance {n} retenido, no enviado: {motivos}"[:LARGO_MOTIVO])
+        avance_sin_salida(con, cid, n)
         return {"estado": "retenido", "motivo": motivos, "req_id": req}
     if codigo in ENVIO_BLOQUEA or codigo == "send-denied":
         avance_marca(con, cid, n, "omitido", codigo, f"avance {n} omitido: {codigo}")
         return {"estado": "omitido", "motivo": codigo, "req_id": req}
     # La linea caida, sin firma, sin veredicto a tiempo: el tick pregunta con el mismo id.
     return {"estado": "pendiente", "motivo": codigo, "req_id": req}
+
+
+def avance_sin_salida(con, cid, n):
+    """menos-ruido M4: la reescritura de un avance retenido tambien se retuvo (`PISTA_DESCARTA`)
+    y al cliente no le llego nada del caso. Visto en vivo: seis avances retenidos de un caso y
+    el cliente sin nada. En vez de quedar en nada, sale el acuse fijo de la linea, una vez,
+    aunque el chat este en `model`: lo manda el tick como un respaldo."""
+    previo = con.execute("select estado from caso_avance where case_id=? and n<? order by n desc "
+                         "limit 1", (cid, n)).fetchone()
+    if not previo or previo["estado"] != "retenido":
+        return
+    caso_toma(con)
+    try:
+        if not caso_ya_escribio(con, caso_de(con, cid), {}):
+            auto_registra(con, cid, "acuse")
+            con.execute("update respuesta_auto set razon=? where case_id=? and tipo='acuse' and "
+                        "estado='pendiente' and razon is null", (RAZON_AVANCE_RETENIDO, cid))
+        con.commit()
+    except BaseException:
+        con.rollback()
+        raise
 
 
 def avance_intenta(con, fila):
@@ -6372,6 +6394,8 @@ def caso_hilo(con, caso, stanzas, una_linea=True):
             f"media_type, media_bytes, media_path from mensaje where account=? and chat_jid=? "
             f"and revocado=0 and (stanza_id in ({marcas}) or (from_me=1 and ts >= ?)) order by ts, rowid",
             (caso["account"], caso["chat_jid"], *stanzas, propios["t"])).fetchall()
+        # Quien escribio, como el dueno lo guardo en su telefono (nombres-de-libreta).
+        nombres = wa_store.NombresDeLibreta(fuente)
     except sqlite3.Error:
         return None
     finally:
@@ -6383,7 +6407,7 @@ def caso_hilo(con, caso, stanzas, una_linea=True):
         texto, transcripcion = texto_de_audio(con, caso, r,
                                               cuerpo.replace("\n", " ") if una_linea else cuerpo)
         x = {"stanza_id": r["stanza_id"], "date": wa_store.ts(r["ts"]), "ts": r["ts"],
-             "from_me": bool(r["from_me"]), "sender": wa_store.quien(r), "text": texto,
+             "from_me": bool(r["from_me"]), "sender": wa_store.quien(r, nombres, caso["account"]), "text": texto,
              "media": media_de_fila(r), "en_caso": r["stanza_id"] in stanzas,
              "respondido": bool(i < ultima and not r["from_me"])}
         if transcripcion is not None:
@@ -6584,6 +6608,10 @@ SIN_AGENTE = {
     "gracias_sin_pregunta": "un gracias despues de una respuesta, sin ninguna pregunta",
     # Un sticker sin texto, en una rafaga que no trae nada mas: no pide nada.
     "sticker_suelto": "un sticker suelto, sin texto ni nada mas en la rafaga",
+    # Sin veredicto de Jev (apagado o caido), una rafaga que no es mas que un gracias o solo
+    # emojis, sin adjunto (menos-ruido M3). "ok", "si", "dale" o "listo" no estan: contestan
+    # una pregunta del agente.
+    "cortesia": "un gracias o un emoji solo, sin nada mas en la rafaga",
     # Una rafaga de un grupo que NO nombra ni cita al asistente, y que Jev no clasifico como un
     # pedido ni marco con una bandera que necesite al agente, ni trae dinero, compromiso o
     # credencial: en un grupo con mucho movimiento, cada linea suelta despertando al agente
@@ -6774,6 +6802,9 @@ def auto_omite(con, caso, scope, ajustes, tipo):
 # primer mensaje es del agente), o del caso ya salio (o esta saliendo) otro mensaje.
 RAZON_PRIMER_AGENTE = "primer-mensaje-del-agente"
 RAZON_YA_SALIO = "ya-salio-un-mensaje"
+# El acuse que sale porque el primer mensaje del agente y su reescritura se retuvieron
+# (menos-ruido M4): un respaldo tambien en `model`.
+RAZON_AVANCE_RETENIDO = "primer-mensaje-retenido"
 
 # Decision c del dueno (2026-10-05): el acuse no cae en medio de una conversacion. No sale en
 # el caso del dueno (`auto_omite`), y ninguno sale si la linea escribio en ese chat en los
@@ -6897,7 +6928,8 @@ Manda los acuses y saludos pendientes, antes que cualquier propuesta: son lo que
     cliente espera ya. Cada uno sale por `wa-send` con su id fijo, asi que un reintento no
     entrega dos."""
     filas = [dict(r) for r in con.execute(
-        "select ra.case_id, ra.tipo, ra.req_id, ra.estado from respuesta_auto ra join caso c "
+        "select ra.case_id, ra.tipo, ra.req_id, ra.estado, ra.razon from respuesta_auto ra "
+        "join caso c "
         "on c.case_id=ra.case_id where ra.estado in ('pendiente', 'enviando') and c.account=? "
         "order by ra.at, ra.case_id", (cuenta_activa(),))]
     if not filas:
@@ -6914,9 +6946,16 @@ Manda los acuses y saludos pendientes, antes que cualquier propuesta: son lo que
     for fila in filas:
         caso = casos[fila["case_id"]]
         modo = primer_modo(scope.get(caso["chat_jid"]), ajustes)[0]
-        if (fila["tipo"] == "acuse" and modo == "model_with_ack_fallback") != respaldo:
+        tras_retenido = fila["tipo"] == "acuse" and fila.get("razon") == RAZON_AVANCE_RETENIDO
+        if (fila["tipo"] == "acuse" and modo == "model_with_ack_fallback"
+                or tras_retenido) != respaldo:
             continue
-        if fila["tipo"] == "acuse" and modo == "model":
+        if tras_retenido and modo != "model_with_ack_fallback":
+            if fila.get("estado") != "enviando" and caso_ya_escribio(con, caso, estados):
+                tick_auto_cierra(con, fila, "omitido", RAZON_YA_SALIO,
+                                 f"acuse omitido: {RAZON_YA_SALIO}")
+                continue
+        elif fila["tipo"] == "acuse" and modo == "model":
             # El primer mensaje es del agente: el acuse que quedo de antes no sale.
             tick_auto_cierra(con, fila, "omitido", RAZON_PRIMER_AGENTE,
                              f"acuse omitido: {RAZON_PRIMER_AGENTE}", necesita_agente=1)
@@ -7286,7 +7325,31 @@ def veredicto_de(m, decision, con=None):
                 "detalle": (f"audio sin transcribir: {sin}" if sin
                             else "sin texto: audio" if audio else "sin texto")}
     juicio_jev = jev_juzga(m, con)
-    return veredicto_de_jev(m, juicio_jev) if juicio_jev is not None else None
+    if juicio_jev is not None:
+        return veredicto_de_jev(m, juicio_jev)
+    if solo_cortesia(m):
+        return {"accion": "cerrar", "actor": "automatizacion",
+                "motivo": motivo_sin_agente("cortesia")}
+    return None
+
+
+# menos-ruido M3: un agradecimiento, y lo que lo acompana sin pedir nada. Con Jev, Jev
+# decide; sin el, esto es lo unico que se sabe sin mirar.
+GRACIAS = re.compile(r"\b(?:gracias|thanks?|thank you|thx|obrigad[oa]s?|valeu)\b")
+RELLENO_GRACIAS = re.compile(r"\b(?:muchas|muchisimas|mil|a lot|so much|de verdad|de nuevo|"
+                             r"again|muito|really|you|te|le|les)\b")
+
+
+def solo_cortesia(m):
+    """Si el mensaje (o la rafaga) no es mas que un agradecimiento o emojis, sin adjunto. Un
+    signo de pregunta, aunque venga solo, pregunta."""
+    texto = wa_reglas.normaliza(m.get("text") or "")
+    if not texto.strip() or m.get("media") or "?" in texto:
+        return False
+    resto = re.sub(r"[\W_]+", " ", RELLENO_GRACIAS.sub(" ", GRACIAS.sub(" ", texto))).strip()
+    if resto:
+        return False
+    return bool(GRACIAS.search(texto)) or any(unicodedata.category(c) == "So" for c in texto)
 
 
 # Una rafaga: los mensajes de un chat que llegan a menos de esto uno del otro se juzgan
@@ -10709,8 +10772,10 @@ def tick_envia(caso, texto, req):
 # Lo que `wa-send` contesta y se arregla solo: el minuto siguiente lo intenta con el mismo id.
 AVISO_REINTENTA = (ENVIO_SIN_LINEA, "send-no-signature", "send-timeout", "fallo")
 # El chat del numero de aprobacion sin autorizar (o autorizado para otra linea): lo
-# arregla el dueno en el panel, asi que el aviso espera en vez de perderse.
-AVISO_ESPERA_PERMISO = ("send-denied", "send-line-not-linked")
+# arregla el dueno en el panel, asi que el aviso espera en vez de perderse. Tambien el
+# chat registrado solo en otra linea que no lo deja contestar (menos-ruido M6): cada tick
+# vuelve a elegir la linea (`linea_del_aviso`), y sale por la buena cuando el dueno la abre.
+AVISO_ESPERA_PERMISO = ("send-denied", "send-line-not-linked", "send-wrong-line")
 # Lo que la regla deja cuando no firma una respuesta (E_EXCEPTION): el gemelo de
 # ESPERA_DUENO para lo que sale al chat. Una vez por version.
 RESPUESTA_ESPERA = "respuesta espera al dueno:"
@@ -12191,10 +12256,34 @@ def ahora_orca_s():
     return time.time()
 
 
-def ventana_digest(minutos, t):
+def ventana_digest(minutos, t, desde_min=0):
     """El numero de la ventana de `minutos` en que cae `t`, contada desde la medianoche local
-    (con 60 minutos son las horas en punto del reloj de esta maquina)."""
-    return int((t + time.localtime(t).tm_gmtoff) // (minutos * 60))
+    (con 60 minutos son las horas en punto del reloj de esta maquina), o desde `desde_min`
+    minutos pasada la medianoche."""
+    return int((t + time.localtime(t).tm_gmtoff - desde_min * 60) // (minutos * 60))
+
+
+# menos-ruido M1: con el resumen una vez al dia, el dia termina cuando empiezan las horas de
+# silencio (sin ellas, a la medianoche). Ese resumen sale aunque el silencio ya empezo, dentro
+# de esta gracia: un tick que llega despues (el equipo dormido) espera al fin del silencio.
+MINUTOS_DIA = 1440
+GRACIA_FIN_DEL_DIA_MIN = 60
+
+
+def fin_del_dia(minutos, silencio):
+    """Desde que minuto se cuenta la ventana del resumen: el inicio del silencio con el resumen
+    una vez al dia, y la medianoche en cualquier otro caso."""
+    return silencio[0] if minutos == MINUTOS_DIA and silencio else 0
+
+
+def frena_silencio(minutos, silencio, minuto):
+    """Si las horas de silencio frenan el resumen en `minuto`: siempre adentro, salvo el de una
+    vez al dia en la primera `GRACIA_FIN_DEL_DIA_MIN` del silencio."""
+    if not en_silencio(silencio, minuto):
+        return False
+    if minutos == MINUTOS_DIA and silencio:
+        return (minuto - silencio[0]) % MINUTOS_DIA >= GRACIA_FIN_DEL_DIA_MIN
+    return True
 
 
 def desde_digest():
@@ -12314,7 +12403,9 @@ def orca_resumen_terminados(con, ajustes, tx):
     Cuenta como un aviso para el tope. Con `resumen_min` 0 lo que quedo juntado sale de una
     vez y de ahi en mas cada termino sale suelto."""
     minutos = ajustes["resumen_min"]
-    ventana = f"{minutos}:{ventana_digest(minutos, ahora_orca_s())}" if minutos else None
+    desde = fin_del_dia(minutos, ajustes["silencio"])
+    ventana = (f"{minutos}:{ventana_digest(minutos, ahora_orca_s(), desde)}"
+               + (f"@{desde}" if desde else "")) if minutos else None
     llave = desde_digest()
     if ventana:
         fila = con.execute("select value from settings where key=?", (llave,)).fetchone()
@@ -12325,7 +12416,7 @@ def orca_resumen_terminados(con, ajustes, tx):
                         (TIPO_ORCA, ESTADO_ACUMULADO, cuenta_activa(),
                          numero_aprobacion() or "")).fetchall()
     if filas:
-        if en_silencio(ajustes["silencio"], hora_local()) \
+        if frena_silencio(minutos, ajustes["silencio"], hora_local()) \
                 or orca_ultima_hora(con) >= ajustes["tope"]:
             return
         huella = ventana or "0:" + hashlib.sha1(
@@ -12523,6 +12614,12 @@ def cmd_tick(con, a):
                 if con.in_transaction:
                     con.rollback()
                 print(f"wa-scope: unlinked line leftovers not closed: {exc}", file=sys.stderr)
+        try:
+            poda_textos(con)
+        except sqlite3.Error as exc:
+            if con.in_transaction:
+                con.rollback()
+            print(f"wa-scope: old text not pruned: {exc}", file=sys.stderr)
         # La entrada de respaldo: el worker la dispara al llegar cada mensaje; si ese
         # evento se perdio, el minuto la recoge. Una falla suya no frena el resto.
         try:
@@ -14493,6 +14590,53 @@ def cierra_lo_de_lineas_idas(con):
         (MOTIVO_LINEA_IDA, ahora_caso(), *AVISO_EN_ESPERA, *activas))
     con.commit()
     return len(filas), cur.rowcount
+
+
+# menos-ruido M5: el almacen borra los mensajes de mas de `capture_days`, y scope.db guardaba
+# sus copias para siempre. Una vez por dia, lo cerrado de la linea mas viejo que ese plazo se
+# queda sin texto; las filas quedan, porque los informes cuentan casos, tiempos y avisos.
+PODA_TEXTOS_CADA_S = 86400
+PODA_TEXTOS = "poda_textos_at"
+
+
+def poda_textos(con):
+    """Vacia el texto de lo cerrado de la linea activa mas viejo que su `capture_days`, una
+    vez por dia. Devuelve cuantas filas toco, o None si hoy ya corrio."""
+    cuenta = cuenta_activa()
+    llave = f"{PODA_TEXTOS}@{cuenta}"
+    fila = con.execute("select value from settings where key=?", (llave,)).fetchone()
+    try:
+        if fila and time.time() - float(fila["value"]) < PODA_TEXTOS_CADA_S:
+            return None
+    except (TypeError, ValueError):
+        pass
+    dias = wa_store.entero(wa_store.ajustes(cuenta), "capture_days")
+    corte = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(time.time() - dias * 86400))
+    vuelo = ",".join("?" * len(DESPACHO_EN_VUELO))
+    espera = AVISO_EN_ESPERA + ("contestando",)
+    casos = "select case_id from caso where account=?"
+    tocadas = 0
+    for sql, args in (
+        ("update caso set resumen=null, propuesta=null where account=? and etapa in "
+         "('cerrado', 'respondido') and updated_at < ? and (resumen is not null or "
+         "propuesta is not null)", (cuenta, corte)),
+        (f"update aviso set texto='' where account=? and at < ? and texto <> '' and estado "
+         f"not in ({','.join('?' * len(espera))})", (cuenta, corte, *espera)),
+        (f"update caso_avance set texto='' where case_id in ({casos}) and at < ? and "
+         "texto <> '' and estado <> 'pendiente'", (cuenta, corte)),
+        ("update transcripcion set texto=null where account=? and at < ? and texto is not null",
+         (cuenta, corte)),
+        ("update juicio set jev=null, rafaga=null where account=? and at < ? and "
+         "(jev is not null or rafaga is not null)", (cuenta, corte)),
+        (f"update caso_despacho set instrucciones=null, informes=null where case_id in ({casos}) "
+         f"and updated_at < ? and estado not in ({vuelo}) and (instrucciones is not null or "
+         "informes is not null)", (cuenta, corte, *DESPACHO_EN_VUELO)),
+    ):
+        tocadas += con.execute(sql, args).rowcount
+    con.execute("insert into settings (key, value) values (?, ?) on conflict(key) do update "
+                "set value=excluded.value", (llave, str(time.time())))
+    con.commit()
+    return tocadas
 
 
 def tick_vigila(con, resumen, inicio=None):

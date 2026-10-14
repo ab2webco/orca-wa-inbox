@@ -265,7 +265,9 @@ NOUL_BORRADOR = {
                        "'tomorrow', 'by Friday', 'in two hours', 'today you will have it')? "
                        "Acknowledging the message, saying the assistant will look into it "
                        "now, or that it will report back what it finds, with no date, time "
-                       "or deadline, is not a promise.",
+                       "or deadline, is not a promise. A date or time that tells when "
+                       "something happened or repeats a fact ('the meeting was on Monday', "
+                       "'I received it on 12/10') is not a promise either.",
     "states_status_not_verified": "Does reply_to_review state that something was fixed, "
                                   "resolved, changed or finished, or that a system now "
                                   "works, when nothing in the state shows that this is "
