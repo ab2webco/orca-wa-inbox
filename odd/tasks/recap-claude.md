@@ -43,11 +43,11 @@ without a new recap is not repeated.
 ## Checklist
 
 - [x] C1 Setting `orca_claude_recap` + panel field (`check-clis`).
-- [ ] C2 Reader of Claude Code recaps + digest uses it after `wa-scope recap`
+- [x] C2 Reader of Claude Code recaps + digest uses it after `wa-scope recap`
   (`check-casos`).
-- [ ] C3 Wait for the recap at the start of a window, bounded (`check-casos`).
-- [ ] C4 No repeat without a new recap (`check-casos`).
-- [ ] C5 Switch in the Orca notices card, ES/EN/PT (`test/panels.test.mjs`), screenshots.
+- [x] C3 Wait for the recap at the start of a window, bounded (`check-casos`).
+- [x] C4 No repeat without a new recap (`check-casos`).
+- [x] C5 Switch in the Orca notices card, ES/EN/PT (`test/panels.test.mjs`), screenshots.
 - [ ] C6 Full checks, task file, release.
 
 ## Acceptance criteria

@@ -13055,7 +13055,25 @@ def prepara_orca(home, idioma="es", **campos):
     ws.orca_json = falsa
     ws.orca_cli_path = lambda *a, **k: "/nonexistent/orca-de-mentira"
     ws.hora_local = lambda: 12 * 60
+    # Las transcripciones de Claude Code de esta prueba, nunca las de la maquina.
+    ws.carpetas_de_claude = lambda: [str(pathlib.Path(home) / "claude-projects")]
     return ws, ws.db(), enviados, falsa
+
+
+def pon_recap_claude(home, ruta, texto, at_s, sesion="s1", cwd=None, crudo=None):
+    """Agrega a la transcripcion `sesion` de la carpeta `ruta` el recap que Claude Code escribe
+    al terminar (`away_summary`), con la hora `at_s` (epoch), y deja el archivo con esa hora."""
+    carpeta = pathlib.Path(home) / "claude-projects" / re.sub(r"[^A-Za-z0-9]", "-", ruta)
+    carpeta.mkdir(parents=True, exist_ok=True)
+    archivo = carpeta / f"{sesion}.jsonl"
+    hora = datetime.datetime.fromtimestamp(at_s, datetime.timezone.utc)
+    linea = crudo if crudo is not None else json.dumps(
+        {"type": "system", "subtype": "away_summary", "content": texto, "cwd": cwd or ruta,
+         "timestamp": hora.strftime("%Y-%m-%dT%H:%M:%S.") + f"{hora.microsecond // 1000:03d}Z",
+         "sessionId": sesion}, ensure_ascii=False)
+    with archivo.open("a", encoding="utf-8") as f:
+        f.write(linea + "\n")
+    os.utime(archivo, (at_s, at_s))
 
 
 def estados_orca(con):
@@ -13698,6 +13716,215 @@ try:
             ok(f"R3: en {idioma} la linea lleva el recap", frase in t
                and "alfa-demo · Pagos nuevos x1 — Fixed the login redirect" in t, t)
             con.close()
+
+    # C2 (recap-claude): sin linea de `wa-scope recap`, el recap que Claude Code escribio al
+    # terminar (en la transcripcion de la sesion de ese espacio) va junto al proyecto.
+    ALFA_RUTA = "/srv/ejemplo/alfa-demo"
+    BETA_RUTA = "/srv/ejemplo/beta-demo"
+    RECAP_ALFA = ("Arregle el redireccionamiento del login y quedo publicado. Siguiente paso: "
+                  "revisa en el telefono que entra directo.")
+
+    def resumen_con(home, preparar, idioma="es", **campos):
+        """Un turno de alfa y otro de beta hace 100 s, lo que `preparar(ws, reloj)` deje, y el
+        resumen de la ventana siguiente."""
+        ws, con, enviados, falsa, reloj = prepara_resumen(home, idioma, **campos)
+        pon_paneles(home, turnos(reloj, pA=(WT_ALFA, 100), pC=(WT_BETA, 100)))
+        preparar(ws, reloj)
+        vuelta(ws, con)
+        reloj[0] += 3600
+        vuelta(ws, con)
+        con.close()
+        return enviados[0]["texto"] if enviados else ""
+
+    with tempfile.TemporaryDirectory() as home:
+        t = resumen_con(home, lambda ws, reloj: pon_recap_claude(home, ALFA_RUTA, RECAP_ALFA,
+                                                                 reloj[0] + 80))
+        ok("C2: el recap de Claude Code del espacio, escrito despues del turno, sale con el "
+           "proyecto", f"- alfa-demo · Pagos nuevos x1 — {RECAP_ALFA}" in t
+           and "\n- beta-demo x1" in t and "beta-demo x1 —" not in t, t)
+
+    with tempfile.TemporaryDirectory() as home:
+        def preparar(ws, reloj):
+            pon_recap_claude(home, ALFA_RUTA, RECAP_ALFA, reloj[0] + 80)
+            recap_a(ws, "Fixed the login redirect")
+        t = resumen_con(home, preparar)
+        ok("C2: la linea de `wa-scope recap` le gana al recap de Claude Code",
+           "x1 — Fixed the login redirect" in t and RECAP_ALFA not in t, t)
+
+    with tempfile.TemporaryDirectory() as home:
+        def preparar(ws, reloj):
+            pon_recap_claude(home, ALFA_RUTA, "Un recap viejo de otro turno.", reloj[0] - 400)
+            pon_recap_claude(home, ALFA_RUTA, "El primero de este turno.", reloj[0] + 60, "s2")
+            pon_recap_claude(home, ALFA_RUTA, "El ultimo de este turno.", reloj[0] + 300, "s3")
+            pon_recap_claude(home, BETA_RUTA, "Despues del resumen.", reloj[0] + 3700)
+        t = resumen_con(home, preparar)
+        ok("C2: cuenta el mas reciente de entre el turno y el resumen, de cualquier sesion; ni "
+           "uno de antes del turno ni uno de despues del resumen",
+           "x1 — El ultimo de este turno." in t and "viejo" not in t and "primero" not in t
+           and "Despues del resumen" not in t and "beta-demo x1 —" not in t, t)
+
+    with tempfile.TemporaryDirectory() as home:
+        def preparar(ws, reloj):
+            pon_recap_claude(home, ALFA_RUTA, "De otra carpeta que cae en la misma.",
+                             reloj[0] + 60, cwd="/srv/ejemplo/otra")
+            pon_recap_claude(home, ALFA_RUTA, "", reloj[0] + 70, crudo="{esto no es json")
+            pon_recap_claude(home, ALFA_RUTA, "", reloj[0] + 75, crudo=json.dumps(
+                {"type": "system", "subtype": "away_summary", "content": 7, "cwd": ALFA_RUTA,
+                 "timestamp": "ayer"}))
+            pon_recap_claude(home, BETA_RUTA, "x" * 601, reloj[0] + 80)
+        t = resumen_con(home, preparar)
+        ok("C2: uno de otra carpeta, una linea rota, uno sin texto o sin hora y uno de mas de "
+           "600 caracteres no salen (nunca se recorta)",
+           "\n- alfa-demo · Pagos nuevos x1\n" in t and "beta-demo x1 —" not in t
+           and "otra carpeta" not in t and "xxxx" not in t, t)
+
+    with tempfile.TemporaryDirectory() as home:
+        def preparar(ws, reloj):
+            pon_recap_claude(home, ALFA_RUTA, "Cambie /srv/ejemplo/alfa-demo/src/app.py y\n"
+                             "  ~/notas/plan.md   sin romper nada.", reloj[0] + 60)
+            pon_recap_claude(home, BETA_RUTA,
+                             "Subi el token ghp_abcdefghijklmnopqrstuvwxyz0123456789",
+                             reloj[0] + 60)
+        t = resumen_con(home, preparar)
+        ok("C2: las rutas no viajan, los espacios se juntan, y uno con forma de secreto no sale",
+           "x1 — Cambie … y … sin romper nada." in t and "/srv" not in t and "~/" not in t
+           and "ghp_" not in t and "\n- beta-demo x1" in t, t)
+
+    with tempfile.TemporaryDirectory() as home:
+        def preparar(ws, reloj):
+            pon_recap_claude(home, ALFA_RUTA, RECAP_ALFA, reloj[0] + 80)
+            for n in range(40):
+                pon_recap_claude(home, ALFA_RUTA, "", reloj[0] + 90 + n, crudo=json.dumps(
+                    {"type": "user", "message": "x" * 20000, "cwd": ALFA_RUTA}))
+        t = resumen_con(home, preparar)
+        ok("C2: la sesion que sigue escribiendo megas despues del recap no lo esconde",
+           f"x1 — {RECAP_ALFA}" in t, t)
+
+    with tempfile.TemporaryDirectory() as home:
+        t = resumen_con(home, lambda ws, reloj: pon_recap_claude(home, ALFA_RUTA, RECAP_ALFA,
+                                                                 reloj[0] + 80),
+                        claudeRecap="off")
+        ok("C2: con el recap de Claude Code apagado el resumen es el de siempre",
+           "\n- alfa-demo · Pagos nuevos x1\n" in t and RECAP_ALFA not in t, t)
+
+    with tempfile.TemporaryDirectory() as home:
+        ws, con, enviados, falsa, reloj = prepara_resumen(home)
+        pon_paneles(home, turnos(reloj, pA=(WT_ALFA, 100)))
+        vuelta(ws, con)
+        marca = json.loads(con.execute("select version from aviso where estado='acumulado'")
+                           .fetchone()[0])
+        ok("C2: el turno anotado guarda la carpeta del espacio para buscar su recap",
+           marca.get("p") == ALFA_RUTA and marca.get("w") == WT_ALFA, f"{marca}")
+        con.close()
+
+    # C3 (recap-claude): Claude Code escribe el recap unos tres minutos despues del turno. Al
+    # abrirse la ventana, el resumen espera a que llegue el de un turno reciente, con tope.
+    def al_borde(reloj, minuto, segundo=0):
+        """La hora de la prueba a las 12:`minuto`:`segundo` (o 13:xx con minuto >= 60)."""
+        return reloj_de_prueba() - (30 * 60 + 80) + minuto * 60 + segundo
+
+    with tempfile.TemporaryDirectory() as home:
+        ws, con, enviados, falsa, reloj = prepara_resumen(home)
+        reloj[0] = al_borde(reloj, 58)
+        pon_paneles(home, turnos(reloj, pA=(WT_ALFA, 50)))
+        vuelta(ws, con)
+        fin_turno = reloj[0] - 50
+        reloj[0] = al_borde(reloj, 60, 30)
+        vuelta(ws, con)
+        ok("C3: recien abierta la ventana, con un turno de hace menos de 4 minutos sin recap, "
+           "el resumen espera", enviados == [] and len(filas_de(con, "acumulado")) == 1,
+           f"{enviados}")
+        pon_recap_claude(home, ALFA_RUTA, RECAP_ALFA, fin_turno + 185)
+        reloj[0] = al_borde(reloj, 60, 60)
+        vuelta(ws, con)
+        t = enviados[0]["texto"] if enviados else ""
+        ok("C3: llegado el recap, sale en la vuelta siguiente y lo lleva",
+           len(enviados) == 1 and f"x1 — {RECAP_ALFA}" in t, f"{enviados}")
+        con.close()
+
+    with tempfile.TemporaryDirectory() as home:
+        ws, con, enviados, falsa, reloj = prepara_resumen(home)
+        reloj[0] = al_borde(reloj, 58)
+        pon_paneles(home, turnos(reloj, pA=(WT_ALFA, 50)))
+        vuelta(ws, con)
+        reloj[0] = al_borde(reloj, 60, 30)
+        pon_paneles(home, turnos(reloj, pA=(WT_ALFA, 200), pB=(WT_BETA, 1)))
+        vuelta(ws, con)
+        # El resumen mira antes de anotar lo de esta vuelta: beta queda anotado en la siguiente.
+        reloj[0] = al_borde(reloj, 61)
+        pon_paneles(home, turnos(reloj, pA=(WT_ALFA, 230), pB=(WT_BETA, 31)))
+        vuelta(ws, con)
+        reloj[0] = al_borde(reloj, 63, 50)
+        pon_paneles(home, turnos(reloj, pA=(WT_ALFA, 400), pB=(WT_BETA, 201),
+                                 pD=(WT_BETA, 40)))
+        vuelta(ws, con)
+        ok("C3: sin recap, espera hasta 4 minutos de abierta la ventana", enviados == [],
+           f"{enviados}")
+        reloj[0] = al_borde(reloj, 64, 30)
+        vuelta(ws, con)
+        t = enviados[0]["texto"] if enviados else ""
+        ok("C3: pasado el tope sale sin recap, aunque haya turnos nuevos sin el",
+           len(enviados) == 1 and "\n- alfa-demo · Pagos nuevos x1" in t and "beta-demo x2" in t
+           and " — " not in t, f"{enviados}")
+        con.close()
+
+    with tempfile.TemporaryDirectory() as home:
+        ws, con, enviados, falsa, reloj = prepara_resumen(home, claudeRecap="off")
+        reloj[0] = al_borde(reloj, 58)
+        pon_paneles(home, turnos(reloj, pA=(WT_ALFA, 50)))
+        vuelta(ws, con)
+        reloj[0] = al_borde(reloj, 60, 30)
+        vuelta(ws, con)
+        ok("C3: con el recap de Claude Code apagado no espera", len(enviados) == 1,
+           f"{enviados}")
+        con.close()
+
+    with tempfile.TemporaryDirectory() as home:
+        ws, con, enviados, falsa, reloj = prepara_resumen(home)
+        reloj[0] = al_borde(reloj, 58)
+        pon_paneles(home, turnos(reloj, pA=(WT_ALFA, 50)))
+        recap_a(ws, "Fixed the login redirect")
+        vuelta(ws, con)
+        reloj[0] = al_borde(reloj, 60, 30)
+        vuelta(ws, con)
+        ok("C3: un turno que ya tiene su linea de `wa-scope recap` no hace esperar",
+           len(enviados) == 1 and "— Fixed the login redirect" in enviados[0]["texto"],
+           f"{enviados}")
+        con.close()
+
+    # C4 (recap-claude): un proyecto que ya salio con su recap y vuelve a terminar sin uno
+    # nuevo no se repite. El que salio sin recap (Codex, o el dueno mirando) sale como siempre.
+    with tempfile.TemporaryDirectory() as home:
+        ws, con, enviados, falsa, reloj = prepara_resumen(home)
+        pon_paneles(home, turnos(reloj, pA=(WT_ALFA, 100), pC=(WT_BETA, 100)))
+        pon_recap_claude(home, ALFA_RUTA, RECAP_ALFA, reloj[0] + 80)
+        vuelta(ws, con)
+        reloj[0] += 3600
+        vuelta(ws, con)
+        primero = enviados[0]["texto"] if enviados else ""
+        pon_paneles(home, turnos(reloj, pA=(WT_ALFA, 100), pC=(WT_BETA, 100)))
+        vuelta(ws, con)
+        reloj[0] += 3600
+        vuelta(ws, con)
+        segundo = enviados[1]["texto"] if len(enviados) > 1 else ""
+        ok("C4: el que salio con recap y termina otra vez sin uno nuevo no se repite; el que "
+           "salio sin recap, si", RECAP_ALFA in primero and len(enviados) == 2
+           and "alfa-demo" not in segundo and "beta-demo x1" in segundo
+           and "(1)" in segundo, f"{enviados}")
+        pon_paneles(home, turnos(reloj, pA=(WT_ALFA, 100)))
+        vuelta(ws, con)
+        reloj[0] += 3600
+        vuelta(ws, con)
+        ok("C4: si solo termino ese, no sale ningun mensaje y el turno queda cerrado",
+           len(enviados) == 2 and filas_de(con, "acumulado") == [], f"{enviados}")
+        pon_paneles(home, turnos(reloj, pA=(WT_ALFA, 100)))
+        pon_recap_claude(home, ALFA_RUTA, "Otra cosa nueva quedo lista.", reloj[0] + 80)
+        vuelta(ws, con)
+        reloj[0] += 3600
+        vuelta(ws, con)
+        ok("C4: con un recap nuevo vuelve a salir", len(enviados) == 3
+           and "x1 — Otra cosa nueva quedo lista." in enviados[-1]["texto"], f"{enviados}")
+        con.close()
 
     # R2: nombres. Sin nombre en Orca, o con forma de secreto, el proyecto es "otros agentes";
     # son muchos proyectos, los primeros y "y N mas"; en cada idioma.
