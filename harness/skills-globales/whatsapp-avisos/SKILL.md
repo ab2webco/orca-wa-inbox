@@ -58,7 +58,7 @@ It prints `{"req_id", "estado": "enviado", "stanza_id"}` on exit 0. Add `--id <u
 when you may retry: the same id is delivered once.
 
 When a long task you ran in this worktree finishes, before you stop, leave one line saying
-what you did. The owner gets an hourly summary of the agents that finished, and this line is
+what you did. The owner gets a summary of the agents that finished (hourly, or once a day), and this line is
 what it shows next to the project (`WA` is set as in "Find the tools"):
 
     "$WA/wa-scope" recap "Fixed the login redirect and added a test for it" --json
