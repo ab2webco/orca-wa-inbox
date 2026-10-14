@@ -193,10 +193,11 @@ SOLO_FECHA_PALABRAS = 2
 # (tomorrow) is still a date. In a brief (`_menciones`) "hoy" alone is still a deadline:
 # "despliega a produccion hoy" is an order with a date.
 HOY = re.compile(r"\b(?:hoy|today|hoje|esta manana|this morning|esta manha)\b")
-_ENTREGA = (r"mando|mandamos|envio|enviamos|entrego|entregamos|paso|pasamos|confirmo|"
-            r"confirmamos|tengo|tenemos|tienes|tendras|tendra|resuelvo|resolvemos|arreglo|"
-            r"arreglamos|reviso|revisamos|dejo|dejamos|termino|terminamos|corrijo|"
-            r"corregimos|hago|hacemos|llamo|llamamos|escribo|escribimos|veo|vemos|hablamos")
+_ENTREGA = (r"mando|mandamos|envio|enviamos|reenvio|reenviamos|entrego|entregamos|paso|"
+            r"pasamos|confirmo|confirmamos|tengo|tenemos|tienes|tendras|tendra|resuelvo|"
+            r"resolvemos|arreglo|arreglamos|reviso|revisamos|dejo|dejamos|termino|terminamos|"
+            r"corrijo|corregimos|hago|hacemos|llamo|llamamos|escribo|escribimos|veo|vemos|"
+            r"hablamos")
 PROMESA = re.compile(
     r"\b(?:voy a|vamos a|va a|van a|queda|quedan|quedara|quedaran|estara|estaran|"
     # te lo mando, se lo envio, lo revisamos: el verbo con su objeto
