@@ -962,6 +962,14 @@
                      aria-describedby="orca-digest-help" />
             </div>
             <p class="hint" id="orca-digest-help" data-t="orcaDigestHelp"></p>
+            <!-- recap-claude: el recap que Claude Code escribe al terminar, en el resumen. -->
+            <div class="switch-row">
+              <button type="button" class="switch" id="orca-claude-recap" role="switch"
+                      aria-checked="true" aria-labelledby="orca-claude-recap-label"
+                      aria-describedby="orca-claude-recap-help"><span class="knob"></span></button>
+              <span id="orca-claude-recap-label" data-t="orcaClaudeRecapLabel"></span>
+            </div>
+            <p class="hint" id="orca-claude-recap-help" data-t="orcaClaudeRecapHelp"></p>
           </div>
           <div class="switch-row">
             <button type="button" class="switch" id="orca-automation" role="switch"
@@ -1473,8 +1481,9 @@
           // --- los avisos de Orca por WhatsApp (avisos-orca) ---
           orcaLegend: 'Avisos de Orca por WhatsApp',
           orcaIntro: 'El plugin le escribe al numero de aprobacion cuando un agente de otro ' +
-            'proyecto lo necesita. Solo un texto fijo con el proyecto y la rama: nunca lo que ' +
-            'usted pidio, lo que respondio el agente, rutas ni lo que salio en la terminal.',
+            'proyecto lo necesita. Un texto fijo con el proyecto y la rama: nunca lo que usted ' +
+            'pidio, rutas ni lo que salio en la terminal. Lo unico del agente que viaja es el ' +
+            'recap del resumen de los que terminaron, y se puede apagar.',
           orcaNoNumber: 'Sin numero de aprobacion no sale ningun aviso: elija uno en la tarjeta ' +
             'de arriba.',
           orcaWaitingLabel: 'Un agente espera su permiso o su respuesta, o se bloqueo',
@@ -1484,6 +1493,10 @@
           orcaDigestHelp: 'En vez de un mensaje por cada agente que termina, un solo resumen con ' +
             'la cuenta por proyecto, solo si algo termino. 0 = un mensaje por cada uno. 1440 = una ' +
             'vez al dia, al empezar las horas de silencio (sin ellas, a la medianoche).',
+          orcaClaudeRecapLabel: 'Incluir el recap de Claude Code (lo que hizo y lo que sigue)',
+          orcaClaudeRecapHelp: 'Claude Code escribe un recap unos 3 minutos despues de terminar, si ' +
+            'usted no esta mirando esa sesion. El resumen espera hasta 4 minutos para incluirlo, ' +
+            'sin rutas. Un proyecto que ya salio con su recap no se repite hasta que haya uno nuevo.',
           orcaAutomationLabel: 'Una automatizacion de Orca fallo',
           orcaQuietLabel: 'Horas de silencio',
           orcaQuietStart: 'Desde',
@@ -2081,8 +2094,9 @@
           slaRange: 'The target is a whole number of minutes, from 1 to 1440.',
           orcaLegend: 'Orca notices by WhatsApp',
           orcaIntro: 'The plugin writes to the approval number when an agent in another project ' +
-            'needs you. Only a fixed text with the project and the branch: never what you asked, ' +
-            "what the agent answered, paths or the terminal's output.",
+            'needs you. A fixed text with the project and the branch: never what you asked, paths ' +
+            "or the terminal's output. The only thing from the agent that travels is the recap in " +
+            'the summary of the agents that finished, and it can be turned off.',
           orcaNoNumber: 'Without an approval number no notice goes out: pick one in the card above.',
           orcaWaitingLabel: 'An agent waits for your permission or your answer, or is blocked',
           orcaFinishedLabel: 'An agent finished what it was doing',
@@ -2091,6 +2105,11 @@
           orcaDigestHelp: 'Instead of one message per agent that finishes, one summary with the ' +
             'count per project, only if something finished. 0 = one message per finish. 1440 = once ' +
             'a day, when quiet hours start (without them, at midnight).',
+          orcaClaudeRecapLabel: 'Include the Claude Code recap (what was done and what is next)',
+          orcaClaudeRecapHelp: 'Claude Code writes a recap about 3 minutes after it finishes, when ' +
+            'you are not watching that session. The summary waits up to 4 minutes to include it, ' +
+            'without paths. A project already shown with its recap is not repeated until there is ' +
+            'a new one.',
           orcaAutomationLabel: 'An Orca automation failed',
           orcaQuietLabel: 'Quiet hours',
           orcaQuietStart: 'From',
@@ -2708,8 +2727,9 @@
         slaRange: 'A meta e um numero inteiro de minutos, de 1 a 1440.',
         orcaLegend: 'Avisos do Orca pelo WhatsApp',
         orcaIntro: 'O plugin escreve para o numero de aprovacao quando um agente de outro ' +
-          'projeto precisa de voce. So um texto fixo com o projeto e o ramo: nunca o que voce ' +
-          'pediu, o que o agente respondeu, caminhos nem o que saiu no terminal.',
+          'projeto precisa de voce. Um texto fixo com o projeto e o ramo: nunca o que voce ' +
+          'pediu, caminhos nem o que saiu no terminal. A unica coisa do agente que viaja e o ' +
+          'recap no resumo dos que terminaram, e pode ser desligado.',
         orcaNoNumber: 'Sem numero de aprovacao nenhum aviso sai: escolha um no cartao acima.',
         orcaWaitingLabel: 'Um agente espera a sua permissao ou a sua resposta, ou ficou bloqueado',
         orcaFinishedLabel: 'Um agente terminou o que estava fazendo',
@@ -2718,6 +2738,10 @@
         orcaDigestHelp: 'Em vez de uma mensagem por cada agente que termina, um unico resumo com ' +
           'a contagem por projeto, so se algo terminou. 0 = uma mensagem por cada um. 1440 = uma ' +
           'vez por dia, quando comeca o horario de silencio (sem ele, a meia-noite).',
+        orcaClaudeRecapLabel: 'Incluir o recap do Claude Code (o que fez e o que vem a seguir)',
+        orcaClaudeRecapHelp: 'O Claude Code escreve um recap uns 3 minutos depois de terminar, ' +
+          'quando voce nao esta olhando essa sessao. O resumo espera ate 4 minutos para inclui-lo, ' +
+          'sem caminhos. Um projeto que ja saiu com o seu recap nao se repete ate haver um novo.',
         orcaAutomationLabel: 'Uma automacao do Orca falhou',
         orcaQuietLabel: 'Horario de silencio',
         orcaQuietStart: 'De',
@@ -4138,14 +4162,14 @@
       // wa-scope. Lo que falta o no sirve se pinta con el de fabrica: todo apagado.
       var ORCA_DEFECTO = { waiting: 'off', finished: 'off', automationFailed: 'off',
         quietStart: '', quietEnd: '', hourlyCap: '6', finishedDelaySeconds: '25',
-        finishedDigestMinutes: '60' }
+        finishedDigestMinutes: '60', claudeRecap: 'on' }
       var ORCA_INTERRUPTORES = [['waiting', 'orca-waiting'], ['finished', 'orca-finished'],
-        ['automationFailed', 'orca-automation']]
+        ['automationFailed', 'orca-automation'], ['claudeRecap', 'orca-claude-recap']]
       var ORCA_CAMPOS = [['quietStart', 'orca-quiet-start'], ['quietEnd', 'orca-quiet-end'],
         ['hourlyCap', 'orca-cap'], ['finishedDelaySeconds', 'orca-delay'],
         ['finishedDigestMinutes', 'orca-digest']]
       var ORCA_IDS = ['orca-waiting', 'orca-finished', 'orca-automation', 'orca-quiet-start',
-        'orca-quiet-end', 'orca-cap', 'orca-delay', 'orca-digest']
+        'orca-quiet-end', 'orca-cap', 'orca-delay', 'orca-digest', 'orca-claude-recap']
       var HORA_ORCA = /^([01]\d|2[0-3]):[0-5]\d$/
       ORCA_IDS.forEach(ensuciar)
       ORCA_INTERRUPTORES.forEach(function (p) {
@@ -4161,7 +4185,9 @@
         var v = valor && typeof valor === 'object' ? valor : {}
         ORCA_INTERRUPTORES.forEach(function (p) {
           if (sucios[p[1]]) return
-          el(p[1]).setAttribute('aria-checked', v[p[0]] === 'on' ? 'true' : 'false')
+          // Lo que no esta guardado (el recap, en una clave de antes) vale lo de fabrica.
+          var x = v[p[0]] === 'on' || v[p[0]] === 'off' ? v[p[0]] : ORCA_DEFECTO[p[0]]
+          el(p[1]).setAttribute('aria-checked', x === 'on' ? 'true' : 'false')
         })
         ORCA_CAMPOS.forEach(function (p) {
           if (sucios[p[1]] || document.activeElement === el(p[1])) return
@@ -4211,7 +4237,7 @@
         salida.finishedDigestMinutes = String(Number(resumen))
         return { valor: salida }
       }
-      ORCA_INTERRUPTORES.forEach(function (p) { el(p[1]).setAttribute('aria-checked', 'false') })
+      ORCA_INTERRUPTORES.forEach(function (p) { el(p[1]).setAttribute('aria-checked', ORCA_DEFECTO[p[0]] === 'on' ? 'true' : 'false') })
       ORCA_CAMPOS.forEach(function (p) { el(p[1]).value = ORCA_DEFECTO[p[0]] })
       pintarOrcaVista()
       pintarOrcaNumero()
@@ -7227,7 +7253,7 @@
         PRIMER_IDS.forEach(function (id) { delete sucios[id] })
         // Los avisos de Orca, a lo de fabrica hasta que llegue lo de la linea nueva.
         ORCA_IDS.forEach(function (id) { delete sucios[id] })
-        ORCA_INTERRUPTORES.forEach(function (p) { el(p[1]).setAttribute('aria-checked', 'false') })
+        ORCA_INTERRUPTORES.forEach(function (p) { el(p[1]).setAttribute('aria-checked', ORCA_DEFECTO[p[0]] === 'on' ? 'true' : 'false') })
         ORCA_CAMPOS.forEach(function (p) { el(p[1]).value = ORCA_DEFECTO[p[0]] })
         pintarOrcaVista()
         ponerSeg('first-reply', 'ack', 'ack')
