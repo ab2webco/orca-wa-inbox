@@ -10772,8 +10772,10 @@ def tick_envia(caso, texto, req):
 # Lo que `wa-send` contesta y se arregla solo: el minuto siguiente lo intenta con el mismo id.
 AVISO_REINTENTA = (ENVIO_SIN_LINEA, "send-no-signature", "send-timeout", "fallo")
 # El chat del numero de aprobacion sin autorizar (o autorizado para otra linea): lo
-# arregla el dueno en el panel, asi que el aviso espera en vez de perderse.
-AVISO_ESPERA_PERMISO = ("send-denied", "send-line-not-linked")
+# arregla el dueno en el panel, asi que el aviso espera en vez de perderse. Tambien el
+# chat registrado solo en otra linea que no lo deja contestar (menos-ruido M6): cada tick
+# vuelve a elegir la linea (`linea_del_aviso`), y sale por la buena cuando el dueno la abre.
+AVISO_ESPERA_PERMISO = ("send-denied", "send-line-not-linked", "send-wrong-line")
 # Lo que la regla deja cuando no firma una respuesta (E_EXCEPTION): el gemelo de
 # ESPERA_DUENO para lo que sale al chat. Una vez por version.
 RESPUESTA_ESPERA = "respuesta espera al dueno:"

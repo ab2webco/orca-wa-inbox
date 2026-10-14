@@ -42,7 +42,11 @@ Out of scope: the Informes redesign (not approved yet).
   also in `model`; nothing changes when something already reached the client. Subset RED
   84/86, GREEN 86/86.
 - [ ] M5 scope.db retention.
-- [ ] M6 Failed notice retried on its own line.
+- [x] M6 Failed notice retried on its own line: the 15 `send-wrong-line` failures in the
+  owner's data all predate linea-viva V6 (last on 2026-10-10 08:02; since then 20 notices
+  left correctly through the other line). What remained: a `send-wrong-line` was final.
+  Now it waits like an unauthorized chat, each tick picks the line again, and it goes out
+  through the right line once the owner allows it there. V6 section RED 15/17, GREEN 17/17.
 
 ## Acceptance criteria
 

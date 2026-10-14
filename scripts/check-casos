@@ -14357,15 +14357,22 @@ if NODE:
            == [(SEGUNDA, SEGUNDA, "enviado")], f"{filas}")
 
         # Ninguna linea lo alcanza: el chat del dueno en la otra linea, pero sin poder contestar
-        # alli. Sale por la del caso, como antes, y `wa-send` dice por que.
+        # alli. menos-ruido M6: el aviso espera, como cuando el chat no esta autorizado (lo
+        # arregla el dueno en el panel), en vez de quedar fallido; y cuando el dueno lo deja
+        # contestar alli, sale por esa linea.
         jsl(home, SEGUNDA, "mode", DUENO_DM, "observar")
         nadie, _ = caso_en_linea(home, A, "V6A4", "Listo, son $30.")
         p, r = con_sidecars(home, lambda: tick(home))
         filas = avisos_de(home, nadie)
-        ok("sin una linea que llegue al chat del dueno, el aviso queda fallido con su motivo",
-           len(filas) == 1 and filas[0]["estado"] == "fallido"
-           and (filas[0]["motivo"] or "").startswith("send-wrong-line")
+        ok("sin una linea que llegue al chat del dueno, el aviso espera en vez de fallar",
+           len(filas) == 1 and filas[0]["estado"] == "pendiente"
            and isinstance(r, dict), f"{filas} {p.stderr[-300:]}")
+        jsl(home, SEGUNDA, "mode", DUENO_DM, "responder")
+        con_sidecars(home, lambda: tick(home))
+        filas = avisos_de(home, nadie)
+        ok("y sale por la linea del chat del dueno cuando el dueno lo deja contestar alli",
+           [(f["estado"], f.get("sale_por")) for f in filas] == [("enviado", SEGUNDA)],
+           f"{filas}")
 
     # Una sola linea: el aviso sale por ella, como siempre.
     with tempfile.TemporaryDirectory() as home:
