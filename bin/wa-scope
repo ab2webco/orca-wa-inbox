@@ -6586,6 +6586,10 @@ SIN_AGENTE = {
     "gracias_sin_pregunta": "un gracias despues de una respuesta, sin ninguna pregunta",
     # Un sticker sin texto, en una rafaga que no trae nada mas: no pide nada.
     "sticker_suelto": "un sticker suelto, sin texto ni nada mas en la rafaga",
+    # Sin veredicto de Jev (apagado o caido), una rafaga que no es mas que un gracias o solo
+    # emojis, sin adjunto (menos-ruido M3). "ok", "si", "dale" o "listo" no estan: contestan
+    # una pregunta del agente.
+    "cortesia": "un gracias o un emoji solo, sin nada mas en la rafaga",
     # Una rafaga de un grupo que NO nombra ni cita al asistente, y que Jev no clasifico como un
     # pedido ni marco con una bandera que necesite al agente, ni trae dinero, compromiso o
     # credencial: en un grupo con mucho movimiento, cada linea suelta despertando al agente
@@ -7288,7 +7292,31 @@ def veredicto_de(m, decision, con=None):
                 "detalle": (f"audio sin transcribir: {sin}" if sin
                             else "sin texto: audio" if audio else "sin texto")}
     juicio_jev = jev_juzga(m, con)
-    return veredicto_de_jev(m, juicio_jev) if juicio_jev is not None else None
+    if juicio_jev is not None:
+        return veredicto_de_jev(m, juicio_jev)
+    if solo_cortesia(m):
+        return {"accion": "cerrar", "actor": "automatizacion",
+                "motivo": motivo_sin_agente("cortesia")}
+    return None
+
+
+# menos-ruido M3: un agradecimiento, y lo que lo acompana sin pedir nada. Con Jev, Jev
+# decide; sin el, esto es lo unico que se sabe sin mirar.
+GRACIAS = re.compile(r"\b(?:gracias|thanks?|thank you|thx|obrigad[oa]s?|valeu)\b")
+RELLENO_GRACIAS = re.compile(r"\b(?:muchas|muchisimas|mil|a lot|so much|de verdad|de nuevo|"
+                             r"again|muito|really|you|te|le|les)\b")
+
+
+def solo_cortesia(m):
+    """Si el mensaje (o la rafaga) no es mas que un agradecimiento o emojis, sin adjunto. Un
+    signo de pregunta, aunque venga solo, pregunta."""
+    texto = wa_reglas.normaliza(m.get("text") or "")
+    if not texto.strip() or m.get("media") or "?" in texto:
+        return False
+    resto = re.sub(r"[\W_]+", " ", RELLENO_GRACIAS.sub(" ", GRACIAS.sub(" ", texto))).strip()
+    if resto:
+        return False
+    return bool(GRACIAS.search(texto)) or any(unicodedata.category(c) == "So" for c in texto)
 
 
 # Una rafaga: los mensajes de un chat que llegan a menos de esto uno del otro se juzgan

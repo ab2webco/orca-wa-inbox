@@ -5864,6 +5864,54 @@ if NODE:
         os.environ.clear()
         os.environ.update(antes)
 
+# ── menos-ruido M3: sin veredicto de Jev, un gracias solo no despierta al agente ───────────
+# Con Jev apagado o caido todo llegaba al agente, tambien un "gracias 🙏". Una rafaga que no
+# es mas que un agradecimiento (o solo emojis) se cierra con su regla (`cortesia`). "ok",
+# "si", "dale" o "listo" no estan: contestan una pregunta del agente y siguen llegando.
+print("\nsin Jev, un gracias o un emoji solo no despierta al agente (menos-ruido M3)")
+if NODE:
+    def abre_sin_jev(home, mensajes):
+        llegan(home, A, mensajes)
+        js(home, "agent", "Agente De Ejemplo")
+        js(home, "set", PERSONA, "--provider", "ninguno", "--mode", "responder")
+        js(home, "config", "ack", "off")
+        js(home, "config", "greeting", "off")
+        ingiere(home)
+
+    for texto in ("gracias", "Muchas gracias!! 🙏", "👍", "thanks a lot", "obrigado 🙌",
+                  "mil gracias, de verdad"):
+        with tempfile.TemporaryDirectory() as home:
+            abre_sin_jev(home, [msg(PERSONA, "K1", texto, 5)])
+            c = caso_de_stanza(home, "K1")
+            ok(f"{texto!r} sin Jev se cierra sin agente, con su regla",
+               c and c["etapa"] == "cerrado" and para_el_agente(home) == []
+               and tarjeta(home, c["case_id"])["no_agent_rule"] == "cortesia",
+               f"{c and c['etapa']} {c and tarjeta(home, c['case_id']).get('no_agent_rule')}")
+    for texto in ("ok", "si", "dale", "listo", "gracias, ¿y lo del lunes?",
+                  "gracias, revisa el formulario por favor"):
+        with tempfile.TemporaryDirectory() as home:
+            abre_sin_jev(home, [msg(PERSONA, "K2", texto, 5)])
+            c = caso_de_stanza(home, "K2")
+            ok(f"{texto!r} sin Jev sigue llegando al agente",
+               c and c["etapa"] != "cerrado" and int(c["case_id"]) in para_el_agente(home),
+               f"{c and c['etapa']} {para_el_agente(home)}")
+    with tempfile.TemporaryDirectory() as home:
+        abre_sin_jev(home, [msg(PERSONA, "K3", "gracias", 5, media="image",
+                                ruta=archivo_media(home, "f.jpg"), bytes=10)])
+        c = caso_de_stanza(home, "K3")
+        ok("un gracias con una foto sigue llegando al agente",
+           c and c["etapa"] != "cerrado", f"{c and c['etapa']}")
+
+_motor = WA_SCOPE.read_text(encoding="utf-8")
+_reglas_sin_agente = re.findall(r'^    "([a-z_]+)": "', _motor[_motor.index("SIN_AGENTE = {"):
+                                                            _motor.index("CLASES_QUE_PIDEN = (")],
+                                re.M)
+_tablero = (RAIZ / "activity.html").read_text(encoding="utf-8")
+ok("cada regla sin agente tiene su texto en el tablero, en los tres idiomas",
+   "cortesia" in _reglas_sin_agente
+   and all(_tablero.count(f'"noAgent_{r}": ') == 3 for r in _reglas_sin_agente),
+   str([r for r in _reglas_sin_agente if _tablero.count(f'"noAgent_{r}": ') != 3]))
+
 
 
 # ── Un grupo no dirigido solo despierta al agente por un pedido; observar no redacta ────────

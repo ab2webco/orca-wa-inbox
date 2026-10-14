@@ -29,7 +29,12 @@ Out of scope: the Informes redesign (not approved yet).
   any date. Jev's question says a past date is not a promise. Table RED 50/57, GREEN
   57/57; the 14 held progress messages and 3 held replies in the owner's data no longer
   match the fixed rule (read-only replay).
-- [ ] M3 Trivial messages do not launch an agent.
+- [x] M3 Trivial messages do not launch an agent: with Jev on, Jev already decides
+  (`jev_skip`); without a Jev verdict a burst that is only a thank-you or emojis, with no
+  attachment and no question mark, closes with the new `cortesia` rule (board text in
+  es/en/pt). "ok", "si", "dale", "listo" still reach the agent. Owner data: no short
+  pleasantry case reached an agent, so this guards the Jev-off path. Subset RED 0/6 +
+  label missing, GREEN 14/14.
 - [ ] M4 Held progress message rewritten, not dropped.
 - [ ] M5 scope.db retention.
 - [ ] M6 Failed notice retried on its own line.
