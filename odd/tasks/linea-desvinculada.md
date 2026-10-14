@@ -62,7 +62,10 @@ auth folder, drops the line from the worker registry; the store retires it from
   reaction, protocol, poll vote, pin, keep) and messages with no content; text, emoji text
   and media still produce a row. RED 128/132, GREEN 132/132; almacen 353/353, pairing
   120/120, bundle rebuilt, sidecar-build 11/11.
-- [ ] D5 Release: version bump, full check set, reduced shots only if a panel changed.
+- [x] D5 Release v4.30.5: full check set green (check-casos 2401/2401, worker 719/719, panels
+  1705/1705, check-clis, envio 138, sidecar suites, manifest 112, resolver 55, userdata 25,
+  check-panels/voseo/datos-reales/prompts/resolver/harness/closing/lid). No panel changed:
+  no shots.
 
 ## Acceptance
 
