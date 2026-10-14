@@ -204,6 +204,34 @@ console.log('\nfilaDeMensaje: de un WAMessage a una fila del almacen')
     key: { remoteJid: grupo, fromMe: false }, messageTimestamp: 1, message: { conversation: 'x' }
   }, { cuenta: 'linea-uno', identidades: YO }) === null)
 
+  // Una reaccion, un borrado, el voto de una encuesta o un mensaje fijado no son algo que
+  // alguien escribio: no traen texto ni adjunto. Guardados como fila, el tick abria un caso
+  // "sin texto" y el agente contestaba que el mensaje llego vacio (visto en vivo con un ❤️,
+  // 2026-10-13).
+  const control = (id, message) => filaDeMensaje({
+    key: { remoteJid: '573009998877@s.whatsapp.net', fromMe: false, id },
+    messageTimestamp: 1758500350, pushName: 'Laura Mendez', message
+  }, { cuenta: 'linea-uno', identidades: YO })
+  const reaccionado = { remoteJid: '573009998877@s.whatsapp.net', fromMe: true, id: 'MIO9' }
+  ok('una reaccion no produce fila',
+    control('R1', { reactionMessage: { key: reaccionado, text: '❤️' } }) === null)
+  ok('tampoco una reaccion cifrada, ni una que llega dentro de un efimero',
+    control('R2', { encReactionMessage: { targetMessageKey: reaccionado } }) === null &&
+    control('R3', { ephemeralMessage: { message: { reactionMessage: { key: reaccionado, text: '👍' } } } }) === null)
+  ok('ni un borrado, ni el voto de una encuesta, ni un mensaje fijado o guardado',
+    control('P1', { protocolMessage: { type: 0, key: reaccionado } }) === null &&
+    control('P2', { pollUpdateMessage: { pollCreationMessageKey: reaccionado } }) === null &&
+    control('P3', { pinInChatMessage: { key: reaccionado } }) === null &&
+    control('P4', { keepInChatMessage: { key: reaccionado } }) === null)
+  ok('ni lo que llega sin contenido (una notificacion del grupo, o lo que aun no se descifra)',
+    control('S1', null) === null && control('S2', { messageContextInfo: {} }) === null)
+  ok('un texto que viaja con sus metadatos de cifrado sigue siendo un mensaje',
+    control('T1', { conversation: 'hola', messageContextInfo: {},
+      senderKeyDistributionMessage: { groupId: 'x' } })?.body === 'hola')
+  ok('y un emoji escrito como texto tambien', control('T2', { conversation: '👍' })?.body === '👍')
+  ok('y una imagen sin texto tambien: tiene un adjunto que leer',
+    control('I1', { imageMessage: { mimetype: 'image/jpeg', fileLength: 10 } })?.mediaTipo === 'imagen')
+
   // messageTimestamp llega como Long de protobufjs en mensajes reales.
   const conLong = filaDeMensaje({
     key: { remoteJid: grupo, fromMe: false, id: 'L1' },
