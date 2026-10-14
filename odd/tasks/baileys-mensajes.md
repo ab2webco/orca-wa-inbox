@@ -27,8 +27,10 @@ C. Features: delivery/read status of our sends; owner reactions as signals; quot
 - [x] A1 Readable bodies for the other message types, generic FutureProof unwrap, video note
   as video, call offer and album container dropped, quote kept for any type
   (sidecar-mensajes: RED 132/142, GREEN 142/142; almacen 353, pairing 120, bundle 11/11).
-- [ ] B Reliability items that change nothing clients see (version timeout, ignore
-  newsletters/broadcast at the socket, clearer close codes).
+- [x] B Reliability items that change nothing clients see: the WhatsApp Web version fetch
+  has an 8 s limit and falls back to Baileys' own; newsletters and broadcast are ignored at
+  the socket (`shouldIgnoreJid`); 428 and 503 closes are named `socket-caido`
+  (sidecar-pairing: RED missing export, GREEN 128/128; bundle 11/11).
 - [ ] B1 `markOnlineOnConnect: false` (owner OK needed: it changes the "online" status).
 - [ ] C1 Delivery and read status of our sends, stored on the outbox.
 - [ ] C2-C6 Owner decisions, not started.

@@ -65,6 +65,10 @@ const CIERRE = Object.freeze({
   // Baileys. Inventar cual de los dos fue seria mentirle al motivo que el panel
   // traduce; se lo llama por lo que es, un socket caido.
   SOCKET_CAIDO_408: 408,
+  // `connectionClosed` y `unavailableService`: la red o el servidor. Se reconecta igual que
+  // con cualquier otro, pero el panel dice "socket caido" y no "desconocido".
+  CONNECTION_CLOSED: 428,
+  UNAVAILABLE_SERVICE: 503,
   RESTART_REQUIRED: 515,
   FORBIDDEN: 403,
   MULTIDEVICE_MISMATCH: 411,
@@ -226,7 +230,8 @@ export function decidirTrasCierre (statusCode, intento = 1, repetidos = 1) {
     return { reconectar: true, borrarCredenciales: false,
       esperaMs: calcularEsperaMs(intento), motivo: conTope }
   }
-  if (statusCode === CIERRE.SOCKET_CAIDO_408) {
+  if (statusCode === CIERRE.SOCKET_CAIDO_408 || statusCode === CIERRE.CONNECTION_CLOSED ||
+      statusCode === CIERRE.UNAVAILABLE_SERVICE) {
     return { reconectar: true, borrarCredenciales: false,
       esperaMs: calcularEsperaMs(intento), motivo: MOTIVO.SOCKET_CAIDO }
   }
@@ -315,7 +320,9 @@ export function qrVencido (ts, ahoraMs = Date.now(), vigenciaMs = QR_VIGENCIA_MS
 export function opcionesDeSocket ({ version, auth, browser, logger, getMessage,
   msgRetryCounterCache }) {
   return {
-    version,
+    // Sin version se usa la que trae Baileys (`versionDeWhatsApp`): pasar `undefined`
+    // pisaria su defecto.
+    ...(version ? { version } : {}),
     auth,
     browser,
     // Sin esto Baileys escribe con su pino de fabrica a stdout, el canal del protocolo,
@@ -329,8 +336,42 @@ export function opcionesDeSocket ({ version, auth, browser, logger, getMessage,
     // fabricante.
     qrTimeout: QR_ROTACION_MS,
     syncFullHistory: false,
-    shouldSyncHistoryMessage: () => true
+    shouldSyncHistoryMessage: () => true,
+    // Un canal o una difusion (los estados incluidos) no son conversaciones: se ignoran en
+    // la entrada en vez de descifrarlos para tirarlos despues (`NO_ES_CONVERSACION`).
+    shouldIgnoreJid: ignorarJid
   }
+}
+
+/** Lo que el socket no descifra: canales y difusiones. Un @status es una conversacion. */
+export function ignorarJid (jid) {
+  return typeof jid === 'string' && /@(newsletter|broadcast)$/.test(jid)
+}
+
+// Cuanto se espera la version de WhatsApp Web publicada antes de arrancar con la que trae
+// Baileys: `fetchLatestBaileysVersion` va a GitHub sin plazo propio.
+export const VERSION_PLAZO_MS = 8000
+
+/** `{ version, fuente }`: la version que contesto `buscar` (la de Baileys,
+ *  `fetchLatestBaileysVersion`) a tiempo y sin fallar, con `fuente: 'red'`; si no, ninguna
+ *  (`por-defecto`: Baileys usa la suya). Nunca rechaza: sin red el sidecar arranca igual. */
+export async function versionDeWhatsApp (buscar, plazoMs = VERSION_PLAZO_MS) {
+  let timer = null
+  const plazo = new Promise((resolve) => {
+    timer = setTimeout(() => resolve(null), plazoMs)
+    if (typeof timer.unref === 'function') timer.unref()
+  })
+  try {
+    const r = await Promise.race([Promise.resolve().then(buscar), plazo])
+    if (r && r.isLatest === true && Array.isArray(r.version) && r.version.length === 3) {
+      return { version: r.version, fuente: 'red' }
+    }
+  } catch {
+    // Sin red o una respuesta rara: se arranca con la de Baileys.
+  } finally {
+    clearTimeout(timer)
+  }
+  return { version: undefined, fuente: 'por-defecto' }
 }
 
 /** El `auth` del socket: las credenciales TAL CUAL -el mismo objeto que escribe
@@ -433,7 +474,7 @@ async function iniciar () {
     await import('@whiskeysockets/baileys')
 
   const { state, saveCreds } = await useMultiFileAuthState(authDir)
-  const { version } = await fetchLatestBaileysVersion()
+  const { version } = await versionDeWhatsApp(fetchLatestBaileysVersion)
 
   // ── El almacen y el alcance ──────────────────────────────────────────────────────
   // El almacen vive en `~/.wa-inbox/capture.db`, al lado del registro de alcance y
