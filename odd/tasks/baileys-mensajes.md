@@ -38,7 +38,9 @@ C. Features: delivery/read status of our sends; owner reactions as signals; quot
   Python side (`NombresDeLibreta`) names message authors, senders and group members as the
   owner saved them, through the LID-phone pair (almacen RED no such table, GREEN 357/357;
   check-clis RED missing class, GREEN 550).
-- [ ] B1 `markOnlineOnConnect: false` (owner OK needed: it changes the "online" status).
+- [x] B1 `markOnlineOnConnect: false`, approved by the owner on 2026-10-13: Baileys
+  announces 'unavailable' on connect (lib/Socket/chats.js), receiving is unchanged
+  (sidecar-pairing: RED 128/129, GREEN 129/129; bundle 11/11).
 - [ ] C1 Delivery and read status of our sends, stored on the outbox.
 - [ ] C2-C6 Owner decisions, not started.
 

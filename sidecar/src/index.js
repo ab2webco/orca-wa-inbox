@@ -339,7 +339,10 @@ export function opcionesDeSocket ({ version, auth, browser, logger, getMessage,
     shouldSyncHistoryMessage: () => true,
     // Un canal o una difusion (los estados incluidos) no son conversaciones: se ignoran en
     // la entrada en vez de descifrarlos para tirarlos despues (`NO_ES_CONVERSACION`).
-    shouldIgnoreJid: ignorarJid
+    shouldIgnoreJid: ignorarJid,
+    // El defecto de Baileys (`true`) deja al dueno "en linea" mientras el plugin corre,
+    // y su telefono puede dejar de avisarle. Con `false` se anuncia 'unavailable'.
+    markOnlineOnConnect: false
   }
 }
 

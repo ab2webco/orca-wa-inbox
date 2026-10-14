@@ -381,6 +381,12 @@ console.log('\nsidecar: lo que el socket no descifra, los cierres de red y la ve
     o.shouldIgnoreJid('199887766554433@lid') === false &&
     o.shouldIgnoreJid('573001112233@status') === false && o.shouldIgnoreJid(undefined) === false)
 
+  // Con `true` (el defecto de Baileys) el dueno sale "en linea" todo el tiempo que el
+  // plugin corre y su telefono puede dejar de avisarle. Con `false` Baileys manda
+  // 'unavailable' al conectar (lib/Socket/chats.js) y recibir no cambia.
+  ok('conectar no pone al dueno en linea',
+    o.markOnlineOnConnect === false, String(o.markOnlineOnConnect))
+
   // 428 (connectionClosed) y 503 (unavailableService) son la red o el servidor: se
   // reconecta igual, pero el panel dice "socket caido" y no "desconocido".
   for (const codigo of [428, 503]) {
