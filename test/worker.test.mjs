@@ -3011,9 +3011,9 @@ console.log('\nworker: L2 — un sidecar por linea, y cada pedido toca solo la s
 // alcance de la que se fue y los suyos quedan guardados sin que nadie los mire.
 console.log('\nworker: D2 — desvincular una linea no deja nada suyo en el storage')
 {
-  const SALE = 'pn:573000000021'
-  const QUEDA = 'pn:573000000022'
-  const OTRA = 'pn:573000000023'
+  const SALE = 'pn:573000000011'
+  const QUEDA = 'pn:573000000012'
+  const OTRA = 'pn:573000000013'
   const datos = {
     scope: { 'a@g.us': { mode: 'responder' } },
     board: { v: 1, counts: { decision: 3 } },
@@ -3021,7 +3021,7 @@ console.log('\nworker: D2 — desvincular una linea no deja nada suyo en el stor
     reports: { v: 1, de: 'raiz' },
     agentName: 'Agente De La Que Sale',
     tone: 'Tono de la que sale',
-    approvalNumber: '100000000000021@lid',
+    approvalNumber: '100000000000001@lid',
     orcaNotices: { waiting: 'on' },
     porLinea: {
       [SALE]: { board: { v: 1, counts: { decision: 1 } } },
@@ -3033,7 +3033,7 @@ console.log('\nworker: D2 — desvincular una linea no deja nada suyo en el stor
     informesPorLinea: { [SALE]: { v: 1 }, [QUEDA]: { v: 1, de: 'queda' } },
     ajustesPorLinea: {
       [SALE]: { agentName: 'Propio De La Que Sale' },
-      [QUEDA]: { agentName: 'Agente De La Que Queda', tone: null, approvalNumber: '100000000000022@lid' }
+      [QUEDA]: { agentName: 'Agente De La Que Queda', tone: null, approvalNumber: '100000000000002@lid' }
     },
     skillsLine: SALE
   }
@@ -3065,7 +3065,7 @@ console.log('\nworker: D2 — desvincular una linea no deja nada suyo en el stor
     principal.reports?.de === 'queda' && principal.activity === null, JSON.stringify(principal))
   ok('sus ajustes propios pasan a la raiz, tambien el vacio (null)',
     principal.agentName === 'Agente De La Que Queda' && principal.tone === null &&
-    principal.approvalNumber === '100000000000022@lid', JSON.stringify(principal))
+    principal.approvalNumber === '100000000000002@lid', JSON.stringify(principal))
   ok('los avisos de Orca, que no se heredan, quedan de fabrica (null)',
     'orcaNotices' in principal && principal.orcaNotices === null, JSON.stringify(principal))
   ok('un ajuste que la que queda no tenia propio sigue siendo el de la raiz: no se escribe',
