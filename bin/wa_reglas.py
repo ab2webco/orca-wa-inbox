@@ -148,7 +148,7 @@ def secreto(texto):
 # T22.2: a CONCRETE date or time promised in the reply. The word "fecha", "te confirmo"
 # or "para el" alone promise nothing, and a question ("¿te sirve el viernes?") asks.
 # menos-ruido M2: a date, a day or a time alone describes ("la reunion fue el lunes", "lo
-# recibi el 12/10"). In what goes out it promises only in a sentence that also promises
+# recibimos el 12/10"). In what goes out it promises only in a sentence that also promises
 # (PROMESA), as a stated deadline (PLAZO: "a mas tardar", "by Friday", "en 2 horas") or as
 # a sentence that is nothing but the date ("El viernes."). Seen live: 33 of 47 replies held
 # for naming a date that promised nothing. In a brief any date still counts (`_menciones`).

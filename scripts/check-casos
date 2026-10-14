@@ -5981,7 +5981,7 @@ if NODE:
                "--actor", "automatizacion")
             ids[nombre] = caso_de_stanza(home, f"R-{nombre}")["case_id"]
         con = db_de(home)
-        cuenta = con.execute("select account from caso where case_id=?",
+        linea_r = con.execute("select account from caso where case_id=?",
                              (ids["viejo"],)).fetchone()[0]
         hace = {"viejo": "-40 days", "nuevo": "-5 days", "abierto": "-40 days"}
         for nombre, cid in ids.items():
@@ -5993,7 +5993,7 @@ if NODE:
                                             cid))
             con.execute(f"insert into aviso (req_id, tipo, case_id, account, chat_jid, texto, "
                         f"estado, at, updated_at) values (?, 'respuesta', ?, ?, ?, ?, ?, "
-                        f"{sello}, {sello})", (f"aviso-{nombre}", cid, cuenta, PERSONA,
+                        f"{sello}, {sello})", (f"aviso-{nombre}", cid, linea_r, PERSONA,
                                                f"aviso {nombre}",
                                                "pendiente" if nombre == "abierto" else "enviado"))
             con.execute(f"insert into caso_avance (case_id, n, req_id, texto, actor, estado, at) "
@@ -6001,10 +6001,10 @@ if NODE:
                         (cid, f"avance-{nombre}", f"avance {nombre}"))
             con.execute(f"insert into transcripcion (account, chat_jid, stanza_id, ok, texto, at) "
                         f"values (?, ?, ?, 1, ?, {sello})",
-                        (cuenta, PERSONA, f"T-{nombre}", f"transcrito {nombre}"))
+                        (linea_r, PERSONA, f"T-{nombre}", f"transcrito {nombre}"))
             con.execute(f"insert into juicio (account, chat_jid, stanza_id, clase, origen, at, jev, "
                         f"rafaga) values (?, ?, ?, 'card', 'jev', {sello}, ?, ?)",
-                        (cuenta, PERSONA, f"J-{nombre}", json.dumps({"skip": False}),
+                        (linea_r, PERSONA, f"J-{nombre}", json.dumps({"skip": False}),
                          json.dumps([f"J-{nombre}"])))
             con.execute(f"insert into caso_despacho (case_id, evento_id, estado, instrucciones, "
                         f"informes, created_at, updated_at) values (?, ?, ?, ?, ?, {sello}, "
