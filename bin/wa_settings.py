@@ -442,10 +442,34 @@ def escribir_en_linea(datos, cambios, cuenta, principal):
     return datos
 
 
-def tableros_de_lineas(datos):
-    """Los tableros de las lineas que no son la principal, para la insignia de todas."""
-    return [propio.get("board") for propio in _contenedor(datos, CONTENEDOR_DE_LINEA).values()
-            if isinstance(propio, dict)]
+def tableros_de_lineas(datos, activas=None, principal=None):
+    """Los tableros de las lineas que no son la principal, para la insignia de todas. Con
+    `activas`, solo los de esas lineas: el de una linea desvinculada se quedaba contando
+    (linea-desvinculada, D1). El de la principal nunca: el suyo va en la raiz, y una copia
+    vieja suya en el contenedor contaria dos veces."""
+    return [propio.get("board") for cuenta, propio
+            in _contenedor(datos, CONTENEDOR_DE_LINEA).items()
+            if isinstance(propio, dict) and cuenta != principal
+            and (not activas or cuenta in activas)]
+
+
+def podar_lineas_idas(datos, activas, principal):
+    """Saca de `porLinea` y de `informesPorLinea` las lineas que ya no estan activas, y la
+    copia vieja de la principal (lo suyo va en la raiz). Son lo que se muestra y cada tick
+    de su linea lo vuelve a escribir: sin `activas` (no se sabe cuales son) no se toca nada.
+    Los ajustes y el alcance no se podan aca: los quita el worker al desvincular. Devuelve
+    si quito algo."""
+    if not activas:
+        return False
+    quito = False
+    for nombre in (CONTENEDOR_DE_LINEA, CONTENEDOR_PROPIO["reports"]):
+        contenedor = datos.get(nombre)
+        if not isinstance(contenedor, dict):
+            continue
+        for cuenta in [c for c in contenedor if c not in activas or c == principal]:
+            contenedor.pop(cuenta)
+            quito = True
+    return quito
 
 
 def alcances_de_lineas(datos):

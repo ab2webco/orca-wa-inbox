@@ -14024,13 +14024,66 @@ if NODE:
            f"{p.stdout[:400]}")
 
         # Desvincular la otra linea la deja guardada y quieta.
+        espera_b = str(jsl(home, SEGUNDA, "caso", "crear", "--chat", PERSONA, "--stanza", "LB9",
+                           "--actor", "agente")[0]["case_id"])
+        jsl(home, SEGUNDA, "caso", "clasificar", espera_b, "--clase", "card", "--prioridad",
+            "none", "--actor", "agente")
+        jsl(home, SEGUNDA, "caso", "propuesta", espera_b, "--tipo", "responder", "--respuesta",
+            "Lo reviso.", "--actor", "agente")
+        antes = json.loads(storage_de(home).read_text(encoding="utf-8"))
+        ok("D1: antes de desvincularla, la otra linea tiene un caso que espera al dueno",
+           antes["porLinea"][SEGUNDA]["board"]["counts"]["decision"] >= 1,
+           f"{antes['porLinea'][SEGUNDA]['board']['counts']}")
         suma_linea(home, SEGUNDA, retirar=True)
         ok("una linea desvinculada ya no se ve por su numero de caso",
            corre(home, "caso", "ver", id_b).returncode != 0)
+        # D4: lo que la linea dejo en vuelo. Su tick ya no corre; lo cierra la principal.
+        momento = time.strftime("%Y-%m-%d %H:%M:%S")
+        con = db_de(home)
+        con.execute("insert into caso_despacho (case_id, evento_id, estado, terminal, "
+                    "created_at, updated_at) values (?, 0, 'activo', 'term-ida', ?, ?)",
+                    (int(espera_b), momento, momento))
+        con.execute("insert into aviso (req_id, tipo, case_id, account, chat_jid, texto, estado, "
+                    "at, updated_at) values ('aviso-ida-1', 'aprobacion', ?, ?, ?, 'x', "
+                    "'pendiente', ?, ?)", (int(espera_b), SEGUNDA, DUENO_DM, momento, momento))
+        con.commit()
+        con.close()
+        captura = sqlite3.connect(pathlib.Path(home) / ".wa-inbox" / "capture.db")
+        captura.execute("insert into envio (req_id, account, chat_jid, body, estado, created_at) "
+                        "values ('borrador-ida-1', ?, ?, 'x', 'borrador', ?)",
+                        (SEGUNDA, PERSONA, int(time.time())))
+        captura.commit()
+        captura.close()
         p, r = tick(home)
         ok("y el tick vuelve a correr solo en la que queda, como siempre",
            isinstance(r, dict) and "lineas" not in r and r.get("busy") is False,
            f"{p.stdout[:300]}")
+        datos = json.loads(storage_de(home).read_text(encoding="utf-8"))
+        ok("D1: la insignia cuenta solo la linea que queda, no el tablero guardado de la otra",
+           datos.get("navBadge") == {"count": datos["board"]["counts"]["decision"]},
+           f"{datos.get('navBadge')} principal={datos['board']['counts']['decision']}")
+        ok("D1: y su tablero guardado se va: el panel no tiene de donde leerlo",
+           SEGUNDA not in (datos.get("porLinea") or {})
+           and SEGUNDA not in (datos.get("informesPorLinea") or {}),
+           f"{sorted((datos.get('porLinea') or {}).keys())}")
+        con = db_de(home)
+        despacho = con.execute("select estado, motivo from caso_despacho where "
+                               "terminal='term-ida'").fetchone()
+        aviso_ido = con.execute("select estado, motivo from aviso where "
+                                "req_id='aviso-ida-1'").fetchone()
+        con.close()
+        ok("D4: el despacho que la linea dejo en vuelo se cancela: ya no protege su terminal",
+           despacho is not None and tuple(despacho) == ("cancelado", "linea-desvinculada"),
+           f"{despacho and tuple(despacho)}")
+        ok("D4: su aviso pendiente se da por fallido, con el motivo",
+           aviso_ido is not None and tuple(aviso_ido) == ("fallido", "linea-desvinculada"),
+           f"{aviso_ido and tuple(aviso_ido)}")
+        p = subprocess.run([str(RAIZ / "bin" / "wa-send"), "--drafts", "--json"],
+                           capture_output=True, text=True, timeout=120,
+                           env=dict(os.environ, HOME=str(home)))
+        ok("D4: --drafts no lista el borrador de una linea desvinculada (no se puede aprobar)",
+           p.returncode == 0 and "borrador-ida-1" not in p.stdout,
+           f"{p.returncode} {p.stdout[:300]} {p.stderr[-200:]}")
 
 
 # ── Los avisos salen por una linea que llega al dueno (odd/tasks/linea-viva.md, V6) ────────
