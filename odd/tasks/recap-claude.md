@@ -48,7 +48,7 @@ without a new recap is not repeated.
 - [x] C3 Wait for the recap at the start of a window, bounded (`check-casos`).
 - [x] C4 No repeat without a new recap (`check-casos`).
 - [x] C5 Switch in the Orca notices card, ES/EN/PT (`test/panels.test.mjs`), screenshots.
-- [ ] C6 Full checks, task file, release.
+- [x] C6 Full checks, task file, release.
 
 ## Acceptance criteria
 
@@ -64,3 +64,14 @@ without a new recap is not repeated.
 
 - `python3 scripts/check-casos`, `scripts/check-clis`, `node test/panels.test.mjs`
 - `scripts/check-voseo`, `scripts/check-datos-reales`, reduced screenshots of the card.
+
+## Release
+
+v4.30.7. Checks run on the final code: check-casos 2461/2461, panels 1714/1714, worker
+719/719, almacen 357/357, envio 138/138, sidecar-mensajes 142/142, sidecar-pairing 129/129,
+sidecar-build 11/11, manifest 112/112, resolver 55/55, userdata 25/25, check-closing 36/36,
+check-lid 51/51, check-clis (561 settings checks), check-panels, check-voseo, check-prompts,
+check-resolver, check-harness, check-datos-reales. Screens looked at: the Orca notices card,
+ES light 390 and ES dark 1440. Live read-only check: the reader found the real recaps of two
+sessions in 0.1 s with an isolated HOME. Not verified live: a digest sent by the installed
+plugin.
