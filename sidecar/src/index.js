@@ -20,7 +20,7 @@ import { abrirAlmacen, rutaAlmacen, rutaMedia } from './almacen.js'
 import { crearAlcance } from './alcance.js'
 import { crearRegistro } from './registro.js'
 import { atenderSalida, crearCacheDeReintentos, ENVIO_LATIDO_MS, mensajeDeEnvio } from './envio.js'
-import { INGESTA, ingerirActualizacion, ingerirCambioDeMiembros, ingerirChats,
+import { INGESTA, ingerirActualizacion, ingerirCambioDeMiembros, ingerirChats, ingerirEntrega,
   ingerirContactos, ingerirMensaje, ingerirMiembros, ingerirParesLid } from './ingesta.js'
 import { cuentaDeIdentidad, identidadDeSesion, identidadesPropias,
   identidadPropia } from './mensajes.js'
@@ -824,12 +824,26 @@ async function iniciar () {
       if (!cuenta) return
       for (const evento of eventos || []) {
         try {
+          // estado-envios: el mismo evento trae entregado y leido de lo que mando la linea.
+          if (ingerirEntrega({ almacen, cuenta, evento })) continue
           const { motivo } = ingerirActualizacion({
             almacen, alcance: alcance.modo, cuenta, evento
           })
           if (motivo === INGESTA.GUARDADO) conteos.actualizados += 1
         } catch (error) {
           avisarFallo('cambio-sin-aplicar', error)
+        }
+      }
+    })
+
+    // estado-envios: en un grupo, entregado y leido llegan por miembro y por aca.
+    sock.ev.on('message-receipt.update', (eventos) => {
+      if (!cuenta) return
+      for (const evento of eventos || []) {
+        try {
+          ingerirEntrega({ almacen, cuenta, evento })
+        } catch (error) {
+          avisarFallo('entrega-sin-anotar', error)
         }
       }
     })

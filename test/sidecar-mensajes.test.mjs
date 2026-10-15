@@ -22,7 +22,7 @@
 import {
   esConversacion, esGrupo, jidDeChat, usuarioDe, identidadPropia, identidadesPropias,
   identidadDeSesion, cuentaDeIdentidad,
-  mencionaA, citaA, textoDe, mediaDe, filaDeMensaje, filaDeActualizacion,
+  mencionaA, citaA, textoDe, mediaDe, filaDeMensaje, filaDeActualizacion, estadoDeEntrega,
   miembrosDeGrupo, cambioDeMiembros, parDeMensaje, TIPO_MEDIA
 } from '../sidecar/src/mensajes.js'
 import { filaDeChat } from '../sidecar/src/ingesta.js'
@@ -378,6 +378,48 @@ console.log('\nB4: borrados y editados — el hueco que el codigo viejo no llena
   ok('un recibo de lectura no produce cambio', recibo === null, JSON.stringify(recibo))
   ok('una actualizacion sin id no produce cambio',
     filaDeActualizacion({ key: { remoteJid: 'x@g.us' }, update: { message: null } }) === null)
+}
+
+console.log('\nestado-envios: entregado y leido de lo que mando la linea')
+{
+  const GRUPO = '120363111222333444@g.us'
+  const UNO = '111122225555@lid'
+  const recibo = (status, extra = {}) => estadoDeEntrega({
+    key: { remoteJid: UNO, fromMe: true, id: 'MIO1', ...extra },
+    update: { status, messageTimestamp: 1758500900 }
+  })
+  ok('server ack es servidor', recibo(2)?.entrega === 'servidor', JSON.stringify(recibo(2)))
+  ok('delivery ack es entregado, con el stanza y la hora del recibo',
+    recibo(3)?.entrega === 'entregado' && recibo(3)?.stanzaId === 'MIO1' &&
+    recibo(3)?.at === 1758500900, JSON.stringify(recibo(3)))
+  ok('read es leido', recibo(4)?.entrega === 'leido')
+  ok('played es reproducido', recibo(5)?.entrega === 'reproducido')
+  ok('error es error', recibo(0)?.entrega === 'error')
+  ok('pending no dice nada', recibo(1) === null)
+  ok('un recibo de un mensaje que no es nuestro no cuenta', recibo(4, { fromMe: false }) === null)
+  ok('sin id no hay estado', estadoDeEntrega({ key: { remoteJid: UNO, fromMe: true },
+    update: { status: 3 } }) === null)
+  ok('una edicion no es un estado', estadoDeEntrega({
+    key: { remoteJid: UNO, fromMe: true, id: 'MIO1' },
+    update: { message: { editedMessage: { message: { conversation: 'otra cosa' } } } }
+  }) === null)
+  const error = estadoDeEntrega({ key: { remoteJid: UNO, fromMe: true, id: 'MIO1' },
+    update: { status: 0, messageStubParameters: ['479'] } })
+  ok('un error sin hora toma la de ahora, en segundos',
+    error?.entrega === 'error' && Number.isInteger(error?.at) &&
+    Math.abs(error.at - Date.now() / 1000) < 5, JSON.stringify(error))
+
+  const enGrupo = (receipt) => estadoDeEntrega({
+    key: { remoteJid: GRUPO, fromMe: true, id: 'MIO2', participant: UNO },
+    receipt: { userJid: UNO, ...receipt }
+  })
+  ok('en un grupo, receiptTimestamp es entregado',
+    enGrupo({ receiptTimestamp: 1758500901 })?.entrega === 'entregado' &&
+    enGrupo({ receiptTimestamp: 1758500901 })?.at === 1758500901)
+  ok('en un grupo, readTimestamp es leido',
+    enGrupo({ readTimestamp: 1758500902 })?.entrega === 'leido' &&
+    enGrupo({ readTimestamp: 1758500902 })?.stanzaId === 'MIO2')
+  ok('un recibo de grupo sin hora no dice nada', enGrupo({}) === null)
 }
 
 console.log('\nmensajes: la identidad de la sesion se lee de donde de verdad esta')

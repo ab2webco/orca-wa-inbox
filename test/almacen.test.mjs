@@ -38,6 +38,7 @@ import { identidadesPropias, identidadPropia } from '../sidecar/src/mensajes.js'
 import { abrirAlmacen, ESQUEMA_VERSION, rutaAlmacen, rutaMedia } from '../sidecar/src/almacen.js'
 import { reclaveDecididaDe } from '../sidecar/src/alcance.js'
 import { ingerirActualizacion, ingerirCambioDeMiembros, ingerirChats, ingerirContactos,
+  ingerirEntrega,
   ingerirMensaje, ingerirMiembros, ingerirParesLid, nombreDeContacto } from '../sidecar/src/ingesta.js'
 
 const RAIZ = join(dirname(fileURLToPath(import.meta.url)), '..')
@@ -2300,6 +2301,98 @@ console.log('\nlinea-viva-2 W6: el id del mensaje citado se guarda y se lee')
       .filter((f) => f.name === 'cita_id').length === 1)
   otraVez.cerrar()
   ok('y el lector lo sigue leyendo', leerJson(casa, ['inbox', '--days', '36500']).code === 0)
+  rmSync(casa, { recursive: true, force: true })
+}
+
+console.log('\nestado-envios E2: entregado y leido quedan en la fila del envio')
+{
+  const casa = nueva()
+  const ruta = rutaAlmacen({ HOME: casa })
+  const alm = abrirAlmacen(ruta)
+  const enviado = (reqId, stanzaId) => {
+    alm.encolarEnvio({ reqId, cuenta: CUENTA, chatJid: LAURA, cuerpo: 'hola' })
+    alm.tomarEnvio(Date.now(), CUENTA)
+    return alm.resolverEnvio(reqId, { estado: 'enviado', stanzaId })
+  }
+  ok('un envio recien enviado no tiene entrega', enviado('E2-A', 'STZ-A')?.entrega === null,
+    JSON.stringify(alm.verEnvio('E2-A')))
+  ok('entregado se anota con su hora',
+    alm.anotarEntrega(CUENTA, { stanzaId: 'STZ-A', entrega: 'entregado', at: 1758500900 }) === true &&
+    alm.verEnvio('E2-A')?.entrega === 'entregado' && alm.verEnvio('E2-A')?.entrega_at === 1758500900,
+    JSON.stringify(alm.verEnvio('E2-A')))
+  alm.anotarEntrega(CUENTA, { stanzaId: 'STZ-A', entrega: 'leido', at: 1758500960 })
+  ok('leido lo reemplaza', alm.verEnvio('E2-A')?.entrega === 'leido' &&
+    alm.verEnvio('E2-A')?.entrega_at === 1758500960)
+  alm.anotarEntrega(CUENTA, { stanzaId: 'STZ-A', entrega: 'entregado', at: 1758501000 })
+  alm.anotarEntrega(CUENTA, { stanzaId: 'STZ-A', entrega: 'error', at: 1758501000 })
+  ok('un entregado tardio o un error despues de leido no lo bajan',
+    alm.verEnvio('E2-A')?.entrega === 'leido' && alm.verEnvio('E2-A')?.entrega_at === 1758500960)
+
+  enviado('E2-B', 'STZ-B')
+  alm.anotarEntrega(CUENTA, { stanzaId: 'STZ-B', entrega: 'servidor', at: 1758500900 })
+  alm.anotarEntrega(CUENTA, { stanzaId: 'STZ-B', entrega: 'error', at: 1758500901 })
+  ok('un error si reemplaza al servidor', alm.verEnvio('E2-B')?.entrega === 'error')
+
+  ok('un recibo de un mensaje que no es un envio no toca ninguna fila',
+    alm.anotarEntrega(CUENTA, { stanzaId: 'AJENO', entrega: 'leido', at: 1758500900 }) === false &&
+    alm.con.prepare('select count(*) n from envio where entrega is not null').get().n === 2)
+  ok('ni el de otra cuenta',
+    alm.anotarEntrega('otra-cuenta', { stanzaId: 'STZ-B', entrega: 'leido', at: 1 }) === false &&
+    alm.verEnvio('E2-B')?.entrega === 'error')
+
+  // La carrera: el recibo llega antes de que el envio quede con su stanza.
+  alm.encolarEnvio({ reqId: 'E2-C', cuenta: CUENTA, chatJid: LAURA, cuerpo: 'hola' })
+  alm.tomarEnvio(Date.now(), CUENTA)
+  alm.anotarEntrega(CUENTA, { stanzaId: 'STZ-C', entrega: 'entregado', at: 1758500900 })
+  ok('un recibo que llega antes de cerrar el envio se aplica al cerrarlo',
+    alm.resolverEnvio('E2-C', { estado: 'enviado', stanzaId: 'STZ-C' })?.entrega === 'entregado',
+    JSON.stringify(alm.verEnvio('E2-C')))
+  for (let i = 0; i < 1000; i += 1) {
+    alm.anotarEntrega(CUENTA, { stanzaId: `RUIDO-${i}`, entrega: 'leido', at: 1 })
+  }
+  ok('los recibos que esperan tienen tope', alm.entregasEnEspera() <= 500,
+    String(alm.entregasEnEspera()))
+  alm.cerrar()
+
+  // Un almacen de antes de estas columnas las gana al abrirse.
+  const cruda = new DatabaseSync(ruta)
+  cruda.exec('alter table envio drop column entrega_at')
+  cruda.exec('alter table envio drop column entrega')
+  cruda.close()
+  const otra = abrirAlmacen(ruta)
+  ok('reabrir un almacen viejo agrega entrega y entrega_at vacias',
+    otra.verEnvio('E2-A')?.entrega === null && otra.verEnvio('E2-A')?.entrega_at === null,
+    JSON.stringify(otra.verEnvio('E2-A')))
+  otra.cerrar()
+  rmSync(casa, { recursive: true, force: true })
+}
+
+console.log('\nestado-envios E3: los dos eventos de Baileys llegan a la fila')
+{
+  const casa = nueva()
+  const alm = abrirAlmacen(rutaAlmacen({ HOME: casa }))
+  alm.encolarEnvio({ reqId: 'E3-A', cuenta: CUENTA, chatJid: LAURA, cuerpo: 'hola' })
+  alm.tomarEnvio(Date.now(), CUENTA)
+  alm.resolverEnvio('E3-A', { estado: 'enviado', stanzaId: 'STZ-E3A' })
+  alm.encolarEnvio({ reqId: 'E3-G', cuenta: CUENTA, chatJid: ALFA, cuerpo: 'hola grupo' })
+  alm.tomarEnvio(Date.now(), CUENTA)
+  alm.resolverEnvio('E3-G', { estado: 'enviado', stanzaId: 'STZ-E3G' })
+
+  // El recibo de un uno a uno puede venir con el LID aunque el envio se hizo al telefono.
+  const r1 = ingerirEntrega({ almacen: alm, cuenta: CUENTA, evento: {
+    key: { remoteJid: '111122225555@lid', fromMe: true, id: 'STZ-E3A' },
+    update: { status: 4, messageTimestamp: 1758500960 } } })
+  ok('messages.update con status lee el envio', r1 === true &&
+    alm.verEnvio('E3-A')?.entrega === 'leido', JSON.stringify(alm.verEnvio('E3-A')))
+  const r2 = ingerirEntrega({ almacen: alm, cuenta: CUENTA, evento: {
+    key: { remoteJid: ALFA, fromMe: true, id: 'STZ-E3G', participant: OTRA_PERSONA },
+    receipt: { userJid: OTRA_PERSONA, receiptTimestamp: 1758500970 } } })
+  ok('message-receipt.update de un grupo tambien', r2 === true &&
+    alm.verEnvio('E3-G')?.entrega === 'entregado' && alm.verEnvio('E3-G')?.entrega_at === 1758500970)
+  ok('una edicion no es un recibo', ingerirEntrega({ almacen: alm, cuenta: CUENTA, evento: {
+    key: { remoteJid: LAURA, fromMe: false, id: 'OTRO' },
+    update: { message: { editedMessage: { message: { conversation: 'x' } } } } } }) === false)
+  alm.cerrar()
   rmSync(casa, { recursive: true, force: true })
 }
 
