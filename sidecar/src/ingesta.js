@@ -14,7 +14,7 @@ import { chmodSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 import { asegurarDirectorio } from './almacen.js'
-import { aNumero, cambioDeMiembros, esConversacion, esGrupo, filaDeActualizacion,
+import { aNumero, cambioDeMiembros, esConversacion, esGrupo, estadoDeEntrega, filaDeActualizacion,
   filaDeMensaje, identidadPropia, jidDe, jidDeChat, miembrosDeGrupo, parDeMensaje,
   parLidTelefono } from './mensajes.js'
 
@@ -311,6 +311,18 @@ export function ingerirActualizacion ({ almacen, alcance, cuenta, evento }) {
   if (alcance(cuenta, cambio.chatJid) === 'off') return { motivo: INGESTA.SIN_AUTORIZAR }
   almacen.aplicarActualizacion(cuenta, cambio)
   return { motivo: INGESTA.GUARDADO, revocado: cambio.revocado, editado: cambio.editado }
+}
+
+/**
+ * estado-envios: un recibo de entregado o leido de algo que mando la linea, de
+ * `messages.update` (uno a uno) o de `message-receipt.update` (grupo). No pregunta el
+ * alcance: es el estado de NUESTRO envio, no un mensaje del chat. True si era un recibo.
+ */
+export function ingerirEntrega ({ almacen, cuenta, evento }) {
+  const estado = estadoDeEntrega(evento)
+  if (!estado) return false
+  almacen.anotarEntrega(cuenta, estado)
+  return true
 }
 
 async function bajarMedia ({ wa, fila, cuenta, mediaDir, descargarMedia }) {

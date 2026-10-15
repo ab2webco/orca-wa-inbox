@@ -41,7 +41,9 @@ Out of scope: per-member status in groups, panel display, acting on the status.
   held (500 at most) and applied on `resolverEnvio` (almacen RED `anotarEntrega is not a
   function`, GREEN 367/367; envio 138/138). SQLite's drop column breaks on a comma inside a
   schema comment, so the new comments have none.
-- [ ] E3 Sidecar wiring: `messages.update` and `message-receipt.update` feed the store.
+- [x] E3 Sidecar wiring: `messages.update` and `message-receipt.update` feed the store
+  through `ingerirEntrega` (almacen RED missing export, GREEN 370/370; bundle rebuilt,
+  sidecar-build 11/11, sidecar-pairing 129/129).
 - [ ] E4 `wa-send --json` reports `entrega` and `entrega_at` of a sent request; help text.
 - [ ] E5 Release checks and version.
 
