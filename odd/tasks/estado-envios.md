@@ -44,7 +44,9 @@ Out of scope: per-member status in groups, panel display, acting on the status.
 - [x] E3 Sidecar wiring: `messages.update` and `message-receipt.update` feed the store
   through `ingerirEntrega` (almacen RED missing export, GREEN 370/370; bundle rebuilt,
   sidecar-build 11/11, sidecar-pairing 129/129).
-- [ ] E4 `wa-send --json` reports `entrega` and `entrega_at` of a sent request; help text.
+- [x] E4 `wa-send --json` reports `entrega` and `entrega_at` of a sent request, the text line
+  names it, and the help explains it (envio RED 139/142, GREEN 142/142; check-clis,
+  check-voseo and check-datos-reales green).
 - [ ] E5 Release checks and version.
 
 ## Acceptance criteria

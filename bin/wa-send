@@ -28,7 +28,11 @@ Three things this path guarantees, and they are the point:
 
   once          the request is keyed by its `--id`. Sending the SAME id twice delivers
                 once: the second call reads the verdict of the first. A duplicate
-                message to a client's group cannot be taken back.
+                message to a client's group cannot be taken back. It also reads how far
+                the message got: `entrega` is servidor, entregado, leido, reproducido or
+                error (on the server, delivered, read, played, failed after sending), or
+                null with no receipt yet; a client with read receipts off never reaches
+                leido. `entrega_at` is that receipt's time, in seconds.
   an answer     it is a short-lived command, so it always ends: a verdict, or a plazo
                 that expired with its own reason code. It never hangs.
   the reason    "the sidecar is not running" and "WhatsApp rejected it" are DIFFERENT
@@ -501,10 +505,36 @@ def veredicto(con, req_id, plazo_s, salida_json, cuenta=None):
     if fila["estado"] == CANCELADO_:
         niega(CANCELADO, f"this draft was cancelled ({fila['motivo'] or 'no reason given'}): "
                          "nothing was sent and it cannot be approved.")
-    informa(salida_json, {"req_id": req_id, "estado": ENVIADO,
-                          "chat": fila["chat_name"], "stanza_id": fila["stanza_id"]},
-            f"sent · {fila['chat_name']} · {req_id}")
+    informa(salida_json, enviado_json(fila, req_id),
+            f"sent · {fila['chat_name']} · {req_id}{entrega_texto(fila)}")
     sys.exit(0)
+
+
+# estado-envios: lo que WhatsApp dijo despues de `enviado`, como lo cuenta la linea de texto.
+ENTREGA_TEXTO = {"servidor": "on the server", "entregado": "delivered", "leido": "read",
+                 "reproducido": "played", "error": "failed after sending"}
+
+
+def entrega_de(fila):
+    """`(entrega, entrega_at)` de la fila, o `(None, None)` con un almacen que todavia no
+    tiene las columnas (el sidecar las agrega al abrirlo)."""
+    if "entrega" not in fila.keys():
+        return None, None
+    return fila["entrega"], fila["entrega_at"]
+
+
+def enviado_json(fila, req_id):
+    """La salida de un pedido que ya salio: con `entrega` (servidor, entregado, leido,
+    reproducido, error o null) y `entrega_at` en segundos. Preguntar otra vez con el mismo
+    `--id` la trae al dia sin mandar nada."""
+    entrega, entrega_at = entrega_de(fila)
+    return {"req_id": req_id, "estado": ENVIADO, "chat": fila["chat_name"],
+            "stanza_id": fila["stanza_id"], "entrega": entrega, "entrega_at": entrega_at}
+
+
+def entrega_texto(fila):
+    entrega, _ = entrega_de(fila)
+    return f" · {ENTREGA_TEXTO[entrega]}" if entrega in ENTREGA_TEXTO else ""
 
 
 def informa(salida_json, dato, linea):
@@ -729,9 +759,8 @@ def aprobar(req_id, plazo_s, salida_json, por):
     # Desde aca ya no espera la aprobacion: sale, ya salio, o ya no se puede aprobar.
     retirar_de_actividad(req_id)
     if fila["estado"] == ENVIADO:
-        informa(salida_json, {"req_id": req_id, "estado": ENVIADO,
-                              "chat": fila["chat_name"], "stanza_id": fila["stanza_id"]},
-                f"already sent · {fila['chat_name']} · {req_id}")
+        informa(salida_json, enviado_json(fila, req_id),
+                f"already sent · {fila['chat_name']} · {req_id}{entrega_texto(fila)}")
         sys.exit(0)
     if fila["estado"] == RECHAZADO_:
         niega(RECHAZADO, f"WhatsApp refused it: {fila['motivo'] or 'no reason given'}. "

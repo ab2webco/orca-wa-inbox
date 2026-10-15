@@ -1050,6 +1050,35 @@ console.log('\nwa-send: el MISMO --id entrega una sola vez')
   almacen.cerrar()
 }
 
+console.log('\nestado-envios E4: wa-send dice si lo entregaron y si lo leyeron')
+{
+  const home = nueva()
+  firmar(home, 'Agente De Ejemplo')
+  const almacen = abrirAlmacen(rutaAlmacen({ HOME: home }))
+  almacen.registrarLinea({ cuenta: CUENTA, lid: 'x@lid', pn: 'y@s.whatsapp.net' })
+  autorizar(home, { jid: ALFA, nombre: 'Cliente Alfa', modo: 'responder' })
+  const socket = socketFalso()
+  const args = ['Cliente Alfa', 'reporte listo', '--send', '--id', 'REQ-E4', '--json']
+
+  const uno = await correrEnvio(home, args, { almacen, socket })
+  const json = (r) => { try { return JSON.parse(r.stdout) } catch { return null } }
+  ok('recien enviado: entrega y entrega_at vienen y estan vacias',
+    uno.code === 0 && 'entrega' in (json(uno) || {}) && json(uno)?.entrega === null &&
+    json(uno)?.entrega_at === null, uno.stdout + uno.stderr)
+
+  almacen.anotarEntrega(CUENTA, { stanzaId: json(uno)?.stanza_id, entrega: 'leido', at: 1758500960 })
+  const dos = await correrEnvio(home, args, { almacen, socket })
+  ok('preguntar con el mismo --id dice leido y cuando',
+    dos.code === 0 && json(dos)?.entrega === 'leido' && json(dos)?.entrega_at === 1758500960,
+    dos.stdout + dos.stderr)
+  ok('y no lo manda otra vez', socket.enviados.length === 1)
+
+  const texto = await correrEnvio(home, args.slice(0, -1), { almacen, socket })
+  ok('sin --json la linea tambien lo dice', texto.code === 0 && /read/.test(texto.stdout),
+    texto.stdout)
+  almacen.cerrar()
+}
+
 console.log('\nwa-send: el orden de las negativas no cambia')
 {
   const home = nueva()
