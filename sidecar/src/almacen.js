@@ -53,6 +53,15 @@ export const RANGO_FUENTE = Object.freeze({ apodo: 1, verificado: 2, libreta: 3 
 // fila como "la linea ya escribio", y `scripts/check-casos` compara los dos.
 export const ENVIANDO_VENCE_S = 120
 
+// estado-envios: el orden de lo que WhatsApp dice de un envio. `error` es el mas bajo:
+// solo pisa a `servidor` (ver `anotarEntrega`).
+const RANGO_ENTREGA = Object.freeze({
+  error: 0, servidor: 1, entregado: 2, leido: 3, reproducido: 4
+})
+// Los recibos que esperan a su envio: la carrera dura milisegundos, asi que un tope
+// chico alcanza y lo que no es nuestro no crece sin fin.
+const ENTREGAS_EN_ESPERA = 500
+
 // El motivo de un envio que se corto dos veces: no se sabe si salio y no se insiste.
 export const MOTIVO_CORTADO = 'cortado-al-enviar'
 
@@ -223,7 +232,13 @@ create table if not exists envio (
   created_at integer not null,
   claimed_at integer,
   settled_at integer,
-  reintentos integer not null default 0  -- cuantas veces volvio de enviando a pendiente
+  -- reintentos: cuantas veces volvio de enviando a pendiente
+  reintentos integer not null default 0,
+  -- estado-envios: lo que WhatsApp dijo despues de enviado y solo hacia adelante:
+  -- servidor < entregado < leido < reproducido; error solo pisa null o servidor
+  -- entrega_at es la hora de ese recibo en segundos
+  entrega    text,
+  entrega_at integer
 );
 create index if not exists ix_envio_estado on envio (estado, created_at);
 
@@ -301,6 +316,11 @@ function columnasDe (con, tabla) {
 function columnasNuevas (con) {
   if (!columnasDe(con, 'envio').includes('reintentos')) {
     con.exec('alter table envio add column reintentos integer not null default 0')
+  }
+  for (const columna of ['entrega text', 'entrega_at integer']) {
+    if (!columnasDe(con, 'envio').includes(columna.split(' ')[0])) {
+      con.exec(`alter table envio add column ${columna}`)
+    }
   }
   if (!columnasDe(con, 'mensaje').includes('cita_id')) {
     con.exec('alter table mensaje add column cita_id text')
@@ -581,6 +601,9 @@ class Almacen {
     /** Cuantos directos con dispositivo (`:N`) junto al abrir y cuantos mensajes movio,
      *  o `null` si no habia ninguno (T16b). */
     this.dispositivosUnidos = dispositivosUnidos
+    /** estado-envios: recibos que llegaron antes de que su envio quedara con el stanza
+     *  (`sendMessage` todavia no habia vuelto). Por `cuenta\u0000stanza`, con tope. */
+    this.entregasPendientes = new Map()
   }
 
   /** Una linea enlazada. Es la contabilidad que distingue "todavia no hay de donde
@@ -1190,7 +1213,54 @@ class Almacen {
     this.con.prepare(`update envio set estado=?, motivo=?, stanza_id=?, settled_at=?
       where req_id=? and estado in ('pendiente','enviando')`)
       .run(estado, motivo, stanzaId, Math.floor(ahora / 1000), reqId)
-    return this.verEnvio(reqId)
+    const fila = this.verEnvio(reqId)
+    const llave = fila?.stanza_id ? `${fila.account}\u0000${fila.stanza_id}` : null
+    const temprana = llave ? this.entregasPendientes.get(llave) : null
+    if (temprana) {
+      this.entregasPendientes.delete(llave)
+      this.anotarEntrega(fila.account, temprana)
+      return this.verEnvio(reqId)
+    }
+    return fila
+  }
+
+  /**
+   * estado-envios: lo que WhatsApp dijo de un mensaje nuestro (`estadoDeEntrega` en
+   * mensajes.js), en la fila `enviado` de esa cuenta con ese stanza. Se busca por el
+   * stanza y no por el chat: el recibo puede venir con el LID y la fila con el telefono.
+   * Solo avanza; `error` solo pisa null o `servidor`. Sin fila devuelve false y lo guarda
+   * en espera, por si es la carrera con `resolverEnvio`.
+   */
+  anotarEntrega (cuenta, { stanzaId, entrega, at }) {
+    if (!(entrega in RANGO_ENTREGA) || !stanzaId) return false
+    const fila = this.con.prepare("select req_id, entrega from envio where account=? and " +
+      "stanza_id=? and estado='enviado' limit 1").get(cuenta, stanzaId)
+    if (!fila) {
+      const llave = `${cuenta}\u0000${stanzaId}`
+      const previa = this.entregasPendientes.get(llave)
+      if (!previa || RANGO_ENTREGA[entrega] > RANGO_ENTREGA[previa.entrega]) {
+        this.entregasPendientes.delete(llave)
+        this.entregasPendientes.set(llave, { stanzaId, entrega, at })
+      }
+      while (this.entregasPendientes.size > ENTREGAS_EN_ESPERA) {
+        this.entregasPendientes.delete(this.entregasPendientes.keys().next().value)
+      }
+      return false
+    }
+    const actual = fila.entrega
+    const avanza = entrega === 'error'
+      ? actual === null || actual === 'servidor'
+      : actual === null || RANGO_ENTREGA[entrega] > RANGO_ENTREGA[actual]
+    if (avanza) {
+      this.con.prepare('update envio set entrega=?, entrega_at=? where req_id=?')
+        .run(entrega, Math.floor(at), fila.req_id)
+    }
+    return true
+  }
+
+  /** Cuantos recibos esperan a su envio. Para las pruebas del tope. */
+  entregasEnEspera () {
+    return this.entregasPendientes.size
   }
 
   /**

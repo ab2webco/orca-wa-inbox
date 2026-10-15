@@ -37,8 +37,10 @@ Out of scope: per-member status in groups, panel display, acting on the status.
 ## Checklist
 
 - [x] E1 Sidecar reads the status from both events (`estadoDeEntrega` in mensajes.js; sidecar-mensajes RED missing export, GREEN 155/155).
-- [ ] E2 Store: `entrega` / `entrega_at` columns, forward-only `anotarEntrega`, early receipts
-  held and applied on `resolverEnvio`.
+- [x] E2 Store: `entrega` / `entrega_at` columns, forward-only `anotarEntrega`, early receipts
+  held (500 at most) and applied on `resolverEnvio` (almacen RED `anotarEntrega is not a
+  function`, GREEN 367/367; envio 138/138). SQLite's drop column breaks on a comma inside a
+  schema comment, so the new comments have none.
 - [ ] E3 Sidecar wiring: `messages.update` and `message-receipt.update` feed the store.
 - [ ] E4 `wa-send --json` reports `entrega` and `entrega_at` of a sent request; help text.
 - [ ] E5 Release checks and version.
