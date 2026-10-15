@@ -494,6 +494,37 @@ export function filaDeActualizacion (evento) {
   return { chatJid, stanzaId, revocado: 1, editado: 0, body: null, ts: null }
 }
 
+// estado-envios: `WebMessageInfo.Status` de Baileys 7 (0 ERROR, 1 PENDING, 2 SERVER_ACK,
+// 3 DELIVERY_ACK, 4 READ, 5 PLAYED). PENDING no dice nada que el envio no sepa ya.
+const ENTREGA_DE_STATUS = Object.freeze({
+  0: 'error', 2: 'servidor', 3: 'entregado', 4: 'leido', 5: 'reproducido'
+})
+
+/**
+ * Lo que WhatsApp dice de un mensaje NUESTRO: `{ stanzaId, entrega, at }` (`at` en
+ * segundos), o null. Llega de dos formas (lib/Socket/messages-recv.js, `handleReceipt`):
+ * en un uno a uno, `messages.update` con `update.status` y la hora del recibo en
+ * `messageTimestamp`; en un grupo, `message-receipt.update`, uno por miembro, con
+ * `receiptTimestamp` (entregado) o `readTimestamp` (leido o reproducido). Un rechazo
+ * posterior al envio llega como `status` 0 sin hora. Solo cuenta `fromMe`: lo demas son
+ * lecturas de mensajes ajenos hechas desde otro dispositivo del dueno.
+ */
+export function estadoDeEntrega (evento) {
+  const stanzaId = evento?.key?.id
+  if (!stanzaId || evento.key.fromMe !== true) return null
+  const recibo = evento.receipt
+  if (recibo) {
+    const leido = aNumero(recibo.readTimestamp)
+    if (leido) return { stanzaId, entrega: 'leido', at: leido }
+    const entregado = aNumero(recibo.receiptTimestamp)
+    return entregado ? { stanzaId, entrega: 'entregado', at: entregado } : null
+  }
+  const entrega = ENTREGA_DE_STATUS[evento.update?.status]
+  if (!entrega) return null
+  const at = aNumero(evento.update.messageTimestamp) || Math.floor(Date.now() / 1000)
+  return { stanzaId, entrega, at }
+}
+
 /** Un id de PERSONA sin el dispositivo (`<digitos>@lid` o `<digitos>@s.whatsapp.net`), o
  *  ''. Un grupo, un canal o algo sin forma de id no es un miembro de nadie. */
 function idDePersona (valor) {
