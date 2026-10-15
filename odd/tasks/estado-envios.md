@@ -47,7 +47,7 @@ Out of scope: per-member status in groups, panel display, acting on the status.
 - [x] E4 `wa-send --json` reports `entrega` and `entrega_at` of a sent request, the text line
   names it, and the help explains it (envio RED 139/142, GREEN 142/142; check-clis,
   check-voseo and check-datos-reales green).
-- [ ] E5 Release checks and version.
+- [x] E5 Release checks and version.
 
 ## Acceptance criteria
 
@@ -62,3 +62,13 @@ Out of scope: per-member status in groups, panel display, acting on the status.
 `node test/sidecar-mensajes.test.mjs`, `node test/almacen.test.mjs`,
 `node test/envio.test.mjs`, `npm run build:sidecar`, `node test/sidecar-build.test.mjs`, then the
 release check set.
+
+## Release
+
+v4.30.9. Checks on the final code: check-casos 2461/2461, panels 1738/1738, worker 728/728,
+almacen 370/370, envio 142/142, sidecar-mensajes 155/155, sidecar-pairing 129/129,
+sidecar-build 11/11, manifest 112/112, resolver 55/55, userdata 25/25, check-closing 36/36,
+check-lid 51/51, check-clis (561 settings checks), check-panels, check-voseo, check-prompts,
+check-resolver, check-harness, check-datos-reales. RED observed for E1 to E4 before the code.
+No screen changed. Not verified live: a real receipt from WhatsApp reaching an installed
+plugin.

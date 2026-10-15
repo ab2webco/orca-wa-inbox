@@ -41,7 +41,8 @@ C. Features: delivery/read status of our sends; owner reactions as signals; quot
 - [x] B1 `markOnlineOnConnect: false`, approved by the owner on 2026-10-13: Baileys
   announces 'unavailable' on connect (lib/Socket/chats.js), receiving is unchanged
   (sidecar-pairing: RED 128/129, GREEN 129/129; bundle 11/11).
-- [ ] C1 Delivery and read status of our sends, stored on the outbox.
+- [x] C1 Delivery and read status of our sends, stored on the outbox: done as
+  `odd/tasks/estado-envios.md` (v4.30.9).
 - [ ] C2-C6 Owner decisions, not started.
 
 ## Checks
