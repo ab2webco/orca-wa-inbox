@@ -53,7 +53,8 @@ contact names, the Jev service model itself.
   (check-casos J2 RED 10 FALLA, GREEN 13/13)
 - [x] J3 Group voice notes transcribed before triage; attachments not skipped.
   (check-casos J3 RED 4 FALLA, GREEN 4/4; attachment-only skips left as they are)
-- [ ] K1 A blocked case does not absorb new messages.
+- [x] K1 A blocked case does not absorb new messages.
+  (check-casos K1 RED 5 FALLA, GREEN 5/5)
 - [ ] M1 Chat memory in the case file and the worker brief.
 - [ ] O1 Owner order executes without a second ask.
 - [ ] R1 Draft review sees the agent's evidence.

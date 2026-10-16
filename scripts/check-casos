@@ -4386,6 +4386,72 @@ with tempfile.TemporaryDirectory() as home:
        tablero_de(home, cid)["stage"])
 
 
+# ── 12d3. Un caso bloqueado no se traga los mensajes nuevos (atencion-casos, K1) ───────
+# Un mensaje para un chat cuyo caso abierto estaba `bloqueado` se sumaba a ese caso, que
+# nadie mira: el cliente escribia y nadie lo atendia. Ahora abre un caso nuevo enlazado al
+# bloqueado, como tras una respuesta o un trabajo, y el bloqueado sigue donde estaba.
+def bloquea(home, cid):
+    js(home, "caso", "mover", str(cid), "bloqueado", "--motivo", "sin acceso al repo",
+       "--actor", "automatizacion")
+
+
+print("\nun caso bloqueado no se traga los mensajes nuevos (K1)")
+if NODE:
+    with tempfile.TemporaryDirectory() as home:
+        llegan(home, A, [msg(PERSONA, "B1", "se cayo el sitio", 30)])
+        autoriza(home)
+        js(home, "mode", PERSONA, "borrador")
+        ingiere(home)
+        cid = caso_de_stanza(home, "B1")["case_id"]
+        bloquea(home, cid)
+        llegan(home, A, [msg(PERSONA, "B2", "sigue sin funcionar, me ayudas?", 2)])
+        ingiere(home)
+        b2 = caso_de_stanza(home, "B2")
+        ok("un directo tras un caso bloqueado abre un caso nuevo, enlazado al bloqueado",
+           b2 and b2["case_id"] != cid and fila_de(home, b2["case_id"])["relacionado"] == cid,
+           f"caso {b2 and b2['case_id']} de {cid}")
+        ok("que llega al agente", b2 and b2["case_id"] in para_el_agente(home),
+           f"{para_el_agente(home)}")
+        ok("y el bloqueado sigue bloqueado, con su mensaje y nada mas",
+           fila_de(home, cid)["etapa"] == "bloqueado"
+           and len(js(home, "caso", "ver", str(cid))[0]["mensajes"]) == 1,
+           f"{fila_de(home, cid)['etapa']}")
+
+    with tempfile.TemporaryDirectory() as home:
+        llegan(home, A, [msg(SOPORTE, "B3", "@duenio revisa el login", 30, mencion=True)])
+        autoriza(home)
+        ingiere(home)
+        cid = caso_de_stanza(home, "B3")["case_id"]
+        bloquea(home, cid)
+        llegan(home, A, [msg(SOPORTE, "B4", "alguien vio lo del login?", 2)])
+        ingiere(home)
+        b4 = caso_de_stanza(home, "B4")
+        ok("sin Jev, una linea suelta de un grupo tampoco entra al caso bloqueado: abre uno enlazado",
+           b4 and b4["case_id"] != cid and fila_de(home, b4["case_id"])["relacionado"] == cid
+           and fila_de(home, cid)["etapa"] == "bloqueado", f"caso {b4}")
+
+    falso = JevFalso(jev_segun_texto)
+    antes = dict(os.environ)
+    os.environ["WA_INBOX_JEV_ENDPOINT"] = falso.url
+    try:
+        with tempfile.TemporaryDirectory() as home:
+            pon_llave(home)
+            llegan(home, A, [msg(SOPORTE, "B5", "@duenio revisa este caso", 30, mencion=True)])
+            autoriza(home)
+            ingiere(home)
+            cid = caso_de_stanza(home, "B5")["case_id"]
+            bloquea(home, cid)
+            llegan(home, A, [msg(SOPORTE, "B6", "charla entre ustedes", 2)])
+            r = ingiere(home)
+            ok("la charla de un grupo que Jev juzgo ni entra al bloqueado ni abre caso",
+               caso_de_stanza(home, "B6") is None and r["sin_caso"] == 1
+               and len(js(home, "caso", "ver", str(cid))[0]["mensajes"]) == 1, f"salio {r}")
+    finally:
+        falso.cerrar()
+        os.environ.clear()
+        os.environ.update(antes)
+
+
 # ── Los audios se transcriben al entrar, y los adjuntos se ven en el hilo ───────────────
 # `wa-scope ingest` transcribe la nota de voz que llega con `bin/wa-transcribe` (aqui, uno
 # falso que nunca toca un modelo) y guarda el texto por mensaje: el texto que juzga Jev, el

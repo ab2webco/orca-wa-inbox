@@ -5814,6 +5814,10 @@ def caso_asigna(con, stanza, chat, actor, aparte=None):
             caso_falla("E_ARGS", f"message {stanza} already belongs to case #{ya}, of another chat")
         return ya, "ya"
     caso = caso_abierto_de_chat(con, chat, ventana_casos(con))
+    if caso and caso["etapa"] == "bloqueado" and aparte is None:
+        # Un caso bloqueado no se traga lo que llega (atencion-casos, K1): nadie lo mira
+        # hasta que el dueno lo destrabe, y el mensaje nuevo quedaba sin atender.
+        aparte = caso["case_id"]
     if not caso or aparte is not None:
         return caso_nuevo(con, chat, actor, stanzas=[stanza], detalle=f"mensaje {stanza}",
                           relacionado=aparte if aparte is not None
@@ -8006,6 +8010,21 @@ def ingest_mensaje(con, m, veredicto, horas):
                 hecho["sin_caso"] = 1
                 con.rollback()
                 return hecho, None
+            if caso["etapa"] == "bloqueado":
+                # K1: tampoco una linea suelta entra a un caso bloqueado. Lo que Jev ya
+                # juzgo que no es para el asistente queda sin caso, como en un grupo sin
+                # caso abierto; lo demas abre uno nuevo enlazado al bloqueado.
+                if m.get("jev_sin_pedido"):
+                    hecho["sin_caso"] = 1
+                    con.rollback()
+                    return hecho, None
+                case_id = caso_nuevo(con, chat, "automatizacion", stanzas=[stanza],
+                                     detalle=f"mensaje {stanza}", relacionado=caso["case_id"])
+                caso_enruta(con, case_id, m.get("text") or "", chat)
+                hecho.update(nuevos=1, casos_creados=1)
+                caso_marca_regla(con, case_id, piso, stanza)
+                con.commit()
+                return hecho, case_id
             caso_suma_mensaje(con, caso, stanza, "automatizacion", reabre=False)
             case_id = caso["case_id"]
             propuesta_rancia(con, case_id, m, veredicto)
@@ -8839,9 +8858,14 @@ def cmd_ingest(con, a):
                 continue
             base = mensaje_de_rafaga(grupo) if len(grupo) > 1 else m
             veredicto = veredicto_de(con_contexto(con, base, horas, rol_de), None, con)
+        # Sin veredicto pero con el juicio de Jev guardado: Jev dijo que la rafaga no es para
+        # el asistente (charla o un grupo no dirigido). Lo usa la linea suelta ante un caso
+        # bloqueado (K1).
+        sin_pedido = (veredicto is None and m not in sueltas
+                      and jev_cacheado(con, base) is not None)
         for x in grupo:
             if x.get("kind") == "grupo" and veredicto is None:
-                sueltos.append((x, veredicto))
+                sueltos.append((dict(x, jev_sin_pedido=True) if sin_pedido else x, veredicto))
             else:
                 abren.append((x, veredicto))
     for m, veredicto in abren + sueltos:
