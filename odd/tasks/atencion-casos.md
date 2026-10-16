@@ -55,7 +55,8 @@ contact names, the Jev service model itself.
   (check-casos J3 RED 4 FALLA, GREEN 4/4; attachment-only skips left as they are)
 - [x] K1 A blocked case does not absorb new messages.
   (check-casos K1 RED 5 FALLA, GREEN 5/5)
-- [ ] M1 Chat memory in the case file and the worker brief.
+- [x] M1 Chat memory in the case file and the worker brief.
+  (check-casos T8 case-file section RED 4 FALLA, GREEN 241/241; size-cap check added after, 3/3)
 - [ ] O1 Owner order executes without a second ask.
 - [ ] R1 Draft review sees the agent's evidence.
 - [ ] Z1 Release checks and version.

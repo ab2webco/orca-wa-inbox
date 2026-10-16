@@ -14382,16 +14382,21 @@ def brief_de_despacho(con, caso, proyecto, instrucciones):
         f"The whole case, if you need it: {wa} caso ver {cid} --json",
     ]
     return mensajes_con_tope(cabeza, bloques_del_caso(con, caso), cola,
-                             "## Messages of the case, verbatim, in arrival order")
+                             "## Messages of the case, verbatim, in arrival order",
+                             memoria_del_chat(con, caso))
 
 
 # ── El caso en un archivo (caso-en-archivo) ───────────────────────────────────────────
 # El agente de casos recibe UNA linea que le dice que archivo leer: `casos/caso-<id>.md`, en
-# la carpeta de datos del plugin. Lleva el caso y nada mas: sus mensajes tal cual (nunca
-# los de otro caso del mismo chat, ni las respuestas que se le mandaron a otro), sus
-# adjuntos y transcripciones, la clasificacion, lo que dijo Jev, la propuesta anterior y
-# por que se freno, y los niveles de aprobacion del chat. Las reglas no van aca: viven en
-# el arnes (la skill whatsapp-soporte y el CLAUDE.md del espacio del plugin).
+# la carpeta de datos del plugin. Lleva el caso: sus mensajes tal cual bajo "Messages of the
+# case" (nunca los de otro caso del mismo chat, ni las respuestas que se le mandaron a otro),
+# sus adjuntos y transcripciones, la clasificacion, lo que dijo Jev, la propuesta anterior y
+# por que se freno, y los niveles de aprobacion del chat. Lo de antes en el MISMO chat (otros
+# casos y sus respuestas, lo que la linea ya mando, las correcciones del dueno) va aparte,
+# como memoria marcada que no es parte del caso (atencion-casos, M1): sin ella el agente
+# empezaba a ciegas, preguntaba lo que ya sabia y se repetia. Nunca nada de otro chat. Las
+# reglas no van aca: viven en el arnes (la skill whatsapp-soporte y el CLAUDE.md del espacio
+# del plugin).
 
 
 def ruta_de_caso(case_id):
@@ -14614,8 +14619,7 @@ def historia_del_caso(con, caso):
     # Lo que el dueno pidio al devolver la propuesta (Reclasificar con una nota en el
     # tablero, o `N <correccion>` por WhatsApp, T14): es SU instruccion para la propuesta
     # nueva, no texto del cliente.
-    notas = [e for e in eventos if e["actor"] == "dueno" and e["a"] == "clasificado"
-             and e["de"] in ("decision", "bloqueado") and (e["detalle"] or "").strip()]
+    notas = correcciones_del_dueno(eventos)
     if notas:
         lineas += ["", "## The owner's corrections (follow the newest one in the new proposal)"]
         lineas += [f"- [{e['at']}] {e['detalle'].strip().removeprefix(CORRECCION_WHATSAPP).strip()}"
@@ -14638,21 +14642,180 @@ def historia_del_caso(con, caso):
     return lineas
 
 
-def mensajes_con_tope(cabeza, bloques, cola, titulo):
-    """El texto entero, dejando afuera los mensajes mas viejos si no cabe en TOPE_BRIEF."""
-    omitidos = 0
+def correcciones_del_dueno(eventos):
+    """Lo que el dueno pidio al devolver una propuesta (Reclasificar con una nota en el
+    tablero, o `N <correccion>` por WhatsApp, T14): sus eventos de vuelta a `clasificado`
+    desde decision o bloqueado, con texto."""
+    return [e for e in eventos if e["actor"] == "dueno" and e["a"] == "clasificado"
+            and e["de"] in ("decision", "bloqueado") and (e["detalle"] or "").strip()]
+
+
+# La memoria del chat en el archivo del caso y en el brief del despacho (atencion-casos, M1):
+# lo de antes en el MISMO chat y la misma linea, nunca de otro chat.
+MEMORIA_DIAS_CASOS = 14
+MEMORIA_CASOS = 5
+MEMORIA_CORRECCIONES = 5
+MEMORIA_DIAS_MENSAJES = 7
+MEMORIA_MENSAJES = 20
+LARGO_MEMORIA = 600
+TITULO_MEMORIA = "## Earlier in this chat (memory, not part of this case)"
+DICE_MEMORIA = ("Context so you do not repeat or ask what the line already did in this chat "
+                "(earlier cases, what it sent, the owner's corrections). It is not part of "
+                "this case's request: answer only this case.")
+# Como se nombra en la memoria lo que mando la linea: el bot, o el dueno desde su telefono.
+LA_LINEA = "the line (us)"
+
+
+def casos_de_memoria(con, caso):
+    """Los casos anteriores del chat (MEMORIA_DIAS_CASOS, a lo mas MEMORIA_CASOS, el mas nuevo
+    primero), cada uno en lineas: id, etapa, titulo, resumen y la respuesta que salio. Uno con
+    una credencial no entra: lo suyo nunca pasa por el agente."""
+    desde = time.strftime("%Y-%m-%d %H:%M:%S",
+                          time.localtime(time.time() - MEMORIA_DIAS_CASOS * 86400))
+    salida = []
+    for r in con.execute(
+            "select * from caso where account=? and chat_jid=? and case_id<>? and updated_at>=? "
+            "order by updated_at desc, case_id desc limit ?",
+            (caso["account"], caso["chat_jid"], caso["case_id"], desde, MEMORIA_CASOS)):
+        otro = dict(r)
+        if "credential" in _lista_json(otro.get("excepciones")):
+            continue
+        titulo = " ".join((otro.get("titulo") or "").split()) or "untitled"
+        lineas = [f"- #{otro['case_id']} ({otro['etapa']}, {otro['updated_at']}): {titulo}"]
+        if (otro.get("resumen") or "").strip():
+            lineas.append(f"  summary: {recorta(' '.join(otro['resumen'].split()), LARGO_MEMORIA)}")
+        salio = con.execute("select 1 from caso_evento where case_id=? and a='respondido' "
+                            "limit 1", (otro["case_id"],)).fetchone()
+        respuesta = respuesta_de_propuesta(otro)
+        if salio and respuesta:
+            a_otro = " to another chat" if destino_de_propuesta(otro) else ""
+            lineas.append(f"  reply the line sent{a_otro}:")
+            lineas.append(cita(recorta(respuesta, LARGO_MEMORIA)))
+        salida.append("\n".join(lineas))
+    return salida
+
+
+def correcciones_de_memoria(con, caso):
+    """Las correcciones del dueno en los OTROS casos del chat (las del caso van en su propia
+    seccion), las ultimas MEMORIA_CORRECCIONES, cada una con su caso."""
+    eventos = [dict(r) for r in con.execute(
+        "select e.case_id, e.de, e.a, e.actor, e.detalle, e.at from caso_evento e join caso c "
+        "on c.case_id=e.case_id where c.account=? and c.chat_jid=? and e.case_id<>? "
+        "order by e.id", (caso["account"], caso["chat_jid"], caso["case_id"]))]
+    return [f"- [{e['at']}] #{e['case_id']}: "
+            f"{e['detalle'].strip().removeprefix(CORRECCION_WHATSAPP).strip()}"
+            for e in correcciones_del_dueno(eventos)[-MEMORIA_CORRECCIONES:]]
+
+
+def mensajes_de_memoria(con, caso):
+    """Los ultimos MEMORIA_MENSAJES mensajes del chat (MEMORIA_DIAS_MENSAJES) que no son de
+    este caso, en los dos sentidos y en orden. Lo de la linea va tal cual (sus enlaces son
+    como el agente encuentra lo que ya produjo); lo de los demas, enmascarado, y lo de un
+    caso con una credencial no entra."""
+    propios = set(stanzas_de_caso(con, caso["case_id"]))
+    credencial = {r["stanza_id"] for r in con.execute(
+        "select cm.stanza_id from caso_mensaje cm join caso c on c.case_id=cm.case_id where "
+        "c.account=? and c.chat_jid=? and c.excepciones like '%credential%'",
+        (caso["account"], caso["chat_jid"]))}
+    try:
+        fuente = wa_store.abrir()
+    except wa_store.SinFuente:
+        return []
+    try:
+        filas = fuente.execute(
+            "select rowid r, stanza_id, ts, from_me, sender_name, sender_jid, body, media_type, "
+            "media_bytes, media_path from mensaje where account=? and chat_jid=? and revocado=0 "
+            "and ts >= ? order by ts desc, rowid desc limit ?",
+            (caso["account"], caso["chat_jid"],
+             int(time.time() - MEMORIA_DIAS_MENSAJES * 86400),
+             MEMORIA_MENSAJES + len(propios) + len(credencial))).fetchall()
+        nombres = wa_store.NombresDeLibreta(fuente)
+    except sqlite3.Error:
+        return []
+    finally:
+        fuente.close()
+    filas = [r for r in filas if r["stanza_id"] not in propios
+             and r["stanza_id"] not in credencial][:MEMORIA_MENSAJES]
+    bloques = []
+    for r in reversed(filas):
+        texto, transcripcion = texto_de_audio(con, caso, r, r["body"] or "")
+        if r["from_me"]:
+            quien = LA_LINEA
+        else:
+            quien = wa_store.quien(r, nombres, caso["account"]) or "unknown"
+            texto = wa_jev.mask(texto)
+        marca = (" (voice note, transcribed)" if transcripcion is True else
+                 " (voice note, not transcribed)" if transcripcion is False else "")
+        bloque = [f"[{wa_store.ts(r['ts'])}] {quien}{marca}:", cita(recorta(texto, LARGO_MEMORIA))]
+        media = media_de_fila(r)
+        if media:
+            bloque.append(f"  attachment: {media['type']}: {media['path']}")
+        bloques.append("\n".join(bloque))
+    return bloques
+
+
+def memoria_del_chat(con, caso):
+    """La memoria del chat del caso (M1): {casos, correcciones, mensajes}, listas de bloques."""
+    return {"casos": casos_de_memoria(con, caso),
+            "correcciones": correcciones_de_memoria(con, caso),
+            "mensajes": mensajes_de_memoria(con, caso)}
+
+
+def tamano_de_memoria(memoria):
+    return sum(len(memoria.get(k) or []) for k in ("casos", "correcciones", "mensajes"))
+
+
+def seccion_de_memoria(memoria, quitados=0):
+    """La seccion de la memoria en lineas, sin sus `quitados` bloques menos utiles: primero
+    los mensajes mas viejos, despues los casos mas viejos, despues las correcciones mas
+    viejas. Vacia, nada."""
+    if not memoria:
+        return []
+    casos = list(memoria.get("casos") or [])
+    correcciones = list(memoria.get("correcciones") or [])
+    mensajes = list(memoria.get("mensajes") or [])
+    resta = quitados
+    k = min(resta, len(mensajes))
+    mensajes, resta = mensajes[k:], resta - k
+    k = min(resta, len(casos))
+    casos, resta = casos[:len(casos) - k], resta - k
+    correcciones = correcciones[min(resta, len(correcciones)):]
+    if not (casos or correcciones or mensajes):
+        return []
+    lineas = ["", TITULO_MEMORIA, DICE_MEMORIA]
+    if quitados:
+        lineas.append(f"({quitados} older items of this memory left out for size)")
+    if casos:
+        lineas += ["", f"### Earlier cases of this chat (last {MEMORIA_DIAS_CASOS} days, "
+                       f"newest first)", *casos]
+    if correcciones:
+        lineas += ["", "### The owner's corrections on earlier cases of this chat", *correcciones]
+    if mensajes:
+        lineas += ["", f"### Recent messages of this chat that are not part of this case (last "
+                       f"{MEMORIA_DIAS_MENSAJES} days, in order)", *mensajes]
+    return lineas
+
+
+def mensajes_con_tope(cabeza, bloques, cola, titulo, memoria=None):
+    """El texto entero. Si no cabe en TOPE_BRIEF, primero se recorta la memoria del chat
+    (M1), y solo despues se dejan afuera los mensajes mas viejos del caso."""
+    omitidos, quitados = 0, 0
     bloques = bloques or []
+    en_memoria = tamano_de_memoria(memoria or {})
     while True:
-        cuerpo = ["", titulo]
+        cuerpo = seccion_de_memoria(memoria, quitados) + ["", titulo]
         if omitidos:
             cuerpo.append(f"({omitidos} earlier messages left out for size: read them with "
                           f"`caso ver`)")
         cuerpo.extend(bloques[omitidos:] or ["(the message store is not available: read the "
                                              "case with `caso ver`)"])
         texto = "\n".join(cabeza + cuerpo + [""] + cola)
-        if len(texto) <= TOPE_BRIEF or omitidos >= len(bloques):
+        if len(texto) <= TOPE_BRIEF or (omitidos >= len(bloques) and quitados >= en_memoria):
             return texto
-        omitidos += 1
+        if quitados < en_memoria:
+            quitados += 1
+        else:
+            omitidos += 1
 
 
 def seccion_de_linea(caso):
@@ -14680,7 +14843,8 @@ def archivo_de_caso(con, caso):
         f"{ruta_wa_scope()} caso ver {cid} --json",
     ]
     return mensajes_con_tope(cabeza_del_caso(con, caso), bloques_del_caso(con, caso), cola,
-                             "## Messages of the case, verbatim, in arrival order")
+                             "## Messages of the case, verbatim, in arrival order",
+                             memoria_del_chat(con, caso))
 
 
 def escribe_caso(con, case_id):

@@ -8505,18 +8505,38 @@ if NODE:
            corridas_agente(home)[-1]["estado"] == "terminado", f"{corridas_agente(home)}")
 
     # El caso en un archivo (caso-en-archivo, T1): el tick le deja al agente SU caso en
-    # `casos/caso-<id>.md`, con los mensajes del caso y nada de otro caso del mismo chat
-    # (ni sus mensajes ni la respuesta que se le mando).
-    print("\nel caso en un archivo: solo lo del caso")
+    # `casos/caso-<id>.md`. Bajo "Messages of the case" van solo los mensajes del caso; lo
+    # de antes en el MISMO chat (otros casos, lo que la linea ya mando, las correcciones del
+    # dueno) va aparte, como memoria (atencion-casos, M1). De otro chat, nada.
+    print("\nel caso en un archivo: solo lo del caso, y la memoria del chat aparte")
+
+    def seccion(texto, titulo):
+        """El cuerpo de la seccion `titulo` del archivo: hasta el proximo `## `."""
+        if titulo not in texto:
+            return ""
+        resto = texto.split(titulo, 1)[1]
+        return resto.split("\n## ", 1)[0]
+
+    MENSAJES_DEL_CASO = "## Messages of the case"
+    MEMORIA = "## Earlier in this chat (memory, not part of this case)"
     with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as carpeta:
         orca_casos(carpeta)
         llegan(home, A, [msg(CHAT, "CF0", "Otro tema: cambiar el logo del sitio", 9),
+                         msg(OPERACIONES, "CFO", "Mensaje de otro chat que no va", 8),
                          msg(CHAT, "CF1", PEDIDO, 6),
-                         msg(CHAT, "CFX", "Respuesta al tema del logo", 5, yo=True),
+                         msg(CHAT, "CFX", "Respuesta al tema del logo: "
+                             "https://docs.example.com/logo-v2", 5, yo=True),
                          msg(CHAT, "CF2", "Adjunto la captura del reporte", 4, media="image",
                              bytes=2048, ruta="/srv/ejemplo/media/captura-1.jpg")])
         otro = js(home, "caso", "crear", "--chat", CHAT, "--stanza", "CF0",
                   "--actor", "automatizacion")[0]["case_id"]
+        con = db_de(home)
+        con.execute("insert into caso_evento (case_id, de, a, actor, detalle, at) values "
+                    "(?, 'decision', 'clasificado', 'dueno', ?, ?)",
+                    (otro, "Usa el formato del reporte anterior",
+                     time.strftime("%Y-%m-%d %H:%M:%S")))
+        con.commit()
+        con.close()
         js(home, "caso", "mover", str(otro), "cerrado", "--motivo", "otro tema",
            "--actor", "dueno")
         cid = caso_para_agente(home, "CF1")
@@ -8535,8 +8555,20 @@ if NODE:
         ok("con cada mensaje del caso tal cual, y su adjunto con la ruta",
            PEDIDO in texto and "Adjunto la captura del reporte" in texto
            and "/srv/ejemplo/media/captura-1.jpg" in texto, texto[:1500])
-        ok("y nada de otro caso: ni su mensaje ni la respuesta que se le mando",
-           "cambiar el logo" not in texto and "Respuesta al tema del logo" not in texto,
+        del_caso, memoria = seccion(texto, MENSAJES_DEL_CASO), seccion(texto, MEMORIA)
+        ok("bajo los mensajes del caso, nada de otro caso: ni su mensaje ni lo que se le mando",
+           PEDIDO in del_caso and "cambiar el logo" not in del_caso
+           and "Respuesta al tema del logo" not in del_caso, del_caso[:1500])
+        ok("la memoria del chat dice que es contexto y no parte del caso",
+           "not part of this case" in memoria and "do not repeat" in memoria, memoria[:800])
+        ok("con el caso anterior del chat y lo que la linea ya mando, con el enlace tal cual",
+           f"#{otro}" in memoria and "cambiar el logo" in memoria
+           and "https://docs.example.com/logo-v2" in memoria
+           and "the line (us)" in memoria, memoria[:1500])
+        ok("y la correccion que el dueno dio en un caso anterior del mismo chat",
+           "Usa el formato del reporte anterior" in memoria and f"#{otro}" in memoria,
+           memoria[:1500])
+        ok("de otro chat no hay nada, en ninguna parte", "otro chat que no va" not in texto,
            texto[:1500])
         ok("con los niveles de aprobacion del chat",
            "Approval levels" in texto, texto[:1500])
@@ -8551,9 +8583,11 @@ if NODE:
         cid = trabajo_firmado(home, "CD1")
         tick_orca(home, carpeta)
         spec = brief(carpeta)
-        ok("el brief del despacho lleva el caso y lo aprobado, y nada de otro caso",
+        ok("el brief del despacho lleva el caso y lo aprobado, y nada de otro caso en sus mensajes",
            f"#{cid}" in spec and PEDIDO in spec and TRABAJO in spec
-           and "Respuesta al tema del logo" not in spec, spec[:1500])
+           and "Respuesta al tema del logo" not in seccion(spec, MENSAJES_DEL_CASO), spec[:1500])
+        ok("lo que la linea ya mando al chat va en la memoria del brief",
+           "Respuesta al tema del logo" in seccion(spec, MEMORIA), spec[:2500])
         ok("con la linea de siempre al agente del proyecto",
            (bandera((lanzamientos(carpeta) or [[]])[0], "--text") or "")
            == f"Read {ruta_brief(carpeta)} and follow it exactly.", f"{lanzamientos(carpeta)}")
@@ -19373,6 +19407,31 @@ if NODE:
         finally:
             os.environ.clear()
             os.environ.update(env_antes)
+
+
+# ── La memoria del chat respeta el tope (atencion-casos, M1) ─────────────────────────
+print("\nla memoria del chat se recorta antes que los mensajes del caso (M1)")
+with tempfile.TemporaryDirectory() as home:
+    ws = carga_wa_scope(home)
+    tope = ws.TOPE_BRIEF
+    ws.TOPE_BRIEF = 3000
+    try:
+        memoria = {"casos": [f"- #{n} (respondido): caso viejo {n}" for n in range(5)],
+                   "correcciones": ["- [2026-10-01 09:00:00] #1: usa el formato nuevo"],
+                   "mensajes": [f"[2026-10-1{n % 10} 09:00] the line (us):\n> " + "m" * 300
+                                for n in range(20)]}
+        bloques = [f"[2026-10-15 09:0{n}] Ana:\n> pedido del caso {n}" for n in range(5)]
+        texto = ws.mensajes_con_tope(["# caso"], bloques, ["## cola"], "## Messages of the case",
+                                     memoria)
+        ok("con la memoria grande, cabe en el tope recortando la memoria",
+           len(texto) <= 3000 and "older items of this memory left out" in texto, len(texto))
+        ok("y los mensajes del caso quedan enteros",
+           all(f"pedido del caso {n}" in texto for n in range(5))
+           and "earlier messages left out" not in texto, texto[-800:])
+        ok("lo primero que se va son los mensajes viejos de la memoria, no sus casos",
+           "caso viejo 0" in texto and "usa el formato nuevo" in texto, texto[:1500])
+    finally:
+        ws.TOPE_BRIEF = tope
 
 
 print(f"\n{pruebas - len(fallos)}/{pruebas} en verde")
