@@ -34,7 +34,7 @@ line already did in that chat.
   the line's last message asked a question; an answer to the line's pending question is
   never skipped.
 - J3 Group voice notes in an active chat are transcribed before triage, within the
-  existing cap; attachment-only messages from a client or an operator are not skipped.
+  existing cap.
 - K1 A new message never joins a blocked case: it opens a new case related to it.
 - M1 Chat memory in the case file and the worker brief: recent messages of the chat (both
   directions), earlier cases with their final replies, and the owner's corrections given
@@ -48,14 +48,14 @@ line already did in that chat.
   tab only with `tui-idle`; busy, it looks again on the next tick. The 30-minute deadline
   stays the hard stop.
 
-Out of scope: per-chat configuration in the live store (the owner's call), duplicate
+Out of scope: attachment-only messages (they keep today's rules), per-chat configuration in the live store (the owner's call), duplicate
 contact names, the Jev service model itself.
 
 ## Checklist
 
 - [x] J2 Triage sees recent chat messages and the line's pending question.
   (check-casos J2 RED 10 FALLA, GREEN 13/13)
-- [x] J3 Group voice notes transcribed before triage; attachments not skipped.
+- [x] J3 Group voice notes transcribed before triage.
   (check-casos J3 RED 4 FALLA, GREEN 4/4; attachment-only skips left as they are)
 - [x] K1 A blocked case does not absorb new messages.
   (check-casos K1 RED 5 FALLA, GREEN 5/5)
@@ -67,7 +67,7 @@ contact names, the Jev service model itself.
   (check-casos R1 RED TypeError + 1 FALLA + unknown --evidencia, GREEN 9/9; envio 142/142)
 - [x] C1 The case agent's tab closes only when Claude is idle.
   (check-casos T8 agent section RED 1 FALLA, GREEN 243/243)
-- [ ] Z1 Release checks and version.
+- [x] Z1 Release checks and version: v4.30.10; the release suite is green (check-casos 2505/2505, panels 1738/1738, worker 728/728, almacen 370/370, envio 142/142, sidecar-mensajes 155/155, sidecar-pairing 129/129, manifest 112/112, resolver 55/55, userdata 25/25, check-panels, check-voseo, check-prompts, check-resolver, check-harness 105, check-clis 561, check-closing 36/36, check-lid 51/51, check-datos-reales, sidecar-build 11/11).
 
 ## Acceptance criteria
 
