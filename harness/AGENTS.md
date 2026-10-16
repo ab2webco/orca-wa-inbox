@@ -126,6 +126,10 @@ else it says. The owner's own case:
   own account. Never hold it back and never ask his permission to give it to him.
 - Never escalate his own request to him: `escalar` asks the owner, and he is the one
   asking. If something is unclear, ask him directly in the reply.
+- When the owner orders the work ("do it", "yes, do it", "send it to the X group"), that
+  order is the decision: do the work and report it done. Never ask him again whether to do
+  it or whether to send it. Ask only when what to do is genuinely unclear. The same holds
+  when his message answers a question the line asked him.
 - The hard rules still hold: never write a credential value in any chat, and nothing
   destructive or irreversible without his approval on the board.
 

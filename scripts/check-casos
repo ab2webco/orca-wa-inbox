@@ -52,6 +52,15 @@ def ok(nombre, condicion, detalle=""):
 SIN_ORCA = "/nonexistent/orca-no-existe"
 
 
+# La regla de la orden del dueno (atencion-casos, O1), con las mismas palabras que el arnes
+# (scripts/check-harness la busca alla).
+ORDEN_DEL_DUENO = ("When the owner orders the work (\"do it\", \"yes, do it\", \"send it to "
+                   "the X group\"), that order is the decision: do the work and report it "
+                   "done. Never ask him again whether to do it or whether to send it. Ask only "
+                   "when what to do is genuinely unclear. The same holds when his message "
+                   "answers a question the line asked him.")
+
+
 def firma_como_dueno(args):
     """`caso aprobar ... --actor dueno` (y `caso lote ... --actor dueno`, casos-cli K13): la
     firma del dueno, que el worker lanza con la llave del aprobador en el env de ESE proceso
@@ -10386,6 +10395,10 @@ if NODE:
                                               "ask him directly in the reply",
                                               "never write a credential value")),
                    archivo[:1500])
+                # atencion-casos O1: su orden es la decision; no se le pregunta otra vez.
+                ok(f"el archivo y el brief dicen que su orden es la aprobacion: {nombre}",
+                   ORDEN_DEL_DUENO in " ".join(archivo.split())
+                   and ORDEN_DEL_DUENO in " ".join(brief.split()), archivo[:2500])
                 # En un grupo leen otros: se le entrega ahi lo que pidio ahi, nada mas.
                 ok(f"el archivo del caso avisa que en un grupo leen otros solo si es grupo: {nombre}",
                    ("others read this group" in archivo) == (s == "O2"), archivo[:1500])

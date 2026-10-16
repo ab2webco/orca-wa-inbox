@@ -14221,6 +14221,13 @@ def informes_del_caso(con, case_id):
     return salida
 
 
+# La orden del dueno es la aprobacion (atencion-casos, O1). Visto en vivo: un caso le
+# pregunto tres veces si lo hacia. Las mismas palabras en el arnes (AGENTS.md y la skill).
+ORDEN_DEL_DUENO = ("When the owner orders the work (\"do it\", \"yes, do it\", \"send it to "
+                   "the X group\"), that order is the decision: do the work and report it "
+                   "done. Never ask him again whether to do it or whether to send it. Ask only "
+                   "when what to do is genuinely unclear. The same holds when his message "
+                   "answers a question the line asked him.")
 # Lo que el agente del proyecto entrega cuando el caso es del dueno (dueno-en-el-caso): lo
 # que hizo para el, enlace incluido, va en la respuesta. Caso vivo: el informe quedo
 # publicado y la respuesta solo decia "esta listo", con el enlace "no enviado al cliente".
@@ -14235,6 +14242,7 @@ BRIEF_DUENO = [
     "something is unclear, ask him with --estado necesita. Publishing his deliverable from "
     "his own account to give him the link is not a change to access. You still never write "
     "a credential value in any chat.",
+    ORDEN_DEL_DUENO,
 ]
 # El reporte del agente del proyecto en el caso del dueno: las mismas tres salidas, dichas
 # para el. Lo que "necesita al dueno" no se bloquea: se le pregunta con `necesita`.
@@ -14461,7 +14469,7 @@ REGLAS_DUENO = (
     "published from his own account. Never hold it back and never ask him for permission to "
     "give it to him; never escalate his own request to him (no `escalar` to the owner about "
     "his own request): if something is unclear, ask him directly in the reply. You still "
-    "never write a credential value in any chat.")
+    "never write a credential value in any chat. " + ORDEN_DEL_DUENO)
 # En un grupo del dueno leen otros: se le entrega ahi lo que pidio ahi, y el piso del chat
 # (que en un grupo no se salta) sigue revisando lo que sale.
 GRUPO_DUENO = ("This chat is a group: others read this group too. Deliver here only what he "
