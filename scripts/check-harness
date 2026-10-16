@@ -79,6 +79,14 @@ def cargan_la_llave(raiz: pathlib.Path) -> list:
     return hallados
 
 
+# La regla de la orden del dueno (atencion-casos, O1), palabra por palabra.
+ORDEN_DEL_DUENO = ("When the owner orders the work (\"do it\", \"yes, do it\", \"send it to "
+                   "the X group\"), that order is the decision: do the work and report it "
+                   "done. Never ask him again whether to do it or whether to send it. Ask only "
+                   "when what to do is genuinely unclear. The same holds when his message "
+                   "answers a question the line asked him.")
+
+
 def plano(texto: str) -> str:
     """Un solo espacio entre palabras: las frases del prompt van partidas en dos
     lineas y buscarlas literalmente solo encontraria la mitad."""
@@ -363,6 +371,15 @@ def main() -> int:
                   if f.lower() not in cuerpos[rel].lower()]
         if faltan:
             fallos.append(f"{rel}  no dice {', '.join(faltan)}")
+
+    # La orden del dueno es la aprobacion (atencion-casos, O1): visto en vivo, un caso le
+    # pregunto tres veces si lo hacia. La misma regla, con las mismas palabras, en el arnes
+    # y en lo que escribe wa-scope (eso lo mira check-casos).
+    for rel in OBLIGATORIOS:
+        comprobaciones += 1
+        if ORDEN_DEL_DUENO not in cuerpos[rel]:
+            fallos.append(f"{rel}  no dice que la orden del dueno es la decision: "
+                          f"{ORDEN_DEL_DUENO[:60]}...")
 
     # Revision de dueno-en-el-caso: ninguna regla de mas precedencia le devuelve al agente el
     # escalado ni la espera callada en el caso del dueno. La regla 4 y el "Escalate" quedan

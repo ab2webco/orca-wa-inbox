@@ -67,7 +67,9 @@ line.
    `caso clasificar <id> --clase <card|alert|doubtful> --prioridad <none|low|medium|high|urgent> --actor agente`.
    Nothing to attend to: `caso mover <id> cerrado --motivo "<why>" --actor agente`.
    A reply is enough: `caso propuesta <id> --tipo responder --respuesta "<text>" --actor agente`
-   (the signature is added on sending, only on a line that signs). Work in a codebase: `--tipo trabajar` (below).
+   (the signature is added on sending, only on a line that signs). When your reply says
+   work was done, pass what proves it with `--evidencia "<link, file or commit>"`: the
+   plugin's review reads it with the reply. Work in a codebase: `--tipo trabajar` (below).
    The owner is needed: `--tipo escalar` (below). Doubtful: leave it classified as
    `doubtful` and propose nothing.
 5. **Wrap up.** `"$WA/wa-scope" unlock`, then at most 10 lines: the case id, what you
@@ -145,6 +147,10 @@ else it says. The owner's own case:
   own account. Never hold it back and never ask his permission to give it to him.
 - Never escalate his own request to him: `escalar` asks the owner, and he is the one
   asking. If something is unclear, ask him directly in the reply.
+- When the owner orders the work ("do it", "yes, do it", "send it to the X group"), that
+  order is the decision: do the work and report it done. Never ask him again whether to do
+  it or whether to send it. Ask only when what to do is genuinely unclear. The same holds
+  when his message answers a question the line asked him.
 - The hard rules still hold: never write a credential value in any chat, and nothing
   destructive or irreversible without his approval on the board.
 

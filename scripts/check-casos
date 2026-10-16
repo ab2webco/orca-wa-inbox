@@ -52,6 +52,15 @@ def ok(nombre, condicion, detalle=""):
 SIN_ORCA = "/nonexistent/orca-no-existe"
 
 
+# La regla de la orden del dueno (atencion-casos, O1), con las mismas palabras que el arnes
+# (scripts/check-harness la busca alla).
+ORDEN_DEL_DUENO = ("When the owner orders the work (\"do it\", \"yes, do it\", \"send it to "
+                   "the X group\"), that order is the decision: do the work and report it "
+                   "done. Never ask him again whether to do it or whether to send it. Ask only "
+                   "when what to do is genuinely unclear. The same holds when his message "
+                   "answers a question the line asked him.")
+
+
 def firma_como_dueno(args):
     """`caso aprobar ... --actor dueno` (y `caso lote ... --actor dueno`, casos-cli K13): la
     firma del dueno, que el worker lanza con la llave del aprobador en el env de ESE proceso
@@ -2272,6 +2281,134 @@ if NODE:
         os.environ.update(antes)
 
 
+# ── 12d2. La respuesta a la pregunta de la linea (atencion-casos, J2) ─────────────────
+# Visto en vivo: el agente le pregunto al dueno "¿Lo actualizo yo ahora y lo envio al
+# grupo?", el dueno contesto "Si", Jev lo vio como un saludo, se salto y no paso nada. Y en
+# un grupo, "Hola, ¿que paso?" tras preguntas sin contestar salio como saludo: Jev veia el
+# mensaje solo. Ahora Jev ve los ultimos mensajes del chat y si la linea dejo una pregunta,
+# y la respuesta a esa pregunta nunca se salta: vuelve al ultimo caso del chat.
+print("\njev: el contexto reciente del chat y la pregunta pendiente (J2)")
+_recientes = [{"from_me": False, "rol": "client", "text": f"mensaje viejo {n}"}
+              for n in range(3)] + [
+    {"from_me": False, "rol": "admin", "text": "revisa el reporte de ayer"},
+    {"from_me": False, "rol": "operator", "text": "la clave es Hunter2xx"},
+    {"from_me": False, "rol": "client", "text": "x" * 900},
+    {"from_me": True, "rol": None, "text": "¿Lo actualizo yo ahora y lo envio al grupo?"}]
+_estado = jev.estado_mensaje(dict(MENSAJE, text="Si", recientes=_recientes,
+                                  pregunta_pendiente=True))
+_vistos = _estado.get("recent_messages") or []
+ok("el estado lleva a lo mas 6 mensajes recientes, los ultimos y en orden",
+   len(_vistos) == 6 and _vistos[0]["text"] == "mensaje viejo 1"
+   and _vistos[-1]["text"].startswith("¿Lo actualizo"), f"{_vistos}")
+ok("cada uno dice quien lo escribio: el asistente, el dueno, un operador o un participante",
+   [v["from"] for v in _vistos] == ["participant", "participant", "owner", "operator",
+                                    "participant", "assistant"], f"{_vistos}")
+ok("enmascarados y cortados",
+   len(_vistos) == 6 and "Hunter2xx" not in json.dumps(_vistos)
+   and len(_vistos[4]["text"]) < 400, f"{_vistos}")
+ok("y la pregunta pendiente de la linea se dice",
+   _estado.get("assistant_question_pending") is True, f"{_estado}")
+_estado = jev.estado_mensaje(MENSAJE)
+ok("sin contexto el estado no inventa ni recientes ni pregunta",
+   "recent_messages" not in _estado and "assistant_question_pending" not in _estado,
+   f"{_estado}")
+ok("la instruccion de clase dice que contestar la pregunta pendiente no es un saludo",
+   "assistant_question_pending" in jev.INSTRUCCION_CLASE
+   and "recent_messages" in jev.INSTRUCCION_CLASE
+   and "is not a pleasantry" in jev.INSTRUCCION_CLASE, jev.INSTRUCCION_CLASE)
+ok("y la nota dice que los recientes tambien son dato", "recent_messages" in jev.NOTA, jev.NOTA)
+
+
+def jev_si_es_saludo(cuerpo):
+    """Lo que hizo el Jev real con el "Si" del dueno: un saludo, todo bajo, `skip`."""
+    texto = cuerpo["state"]["message_to_evaluate"]["text"]
+    if texto.strip() in ("Si", "la version 2"):
+        return 200, respuestas(cuerpo["questions"], choice="pleasantry",
+                               asks_owner_to_act=0.05)
+    return jev_segun_texto(cuerpo)
+
+
+PREGUNTA_LINEA = "¿Lo actualizo yo ahora y lo envio al grupo?"
+
+print("\nla respuesta a la pregunta de la linea nunca se salta (J2)")
+if NODE:
+    falso = JevFalso(jev_si_es_saludo)
+    antes = dict(os.environ)
+    os.environ["WA_INBOX_JEV_ENDPOINT"] = falso.url
+    try:
+        with tempfile.TemporaryDirectory() as home:
+            pon_llave(home)
+            cid = caso_respondido(home, "Q1")
+            llegan(home, A, [msg(SOPORTE, "Q2", PREGUNTA_LINEA, 3, yo=True),
+                             msg(SOPORTE, "Q3", "Si", 1)])
+            ingiere(home)
+            q3 = caso_de_stanza(home, "Q3")
+            fila = fila_de(home, cid)
+            ok("el \"Si\" a la pregunta de la linea vuelve al ultimo caso del chat y lo reabre",
+               q3 and q3["case_id"] == cid and fila["etapa"] == "clasificado"
+               and fila["necesita_agente"] == 1, f"caso {q3 and q3['case_id']} etapa {fila['etapa']}")
+            estado = falso.pedidos[-1]["cuerpo"]["state"]
+            ok("Jev lo juzgo sabiendo que la linea pregunto, con los mensajes de antes",
+               estado.get("assistant_question_pending") is True
+               and {"from": "assistant", "text": PREGUNTA_LINEA} in estado.get("recent_messages", [])
+               and any(v["from"] == "participant" and "revisa el pedido" in v["text"]
+                       for v in estado.get("recent_messages", [])), f"{estado}")
+
+        with tempfile.TemporaryDirectory() as home:
+            pon_llave(home)
+            llegan(home, A, [msg(SOPORTE, "Q4", "¿Que version tienen instalada?", 3, yo=True),
+                             msg(SOPORTE, "Q5", "la version 2", 1)])
+            autoriza(home)
+            r = ingiere(home)
+            q5 = caso_de_stanza(home, "Q5")
+            ok("en un grupo, la respuesta suelta a la pregunta de la linea abre caso para el agente",
+               q5 is not None and q5["etapa"] == "clasificado"
+               and fila_de(home, q5["case_id"])["necesita_agente"] == 1, f"salio {r}")
+
+        with tempfile.TemporaryDirectory() as home:
+            pon_llave(home)
+            cid = caso_respondido(home, "Q6")
+            llegan(home, A, [msg(SOPORTE, "Q7", PREGUNTA_LINEA, 12, yo=True),
+                             msg(SOPORTE, "Q8", "@duenio jaja", 10, mencion=True)])
+            ingiere(home)
+            con = db_de(home)
+            con.execute("update caso set etapa='respondido' where case_id=?", (cid,))
+            con.commit()
+            con.close()
+            llegan(home, A, [msg(SOPORTE, "Q9", "Si", 1)])
+            ingiere(home)
+            ok("si ya llego otro mensaje despues de la pregunta, el \"Si\" sigue el camino de siempre",
+               fila_de(home, cid)["etapa"] == "respondido"
+               and "assistant_question_pending" not in falso.pedidos[-1]["cuerpo"]["state"],
+               f"{fila_de(home, cid)['etapa']}")
+
+        with tempfile.TemporaryDirectory() as home:
+            pon_llave(home)
+            cid = caso_respondido(home, "QA")
+            llegan(home, A, [msg(SOPORTE, "QB", PREGUNTA_LINEA, 25 * 60, yo=True),
+                             msg(SOPORTE, "QC", "Si", 1)])
+            ingiere(home)
+            ok("una pregunta de hace mas de 24 horas ya no esta pendiente",
+               fila_de(home, cid)["etapa"] == "respondido"
+               and "assistant_question_pending" not in falso.pedidos[-1]["cuerpo"]["state"],
+               f"{fila_de(home, cid)['etapa']}")
+    finally:
+        falso.cerrar()
+        os.environ.clear()
+        os.environ.update(antes)
+
+    # Sin Jev: la respuesta tambien vuelve al caso, no abre una tarjeta aparte.
+    with tempfile.TemporaryDirectory() as home:
+        cid = caso_respondido(home, "QD")
+        llegan(home, A, [msg(SOPORTE, "QE", PREGUNTA_LINEA, 3, yo=True),
+                         msg(SOPORTE, "QF", "Si", 1)])
+        ingiere(home)
+        qf = caso_de_stanza(home, "QF")
+        ok("sin Jev la respuesta a la pregunta de la linea tambien reabre el ultimo caso",
+           qf and qf["case_id"] == cid and fila_de(home, cid)["etapa"] != "respondido",
+           f"caso {qf and qf['case_id']} etapa {fila_de(home, cid)['etapa']}")
+
+
 # ── 12c. Una rafaga de mensajes se juzga como una sola cosa ──────────────────────────
 # Visto en vivo: tres mensajes en un segundo —el enlace a una conversacion de otro
 # sistema, una nota del cliente y "Revisa este caso"— se juzgaban uno por uno. Jev vio el
@@ -4258,6 +4395,72 @@ with tempfile.TemporaryDirectory() as home:
        tablero_de(home, cid)["stage"])
 
 
+# ── 12d3. Un caso bloqueado no se traga los mensajes nuevos (atencion-casos, K1) ───────
+# Un mensaje para un chat cuyo caso abierto estaba `bloqueado` se sumaba a ese caso, que
+# nadie mira: el cliente escribia y nadie lo atendia. Ahora abre un caso nuevo enlazado al
+# bloqueado, como tras una respuesta o un trabajo, y el bloqueado sigue donde estaba.
+def bloquea(home, cid):
+    js(home, "caso", "mover", str(cid), "bloqueado", "--motivo", "sin acceso al repo",
+       "--actor", "automatizacion")
+
+
+print("\nun caso bloqueado no se traga los mensajes nuevos (K1)")
+if NODE:
+    with tempfile.TemporaryDirectory() as home:
+        llegan(home, A, [msg(PERSONA, "B1", "se cayo el sitio", 30)])
+        autoriza(home)
+        js(home, "mode", PERSONA, "borrador")
+        ingiere(home)
+        cid = caso_de_stanza(home, "B1")["case_id"]
+        bloquea(home, cid)
+        llegan(home, A, [msg(PERSONA, "B2", "sigue sin funcionar, me ayudas?", 2)])
+        ingiere(home)
+        b2 = caso_de_stanza(home, "B2")
+        ok("un directo tras un caso bloqueado abre un caso nuevo, enlazado al bloqueado",
+           b2 and b2["case_id"] != cid and fila_de(home, b2["case_id"])["relacionado"] == cid,
+           f"caso {b2 and b2['case_id']} de {cid}")
+        ok("que llega al agente", b2 and b2["case_id"] in para_el_agente(home),
+           f"{para_el_agente(home)}")
+        ok("y el bloqueado sigue bloqueado, con su mensaje y nada mas",
+           fila_de(home, cid)["etapa"] == "bloqueado"
+           and len(js(home, "caso", "ver", str(cid))[0]["mensajes"]) == 1,
+           f"{fila_de(home, cid)['etapa']}")
+
+    with tempfile.TemporaryDirectory() as home:
+        llegan(home, A, [msg(SOPORTE, "B3", "@duenio revisa el login", 30, mencion=True)])
+        autoriza(home)
+        ingiere(home)
+        cid = caso_de_stanza(home, "B3")["case_id"]
+        bloquea(home, cid)
+        llegan(home, A, [msg(SOPORTE, "B4", "alguien vio lo del login?", 2)])
+        ingiere(home)
+        b4 = caso_de_stanza(home, "B4")
+        ok("sin Jev, una linea suelta de un grupo tampoco entra al caso bloqueado: abre uno enlazado",
+           b4 and b4["case_id"] != cid and fila_de(home, b4["case_id"])["relacionado"] == cid
+           and fila_de(home, cid)["etapa"] == "bloqueado", f"caso {b4}")
+
+    falso = JevFalso(jev_segun_texto)
+    antes = dict(os.environ)
+    os.environ["WA_INBOX_JEV_ENDPOINT"] = falso.url
+    try:
+        with tempfile.TemporaryDirectory() as home:
+            pon_llave(home)
+            llegan(home, A, [msg(SOPORTE, "B5", "@duenio revisa este caso", 30, mencion=True)])
+            autoriza(home)
+            ingiere(home)
+            cid = caso_de_stanza(home, "B5")["case_id"]
+            bloquea(home, cid)
+            llegan(home, A, [msg(SOPORTE, "B6", "charla entre ustedes", 2)])
+            r = ingiere(home)
+            ok("la charla de un grupo que Jev juzgo ni entra al bloqueado ni abre caso",
+               caso_de_stanza(home, "B6") is None and r["sin_caso"] == 1
+               and len(js(home, "caso", "ver", str(cid))[0]["mensajes"]) == 1, f"salio {r}")
+    finally:
+        falso.cerrar()
+        os.environ.clear()
+        os.environ.update(antes)
+
+
 # ── Los audios se transcriben al entrar, y los adjuntos se ven en el hilo ───────────────
 # `wa-scope ingest` transcribe la nota de voz que llega con `bin/wa-transcribe` (aqui, uno
 # falso que nunca toca un modelo) y guarda el texto por mensaje: el texto que juzga Jev, el
@@ -4422,6 +4625,51 @@ else:
         ok("la proxima corrida toma los que faltaron y no repite ninguno",
            sorted(llamadas(registro)) == sorted(f"t{i}.ogg" for i in range(1, 8)),
            f"{llamadas(registro)}")
+
+
+# atencion-casos J3: una nota de voz de un grupo solo se transcribia si el chat ya tenia un
+# caso abierto. La que abria el caso nunca se transcribia, y Jev la descartaba como "solo
+# audio". El chat ya esta autorizado (si no, ingest no lo lee): se transcribe antes de juzgar.
+def audio_de_grupo(home, mid, nombre, minutos=3):
+    return msg(SOPORTE, mid, "", minutos, media="audio", ruta=archivo_media(home, nombre),
+               bytes=15)
+
+
+print("\nlos audios de un grupo se transcriben antes de juzgarlos (J3)")
+if NODE:
+    falso = JevFalso(jev_segun_texto)
+    antes = dict(os.environ)
+    os.environ["WA_INBOX_JEV_ENDPOINT"] = falso.url
+    try:
+        with tempfile.TemporaryDirectory() as home:
+            env, registro = prepara_transcriptor(home)
+            pon_llave(home)
+            llegan(home, A, [audio_de_grupo(home, "GA1", "grupo1.ogg")])
+            autoriza(home)
+            r = ingiere_con(home, env)
+            ok("la nota de voz de un grupo sin caso abierto se transcribe",
+               llamadas(registro) == ["grupo1.ogg"], f"{llamadas(registro)} {r}")
+            ok("Jev la juzga por su texto, no como solo audio",
+               falso.textos() == ["revisa este caso: dijo grupo1.ogg"], f"{falso.textos()}")
+            c = caso_de_stanza(home, "GA1")
+            ok("y el pedido que dice abre su caso",
+               c is not None and c["etapa"] == "clasificado" and c["clase"] == "card",
+               f"{c and c['etapa']} {r}")
+
+        with tempfile.TemporaryDirectory() as home:
+            env, registro = prepara_transcriptor(home)
+            pon_llave(home)
+            llegan(home, A, [audio_de_grupo(home, f"GT{i}", f"g{i}.ogg", 60 - 5 * i)
+                             for i in range(1, 8)])
+            autoriza(home)
+            r = ingiere_con(home, env)
+            ok("en un grupo el tope de cinco audios por corrida sigue",
+               len(llamadas(registro)) == 5 and r.get("audios_diferidos") == 2,
+               f"{llamadas(registro)} {r}")
+    finally:
+        falso.cerrar()
+        os.environ.clear()
+        os.environ.update(antes)
 
 print("\nlos adjuntos en el hilo y en el brief")
 if NODE:
@@ -8265,19 +8513,60 @@ if NODE:
         ok("una terminal que ya no esta deja la corrida terminada",
            corridas_agente(home)[-1]["estado"] == "terminado", f"{corridas_agente(home)}")
 
+    with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as carpeta:
+        # atencion-casos C1: el agente solto el lock y sigue trabajando (publica un documento,
+        # o el dueno le escribio en la pestana). Visto en vivo: el tick la cerraba igual, al
+        # minuto, y cortaba el trabajo a la mitad. Se cierra solo con Claude quieto.
+        orca_casos(carpeta)
+        caso_para_agente(home, "AC8")
+        tick_orca(home, carpeta)
+        js(home, "lock", "--note", "triage")
+        js(home, "unlock")
+        envejece_agente(home, 120)
+        cambia_orca(carpeta, idle=False)
+        tick_orca(home, carpeta)
+        ok("con el lock suelto pero Claude ocupado, la corrida sigue activa y la pestana abierta",
+           corridas_agente(home)[-1]["estado"] == "activo" and cerradas(carpeta) == [],
+           f"{corridas_agente(home)} {cerradas(carpeta)}")
+        cambia_orca(carpeta, idle=True)
+        tick_orca(home, carpeta)
+        ok("con el lock suelto y Claude quieto, la corrida termina y la pestana se cierra",
+           corridas_agente(home)[-1]["estado"] == "terminado"
+           and cerradas(carpeta) == ["term_worker1"], f"{corridas_agente(home)} {cerradas(carpeta)}")
+
     # El caso en un archivo (caso-en-archivo, T1): el tick le deja al agente SU caso en
-    # `casos/caso-<id>.md`, con los mensajes del caso y nada de otro caso del mismo chat
-    # (ni sus mensajes ni la respuesta que se le mando).
-    print("\nel caso en un archivo: solo lo del caso")
+    # `casos/caso-<id>.md`. Bajo "Messages of the case" van solo los mensajes del caso; lo
+    # de antes en el MISMO chat (otros casos, lo que la linea ya mando, las correcciones del
+    # dueno) va aparte, como memoria (atencion-casos, M1). De otro chat, nada.
+    print("\nel caso en un archivo: solo lo del caso, y la memoria del chat aparte")
+
+    def seccion(texto, titulo):
+        """El cuerpo de la seccion `titulo` del archivo: hasta el proximo `## `."""
+        if titulo not in texto:
+            return ""
+        resto = texto.split(titulo, 1)[1]
+        return resto.split("\n## ", 1)[0]
+
+    MENSAJES_DEL_CASO = "## Messages of the case"
+    MEMORIA = "## Earlier in this chat (memory, not part of this case)"
     with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as carpeta:
         orca_casos(carpeta)
         llegan(home, A, [msg(CHAT, "CF0", "Otro tema: cambiar el logo del sitio", 9),
+                         msg(OPERACIONES, "CFO", "Mensaje de otro chat que no va", 8),
                          msg(CHAT, "CF1", PEDIDO, 6),
-                         msg(CHAT, "CFX", "Respuesta al tema del logo", 5, yo=True),
+                         msg(CHAT, "CFX", "Respuesta al tema del logo: "
+                             "https://docs.example.com/logo-v2", 5, yo=True),
                          msg(CHAT, "CF2", "Adjunto la captura del reporte", 4, media="image",
                              bytes=2048, ruta="/srv/ejemplo/media/captura-1.jpg")])
         otro = js(home, "caso", "crear", "--chat", CHAT, "--stanza", "CF0",
                   "--actor", "automatizacion")[0]["case_id"]
+        con = db_de(home)
+        con.execute("insert into caso_evento (case_id, de, a, actor, detalle, at) values "
+                    "(?, 'decision', 'clasificado', 'dueno', ?, ?)",
+                    (otro, "Usa el formato del reporte anterior",
+                     time.strftime("%Y-%m-%d %H:%M:%S")))
+        con.commit()
+        con.close()
         js(home, "caso", "mover", str(otro), "cerrado", "--motivo", "otro tema",
            "--actor", "dueno")
         cid = caso_para_agente(home, "CF1")
@@ -8296,8 +8585,20 @@ if NODE:
         ok("con cada mensaje del caso tal cual, y su adjunto con la ruta",
            PEDIDO in texto and "Adjunto la captura del reporte" in texto
            and "/srv/ejemplo/media/captura-1.jpg" in texto, texto[:1500])
-        ok("y nada de otro caso: ni su mensaje ni la respuesta que se le mando",
-           "cambiar el logo" not in texto and "Respuesta al tema del logo" not in texto,
+        del_caso, memoria = seccion(texto, MENSAJES_DEL_CASO), seccion(texto, MEMORIA)
+        ok("bajo los mensajes del caso, nada de otro caso: ni su mensaje ni lo que se le mando",
+           PEDIDO in del_caso and "cambiar el logo" not in del_caso
+           and "Respuesta al tema del logo" not in del_caso, del_caso[:1500])
+        ok("la memoria del chat dice que es contexto y no parte del caso",
+           "not part of this case" in memoria and "do not repeat" in memoria, memoria[:800])
+        ok("con el caso anterior del chat y lo que la linea ya mando, con el enlace tal cual",
+           f"#{otro}" in memoria and "cambiar el logo" in memoria
+           and "https://docs.example.com/logo-v2" in memoria
+           and "the line (us)" in memoria, memoria[:1500])
+        ok("y la correccion que el dueno dio en un caso anterior del mismo chat",
+           "Usa el formato del reporte anterior" in memoria and f"#{otro}" in memoria,
+           memoria[:1500])
+        ok("de otro chat no hay nada, en ninguna parte", "otro chat que no va" not in texto,
            texto[:1500])
         ok("con los niveles de aprobacion del chat",
            "Approval levels" in texto, texto[:1500])
@@ -8312,9 +8613,11 @@ if NODE:
         cid = trabajo_firmado(home, "CD1")
         tick_orca(home, carpeta)
         spec = brief(carpeta)
-        ok("el brief del despacho lleva el caso y lo aprobado, y nada de otro caso",
+        ok("el brief del despacho lleva el caso y lo aprobado, y nada de otro caso en sus mensajes",
            f"#{cid}" in spec and PEDIDO in spec and TRABAJO in spec
-           and "Respuesta al tema del logo" not in spec, spec[:1500])
+           and "Respuesta al tema del logo" not in seccion(spec, MENSAJES_DEL_CASO), spec[:1500])
+        ok("lo que la linea ya mando al chat va en la memoria del brief",
+           "Respuesta al tema del logo" in seccion(spec, MEMORIA), spec[:2500])
         ok("con la linea de siempre al agente del proyecto",
            (bandera((lanzamientos(carpeta) or [[]])[0], "--text") or "")
            == f"Read {ruta_brief(carpeta)} and follow it exactly.", f"{lanzamientos(carpeta)}")
@@ -10113,6 +10416,10 @@ if NODE:
                                               "ask him directly in the reply",
                                               "never write a credential value")),
                    archivo[:1500])
+                # atencion-casos O1: su orden es la decision; no se le pregunta otra vez.
+                ok(f"el archivo y el brief dicen que su orden es la aprobacion: {nombre}",
+                   ORDEN_DEL_DUENO in " ".join(archivo.split())
+                   and ORDEN_DEL_DUENO in " ".join(brief.split()), archivo[:2500])
                 # En un grupo leen otros: se le entrega ahi lo que pidio ahi, nada mas.
                 ok(f"el archivo del caso avisa que en un grupo leen otros solo si es grupo: {nombre}",
                    ("others read this group" in archivo) == (s == "O2"), archivo[:1500])
@@ -19134,6 +19441,141 @@ if NODE:
         finally:
             os.environ.clear()
             os.environ.update(env_antes)
+
+
+# ── La memoria del chat respeta el tope (atencion-casos, M1) ─────────────────────────
+print("\nla memoria del chat se recorta antes que los mensajes del caso (M1)")
+with tempfile.TemporaryDirectory() as home:
+    ws = carga_wa_scope(home)
+    tope = ws.TOPE_BRIEF
+    ws.TOPE_BRIEF = 3000
+    try:
+        memoria = {"casos": [f"- #{n} (respondido): caso viejo {n}" for n in range(5)],
+                   "correcciones": ["- [2026-10-01 09:00:00] #1: usa el formato nuevo"],
+                   "mensajes": [f"[2026-10-1{n % 10} 09:00] the line (us):\n> " + "m" * 300
+                                for n in range(20)]}
+        bloques = [f"[2026-10-15 09:0{n}] Ana:\n> pedido del caso {n}" for n in range(5)]
+        texto = ws.mensajes_con_tope(["# caso"], bloques, ["## cola"], "## Messages of the case",
+                                     memoria)
+        ok("con la memoria grande, cabe en el tope recortando la memoria",
+           len(texto) <= 3000 and "older items of this memory left out" in texto, len(texto))
+        ok("y los mensajes del caso quedan enteros",
+           all(f"pedido del caso {n}" in texto for n in range(5))
+           and "earlier messages left out" not in texto, texto[-800:])
+        ok("lo primero que se va son los mensajes viejos de la memoria, no sus casos",
+           "caso viejo 0" in texto and "usa el formato nuevo" in texto, texto[:1500])
+    finally:
+        ws.TOPE_BRIEF = tope
+
+# ── La revision del borrador ve la evidencia del agente (atencion-casos, R1) ──────────
+# Jev revisaba solo el texto: "actualizamos el documento (enlace)" quedaba retenido como un
+# estado sin verificar aunque el agente hizo el trabajo y lo reporto. Ahora `wa-send
+# --evidence` le pasa lo que el agente reporto (`caso propuesta --evidencia`, o el --resumen
+# de `caso resultado`) y el mensaje que se contesta; sin evidencia, se retiene como antes.
+print("\njev: la revision del borrador ve la evidencia del agente (R1)")
+# `jev` ya no es el cliente a esta altura del archivo (una prueba lo reusa): uno propio.
+_jev = carga_jev()
+_estado = _jev.estado_borrador("Ya actualizamos el documento", evidencia="Actualizado: "
+                              "https://docs.example.com/d1 token: ghp_abcdefghijklmnop1234")
+ok("con evidencia, el estado del borrador la lleva como work_reported_by_the_agent",
+   "https://docs.example.com/d1" in (_estado.get("work_reported_by_the_agent") or ""),
+   f"{_estado}")
+ok("enmascarada como todo lo demas",
+   "ghp_abcdefghijklmnop1234" not in json.dumps(_estado), f"{_estado}")
+ok("sin evidencia el estado no la inventa",
+   "work_reported_by_the_agent" not in _jev.estado_borrador("Ya quedo"))
+_estado_q = _jev.preguntas_borrador()["states_status_not_verified"]["instructions"]
+ok("la pregunta del estado sin verificar acepta lo que respalda work_reported_by_the_agent",
+   "work_reported_by_the_agent" in _estado_q and "counts as shown by the state" in _estado_q,
+   _estado_q)
+t = Transporte(jev_dice())
+_jev.revisa_borrador("Ya quedo", LLAVE, t, evidencia="commit abc1234")
+ok("revisa_borrador manda la evidencia que recibe",
+   t.pedidos[0]["cuerpo"]["state"].get("work_reported_by_the_agent") == "commit abc1234",
+   f"{t.pedidos[0]['cuerpo']['state']}")
+
+
+def jev_segun_evidencia(cuerpo):
+    """Un Jev que retiene "ya quedo actualizado" salvo que el estado traiga la evidencia."""
+    estado = cuerpo["state"]
+    if "message_to_evaluate" in estado:
+        return jev_segun_texto(cuerpo)
+    if "quedo actualizado" in estado.get("reply_to_review", "") \
+            and not estado.get("work_reported_by_the_agent"):
+        return 200, respuestas(cuerpo["questions"], states_status_not_verified=0.9)
+    return 200, respuestas(cuerpo["questions"])
+
+
+def estados_de_borrador(falso):
+    return [p["cuerpo"]["state"] for p in falso.pedidos
+            if "reply_to_review" in p["cuerpo"]["state"]]
+
+
+print("\nel envio pasa la evidencia del caso a la revision (R1)")
+if NODE:
+    falso = JevFalso(jev_segun_evidencia)
+    antes = dict(os.environ)
+    os.environ["WA_INBOX_JEV_ENDPOINT"] = falso.url
+    try:
+        with tempfile.TemporaryDirectory() as home:
+            pon_llave(home)
+            llegan(home, A, [msg(PERSONA, "EV1", "revisa este caso: el documento del plan", 40)])
+            js(home, "agent", "Agente De Ejemplo")
+            js(home, "set", PERSONA, "--provider", "ninguno", "--mode", "responder")
+            js(home, "config", "ack", "off")
+            sidecar = SidecarFalso(home)
+            try:
+                ingiere(home)
+                cid = str(caso_de_stanza(home, "EV1")["case_id"])
+                js(home, "caso", "clasificar", cid, "--clase", "card", "--prioridad", "none",
+                   "--actor", "agente")
+                # `propone` de arriba ya no es la de la propuesta a esta altura del archivo.
+                js(home, "caso", "propuesta", cid, "--tipo", "responder", "--respuesta",
+                   "El documento ya quedo actualizado.", "--actor", "agente")
+                tick(home)
+                ok("sin evidencia, el estado que afirma lo hecho se retiene como siempre",
+                   not sidecar.entregados and estados_de_borrador(falso)
+                   and "work_reported_by_the_agent" not in estados_de_borrador(falso)[-1],
+                   f"{sidecar.entregados} {estados_de_borrador(falso)[-1:]}")
+                ok("y la revision ya sabe que mensaje contesta",
+                   "el documento del plan" in estados_de_borrador(falso)[-1]
+                   .get("message_being_answered", ""), f"{estados_de_borrador(falso)[-1:]}")
+                js(home, "caso", "propuesta", cid, "--tipo", "responder", "--respuesta",
+                   "El documento ya quedo actualizado: https://docs.example.com/plan-v2",
+                   "--evidencia", "Actualice el plan: https://docs.example.com/plan-v2",
+                   "--actor", "agente")
+                tick(home)
+                ok("con la evidencia del agente, Jev la ve y la respuesta sale",
+                   len(sidecar.entregados) == 1
+                   and "https://docs.example.com/plan-v2" in estados_de_borrador(falso)[-1]
+                   .get("work_reported_by_the_agent", ""),
+                   f"{sidecar.entregados} {estados_de_borrador(falso)[-1:]}")
+            finally:
+                sidecar.cerrar()
+
+        falso.pedidos.clear()
+        with tempfile.TemporaryDirectory() as home:
+            pon_llave(home)
+            linea_lista(home, modo_persona="responder")
+            acepta_proyectos(home, "alfa-demo")
+            js(home, "config", "ack", "off")
+            cid = trabajo_firmado(home, "EV2")
+            sidecar = SidecarFalso(home)
+            try:
+                js(home, "caso", "resultado", cid, "--estado", "resuelto", "--actor",
+                   "trabajador", "--resumen", "Corregi el reporte: commit abc1234",
+                   "--respuesta", "El reporte ya quedo actualizado, revisalo por favor.")
+                tick(home)
+                ok("el --resumen de `caso resultado` llega a la revision como evidencia",
+                   estados_de_borrador(falso)
+                   and "commit abc1234" in estados_de_borrador(falso)[-1]
+                   .get("work_reported_by_the_agent", ""), f"{estados_de_borrador(falso)}")
+            finally:
+                sidecar.cerrar()
+    finally:
+        falso.cerrar()
+        os.environ.clear()
+        os.environ.update(antes)
 
 
 print(f"\n{pruebas - len(fallos)}/{pruebas} en verde")

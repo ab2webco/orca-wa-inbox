@@ -69,7 +69,10 @@ wrong with what it asked and not a generic failure at the end:
                   promised date or delivery keeps it as a DRAFT for the owner. With the
                   Jev key set, Jev reviews it too and can only ADD reasons: a status
                   nobody verified, or Jev not answering, also keeps it. Neither can
-                  ever send a reply; only the owner's approval can.
+                  ever send a reply; only the owner's approval can. --evidence
+                  gives Jev what the agent reported it did (a link, a file, a
+                  commit) and --answers the message being answered: a status
+                  backed by that evidence is not held as unverified.
 
 ABOUT `borrador`. It used to mean "leaves the text typed in the chat, unsent", and that
 was only possible while the agent drove a screen: it typed into the WhatsApp window and
@@ -547,15 +550,18 @@ def informa(salida_json, dato, linea):
         print(linea)
 
 
-def revision_jev(texto, tono=None, linea=None):
+def revision_jev(texto, tono=None, linea=None, evidencia=None, pregunta=None):
     """Lo que frena el envio segun Jev: None sin llave (manda el modo, como siempre), una
     lista vacia si el texto pasa, y los motivos si no. Un error es un motivo. `tono` es el
     del chat o el global (T22.5): con ese registro se juzga. `linea` es la de la
-    conversacion: con Jev apagado en ella, tambien None (todo-por-linea, P6)."""
+    conversacion: con Jev apagado en ella, tambien None (todo-por-linea, P6). `evidencia`
+    y `pregunta` (atencion-casos, R1): lo que el agente reporto que hizo y el mensaje que
+    se contesta; Jev los lee junto con la respuesta."""
     clave = wa_jev.llave()
     if not clave or not jev_en_linea(linea):
         return None
-    revision = wa_jev.revisa_borrador(texto, clave, tono=tono)
+    revision = wa_jev.revisa_borrador(texto, clave, pregunta=pregunta, tono=tono,
+                                      evidencia=evidencia)
     if revision is None:
         return [JEV_NO_CONTESTA]
     return list(revision["flags"])
@@ -832,6 +838,12 @@ def main():
                     help="withdraw a draft that was waiting: it can no longer be approved "
                          "or sent (a request already sent is not touched)")
     ap.add_argument("--reason", default="", help="why, with --cancel (kept with the row)")
+    ap.add_argument("--evidence", metavar="TEXT",
+                    help="what proves the work this reply says was done (a link, a file, a "
+                         "commit, test output). Jev's review reads it with the reply: a "
+                         "status backed by it is not held as unverified")
+    ap.add_argument("--answers", metavar="TEXT",
+                    help="the message this reply answers, for Jev's review")
     ap.add_argument("--json", action="store_true", help="machine-readable output")
     a = ap.parse_args()
 
@@ -940,8 +952,8 @@ def main():
     else:
         piso = revision_piso(sin_firma, niv)
         tono = (fila.get("tone") or "").strip() or ajuste("tone", linea=fila["account"])
-        jev = jev_permitido(revision_jev(a.text, tono, fila["account"]) if jev_hace_falta(niv)
-                            else None, niv)
+        jev = jev_permitido(revision_jev(a.text, tono, fila["account"], a.evidence, a.answers)
+                            if jev_hace_falta(niv) else None, niv)
     frenado = motivos_de(piso, jev)
     if frenado:
         deja_borrador(con, fila, a.text, req_id, a.json, pedia_envio=True,
