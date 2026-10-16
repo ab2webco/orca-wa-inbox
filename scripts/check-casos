@@ -19446,6 +19446,112 @@ with tempfile.TemporaryDirectory() as home:
     finally:
         ws.TOPE_BRIEF = tope
 
+# ── La revision del borrador ve la evidencia del agente (atencion-casos, R1) ──────────
+# Jev revisaba solo el texto: "actualizamos el documento (enlace)" quedaba retenido como un
+# estado sin verificar aunque el agente hizo el trabajo y lo reporto. Ahora `wa-send
+# --evidence` le pasa lo que el agente reporto (`caso propuesta --evidencia`, o el --resumen
+# de `caso resultado`) y el mensaje que se contesta; sin evidencia, se retiene como antes.
+print("\njev: la revision del borrador ve la evidencia del agente (R1)")
+_estado = jev.estado_borrador("Ya actualizamos el documento", evidencia="Actualizado: "
+                              "https://docs.example.com/d1 token: ghp_abcdefghijklmnop1234")
+ok("con evidencia, el estado del borrador la lleva como work_reported_by_the_agent",
+   "https://docs.example.com/d1" in (_estado.get("work_reported_by_the_agent") or ""),
+   f"{_estado}")
+ok("enmascarada como todo lo demas",
+   "ghp_abcdefghijklmnop1234" not in json.dumps(_estado), f"{_estado}")
+ok("sin evidencia el estado no la inventa",
+   "work_reported_by_the_agent" not in jev.estado_borrador("Ya quedo"))
+_estado_q = jev.preguntas_borrador()["states_status_not_verified"]["instructions"]
+ok("la pregunta del estado sin verificar acepta lo que respalda work_reported_by_the_agent",
+   "work_reported_by_the_agent" in _estado_q and "counts as shown by the state" in _estado_q,
+   _estado_q)
+t = Transporte(jev_dice())
+jev.revisa_borrador("Ya quedo", LLAVE, t, evidencia="commit abc1234")
+ok("revisa_borrador manda la evidencia que recibe",
+   t.pedidos[0]["cuerpo"]["state"].get("work_reported_by_the_agent") == "commit abc1234",
+   f"{t.pedidos[0]['cuerpo']['state']}")
+
+
+def jev_segun_evidencia(cuerpo):
+    """Un Jev que retiene "ya quedo actualizado" salvo que el estado traiga la evidencia."""
+    estado = cuerpo["state"]
+    if "message_to_evaluate" in estado:
+        return jev_segun_texto(cuerpo)
+    if "quedo actualizado" in estado.get("reply_to_review", "") \
+            and not estado.get("work_reported_by_the_agent"):
+        return 200, respuestas(cuerpo["questions"], states_status_not_verified=0.9)
+    return 200, respuestas(cuerpo["questions"])
+
+
+def estados_de_borrador(falso):
+    return [p["cuerpo"]["state"] for p in falso.pedidos
+            if "reply_to_review" in p["cuerpo"]["state"]]
+
+
+print("\nel envio pasa la evidencia del caso a la revision (R1)")
+if NODE:
+    falso = JevFalso(jev_segun_evidencia)
+    antes = dict(os.environ)
+    os.environ["WA_INBOX_JEV_ENDPOINT"] = falso.url
+    try:
+        with tempfile.TemporaryDirectory() as home:
+            pon_llave(home)
+            llegan(home, A, [msg(PERSONA, "EV1", "revisa este caso: el documento del plan", 40)])
+            js(home, "agent", "Agente De Ejemplo")
+            js(home, "set", PERSONA, "--provider", "ninguno", "--mode", "responder")
+            js(home, "config", "ack", "off")
+            sidecar = SidecarFalso(home)
+            try:
+                ingiere(home)
+                cid = str(caso_de_stanza(home, "EV1")["case_id"])
+                js(home, "caso", "clasificar", cid, "--clase", "card", "--prioridad", "none",
+                   "--actor", "agente")
+                v1 = propone(home, cid, "El documento ya quedo actualizado.")
+                tick(home)
+                ok("sin evidencia, el estado que afirma lo hecho se retiene como siempre",
+                   not sidecar.entregados and estados_de_borrador(falso)
+                   and "work_reported_by_the_agent" not in estados_de_borrador(falso)[-1],
+                   f"{sidecar.entregados} {estados_de_borrador(falso)[-1:]}")
+                ok("y la revision ya sabe que mensaje contesta",
+                   "el documento del plan" in estados_de_borrador(falso)[-1]
+                   .get("message_being_answered", ""), f"{estados_de_borrador(falso)[-1:]}")
+                js(home, "caso", "propuesta", cid, "--tipo", "responder", "--respuesta",
+                   "El documento ya quedo actualizado: https://docs.example.com/plan-v2",
+                   "--evidencia", "Actualice el plan: https://docs.example.com/plan-v2",
+                   "--actor", "agente")
+                tick(home)
+                ok("con la evidencia del agente, Jev la ve y la respuesta sale",
+                   len(sidecar.entregados) == 1
+                   and "https://docs.example.com/plan-v2" in estados_de_borrador(falso)[-1]
+                   .get("work_reported_by_the_agent", ""),
+                   f"{sidecar.entregados} {estados_de_borrador(falso)[-1:]}")
+            finally:
+                sidecar.cerrar()
+
+        falso.pedidos.clear()
+        with tempfile.TemporaryDirectory() as home:
+            pon_llave(home)
+            linea_lista(home, modo_persona="responder")
+            acepta_proyectos(home, "alfa-demo")
+            js(home, "config", "ack", "off")
+            cid = trabajo_firmado(home, "EV2")
+            sidecar = SidecarFalso(home)
+            try:
+                js(home, "caso", "resultado", cid, "--estado", "resuelto", "--actor",
+                   "trabajador", "--resumen", "Corregi el reporte: commit abc1234",
+                   "--respuesta", "El reporte ya quedo actualizado, revisalo por favor.")
+                tick(home)
+                ok("el --resumen de `caso resultado` llega a la revision como evidencia",
+                   estados_de_borrador(falso)
+                   and "commit abc1234" in estados_de_borrador(falso)[-1]
+                   .get("work_reported_by_the_agent", ""), f"{estados_de_borrador(falso)}")
+            finally:
+                sidecar.cerrar()
+    finally:
+        falso.cerrar()
+        os.environ.clear()
+        os.environ.update(antes)
+
 
 print(f"\n{pruebas - len(fallos)}/{pruebas} en verde")
 if fallos:

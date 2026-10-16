@@ -59,7 +59,8 @@ contact names, the Jev service model itself.
   (check-casos T8 case-file section RED 4 FALLA, GREEN 241/241; size-cap check added after, 3/3)
 - [x] O1 Owner order executes without a second ask.
   (check-harness RED 2 files, GREEN; check-casos owner-case section RED 3 FALLA, GREEN 29/29)
-- [ ] R1 Draft review sees the agent's evidence.
+- [x] R1 Draft review sees the agent's evidence.
+  (check-casos R1 RED TypeError + 1 FALLA + unknown --evidencia, GREEN 9/9; envio 142/142)
 - [ ] Z1 Release checks and version.
 
 ## Acceptance criteria

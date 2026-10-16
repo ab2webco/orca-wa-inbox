@@ -4603,8 +4603,8 @@ def cmd_caso_propuesta(con, a):
     caso_toma(con)
     caso = caso_de(con, a.id)
     propuesta = {"tipo": a.tipo}
-    for campo in ("respuesta", "instrucciones", "repo"):
-        valor = (getattr(a, campo) or "").strip()
+    for campo in ("respuesta", "instrucciones", "repo", "evidencia"):
+        valor = (getattr(a, campo, None) or "").strip()
         if valor:
             propuesta[campo] = valor
     falta = CAMPO_DE_TIPO.get(a.tipo)
@@ -10830,12 +10830,17 @@ def tick_frena(con, case_id, detalle):
         raise
 
 
-def tick_envia(caso, texto, req):
+def tick_envia(caso, texto, req, evidencia=None, pregunta=None):
     """`wa-send --send` con el id del caso: (codigo, detalle). `None` es enviado. Nunca
-    devuelve el texto del mensaje: lo que se lee de stderr es el codigo y su detalle."""
+    devuelve el texto del mensaje: lo que se lee de stderr es el codigo y su detalle.
+    `evidencia` y `pregunta` van a la revision de Jev (atencion-casos, R1)."""
     args = [WA_SEND, f"--id={req}"]
     if linea_de_envio(caso):
         args.append(f"--line={linea_de_envio(caso)}")
+    if (evidencia or "").strip():
+        args.append(f"--evidence={evidencia.strip()}")
+    if (pregunta or "").strip():
+        args.append(f"--answers={pregunta.strip()}")
     # Una respuesta a otro chat sale a ESE chat (respuesta-otro-chat), por SU linea si es de
     # otra (la orden del dueno, ordenes-del-dueno); `wa-send` le aplica el piso y Jev con los
     # niveles de alla.
@@ -10855,6 +10860,39 @@ def tick_envia(caso, texto, req):
     if "no agent name is configured" in primera:
         return "send-no-signature", primera[:200]
     return "fallo", primera[:200]
+
+
+def evidencia_de_respuesta(con, caso):
+    """Lo que el agente reporto que hizo para la respuesta vigente del caso (R1), o None: la
+    `--evidencia` de su propuesta, o el --resumen del `caso resultado` que trajo esa misma
+    respuesta. Nunca el resumen de otra cosa: el del caso tambien lo pisa una reapertura con
+    el texto del cliente."""
+    propuesta = _propuesta_dict(caso) or {}
+    if (propuesta.get("evidencia") or "").strip():
+        return propuesta["evidencia"]
+    respuesta = propuesta.get("respuesta")
+    if not respuesta:
+        return None
+    for informe in reversed(informes_del_caso(con, caso["case_id"])):
+        if informe.get("respuesta") == respuesta and (informe.get("resumen") or "").strip():
+            return informe["resumen"]
+    # Sin despacho registrado: el --resumen quedo en el caso con el mismo movimiento a
+    # `listo` que trajo esta version de la respuesta (`cmd_caso_resultado`).
+    listo = con.execute("select detalle from caso_evento where case_id=? and a='listo' and "
+                        "(de is null or de <> 'listo') order by id desc limit 1",
+                        (caso["case_id"],)).fetchone()
+    if (listo and caso.get("propuesta_version") and (caso.get("resumen") or "").strip()
+            and listo["detalle"] == f"responder {caso['propuesta_version']}"):
+        return caso["resumen"]
+    return None
+
+
+def mensaje_respondido(con, caso):
+    """El ultimo mensaje del caso que no es de la linea: lo que la respuesta contesta (R1).
+    None sin almacen o sin mensajes."""
+    hilo = caso_hilo(con, caso, stanzas_de_caso(con, caso["case_id"])) or []
+    return next((m["text"] for m in reversed(hilo)
+                 if m.get("en_caso") and not m["from_me"] and (m["text"] or "").strip()), None)
 
 
 # ── La aprobacion por WhatsApp (T14) ─────────────────────────────────────────────────────
@@ -13389,7 +13427,8 @@ def tick_caso(con, caso, texto, estados, resumen):
         # le cuenta al dueno (T14).
         anota_espera_respuesta(con, caso, frenos_de_regla(con, caso_de(con, cid))[0])
         return
-    codigo, detalle = tick_envia(caso, texto, req)
+    codigo, detalle = tick_envia(caso, texto, req, evidencia_de_respuesta(con, caso),
+                                 mensaje_respondido(con, caso))
     if codigo is None:
         if tick_cierra(con, cid, "respondido", f"enviado {req}"):
             resumen["enviados"] += 1
@@ -16716,6 +16755,9 @@ def main():
     c.add_argument("--respuesta", help="the reply text (required for responder)")
     c.add_argument("--instrucciones", help="the work to do (required for trabajar)")
     c.add_argument("--repo", help="where the work happens")
+    c.add_argument("--evidencia", help="when the reply says work was done: what proves it (a "
+                                       "link, a file, a commit). The plugin's review reads it "
+                                       "with the reply, so a status it backs is not held")
     c.add_argument("--chat", help="send the reply (or the job's final reply) to ANOTHER chat "
                                   "instead of the case's: its JID, phone or name. Only for a "
                                   "case of the owner or of a Super admin of the conversation, "

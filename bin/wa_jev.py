@@ -278,7 +278,10 @@ NOUL_BORRADOR = {
                                   "message, that it is looking into it now, that it will "
                                   "check something, or that the case was passed to a "
                                   "person, describes its own work on the case and is "
-                                  "not a status claim.",
+                                  "not a status claim. A status backed by "
+                                  "work_reported_by_the_agent (what the assistant "
+                                  "reported it did, with its evidence) counts as shown "
+                                  "by the state.",
     "contains_credential": "Does reply_to_review contain a password, a token, an API key "
                            "or another secret value, including a placeholder such as "
                            "<REDACTED_SECRET> that stands for one?",
@@ -400,15 +403,21 @@ def estado_mensaje(m):
 REGISTRO_DEFECTO = "neutral Latin American Spanish, no voseo"
 
 
-def estado_borrador(texto, pregunta=None, tono=None):
+def estado_borrador(texto, pregunta=None, tono=None, evidencia=None):
     """T22.5: el borrador se juzga con el tono del chat (o el global), no con un registro
-    fijo en el codigo: un chat donde el dueno tutea no es un error de registro."""
+    fijo en el codigo: un chat donde el dueno tutea no es un error de registro.
+
+    `evidencia` (atencion-casos, R1): lo que el agente reporto que hizo, con su prueba (un
+    enlace, un commit). Sin ella, "ya quedo actualizado" no tiene nada que lo respalde."""
     tono = (tono or "").strip()
-    return {"note": NOTA,
-            "expected_register": recorta(mask(tono), 400) if tono else REGISTRO_DEFECTO,
-            "message_being_answered": recorta(mask(pregunta), 600) if pregunta else
-            "(none: this message does not answer a specific earlier message)",
-            "reply_to_review": recorta(mask(texto or ""), 1200)}
+    estado = {"note": NOTA,
+              "expected_register": recorta(mask(tono), 400) if tono else REGISTRO_DEFECTO,
+              "message_being_answered": recorta(mask(pregunta), 600) if pregunta else
+              "(none: this message does not answer a specific earlier message)",
+              "reply_to_review": recorta(mask(texto or ""), 1200)}
+    if (evidencia or "").strip():
+        estado["work_reported_by_the_agent"] = recorta(mask(evidencia.strip()), 1500)
+    return estado
 
 
 # ── El transporte ────────────────────────────────────────────────────────────────────
@@ -535,12 +544,13 @@ def juzga_mensaje(m, clave, transporte=None):
             "needs_agent": bool(agente and not skip and "credential" not in excepciones)}
 
 
-def revisa_borrador(texto, clave, transporte=None, pregunta=None, tono=None):
+def revisa_borrador(texto, clave, transporte=None, pregunta=None, tono=None, evidencia=None):
     """La revision de un texto que va a salir por WhatsApp, o None (error, timeout, sin
     llave). Cualquier bandera es una excepcion: quien llama lo deja como borrador. `tono`
-    es el del chat (o el global): el registro con que se juzga."""
-    r = consulta(clave, estado_borrador(texto, pregunta, tono), preguntas_borrador(),
-                 transporte)
+    es el del chat (o el global): el registro con que se juzga. `evidencia`, lo que el
+    agente reporto que hizo (R1)."""
+    r = consulta(clave, estado_borrador(texto, pregunta, tono, evidencia),
+                 preguntas_borrador(), transporte)
     if r is None:
         return None
     scores = puntajes(r["answers"], NOUL_BORRADOR)
