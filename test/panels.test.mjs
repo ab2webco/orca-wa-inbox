@@ -7742,6 +7742,79 @@ await seccion(async () => {
     guardada.doc.getElementById('pq-hours').value)
 })
 
+console.log('\nconfig.html — seguimiento-casos S5: los plazos del seguimiento')
+await seccion(async () => {
+  const { doc, storage } = await montar('config.html', {}, 'es-419')
+  await espera()
+  doc.getElementById('tab-aprobacion').click()
+  await espera(); await espera()
+  const CAMPOS = [['fu-us', '30', '1440'], ['fu-customer', '24', '168'], ['fu-close', '72', '720'],
+    ['fu-done', '48', '720']]
+  ok('los cuatro campos existen en Su aprobacion, enteros desde 1 y con su tope',
+    CAMPOS.every(([id, , max]) => {
+      const c = doc.getElementById(id)
+      return c && c.closest('#view-aprobacion') && c.type === 'number' && c.min === '1' &&
+        c.max === max && c.step === '1'
+    }), CAMPOS.map(([id]) => String(!!doc.getElementById(id))).join())
+  ok('sin nada guardado muestran 30, 24, 72 y 48',
+    CAMPOS.every(([id, def]) => doc.getElementById(id).value === def),
+    CAMPOS.map(([id]) => doc.getElementById(id).value).join())
+  ok('cada uno con su etiqueta, y la tarjeta con una pista',
+    CAMPOS.every(([id]) => (doc.querySelector(`label[for="${id}"]`)?.textContent || '').trim().length > 3) &&
+    /cliente/i.test(doc.getElementById('fu-help')?.textContent || ''),
+    doc.getElementById('fu-help')?.textContent)
+  escribir(doc, 'fu-us', '45')
+  escribir(doc, 'fu-customer', '12')
+  escribir(doc, 'fu-close', '96')
+  escribir(doc, 'fu-done', '24')
+  doc.getElementById('save-follow-up').click()
+  await espera(); await espera()
+  ok('guardar escribe UNA clave con los cuatro plazos en texto',
+    JSON.stringify(storage.followUp) ===
+      JSON.stringify({ usMinutes: '45', customerHours: '12', closeHours: '96', doneHours: '24' }),
+    JSON.stringify(storage.followUp))
+  for (const [id, malo] of [['fu-us', '0'], ['fu-us', '1441'], ['fu-customer', '2.5'],
+    ['fu-customer', '169'], ['fu-close', ''], ['fu-done', 'dos dias'], ['fu-close', '12']]) {
+    escribir(doc, id, malo)
+    doc.getElementById('save-follow-up').click()
+    await espera(); await espera()
+    ok(`${id} = "${malo}" no se guarda y lo dice`, storage.followUp.usMinutes === '45' &&
+      storage.followUp.closeHours === '96' &&
+      doc.getElementById('said-follow-up').className.includes('bad'),
+      `${JSON.stringify(storage.followUp)} ${doc.getElementById('said-follow-up').textContent}`)
+    escribir(doc, id, { 'fu-us': '45', 'fu-customer': '12', 'fu-close': '96', 'fu-done': '24' }[id])
+  }
+  const guardada = await montar('config.html', { followUp: { usMinutes: '20', customerHours: '6',
+    closeHours: '48', doneHours: '12' } }, 'es-419')
+  await espera()
+  guardada.doc.getElementById('tab-aprobacion').click()
+  await espera(); await espera()
+  ok('al abrir la pestana pinta los guardados',
+    ['fu-us', 'fu-customer', 'fu-close', 'fu-done'].map((id) => guardada.doc.getElementById(id).value)
+      .join() === '20,6,48,12',
+    ['fu-us', 'fu-customer', 'fu-close', 'fu-done'].map((id) => guardada.doc.getElementById(id).value).join())
+  const sucio = await montar('config.html', { followUp: { usMinutes: 'magia', customerHours: '0' } },
+    'es-419')
+  await espera()
+  sucio.doc.getElementById('tab-aprobacion').click()
+  await espera(); await espera()
+  ok('lo que falta o no sirve se pinta con el de fabrica',
+    ['fu-us', 'fu-customer', 'fu-close', 'fu-done'].map((id) => sucio.doc.getElementById(id).value)
+      .join() === '30,24,72,48',
+    ['fu-us', 'fu-customer', 'fu-close', 'fu-done'].map((id) => sucio.doc.getElementById(id).value).join())
+})
+await seccion(async () => {
+  const { window } = await montar('config.html')
+  const S = window.STRINGS
+  const nuevas = ['fuLegend', 'fuUsLabel', 'fuCustomerLabel', 'fuCloseLabel', 'fuDoneLabel',
+    'fuHelp', 'fuRange', 'fuOrder']
+  const faltan = nuevas.filter((k) => !S.es[k] || !S.en[k])
+  ok('los textos del seguimiento existen en espanol y en ingles', faltan.length === 0,
+    `faltan = ${JSON.stringify(faltan)}`)
+  const sinPt = nuevas.filter((k) => !S.pt[k] || S.pt[k] === S.en[k])
+  ok('y en portugues propio', sinPt.length === 0, `sin portugues = ${JSON.stringify(sinPt)}`)
+})
+
 console.log('\nconfig.html — proyectos-por-chat (M6): los textos nuevos en los tres idiomas')
 await seccion(async () => {
   const { window } = await montar('config.html')

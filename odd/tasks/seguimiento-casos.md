@@ -56,7 +56,7 @@ Out of scope: per-chat business hours (the stored `hours` stays unused).
 - [x] S2 Scheduled review. RED: `seguimiento S2` 12 FALLA, then E_STAGE (no review, no cancel, no `seguimientos` count). GREEN: 24/24.
 - [x] S3 Thanks after a final reply closes the case. RED: `seguimiento S3` 4 FALLA (case stayed respondido). GREEN: 6/6.
 - [x] S4 Board shows the wait and the mark. RED: `seguimiento S4` 9 FALLA and panels 21 FALLA (no `reminder.follow_up`, no codes). GREEN: 11/11 and panels 1763/1763; shots at 1440/768/390/320, light and dark.
-- [ ] S5 Settings.
+- [x] S5 Settings. RED: check-clis rejected nothing (`follow_up_*` accepted 0, 1441, text) and no `followUp` in sync; panels 4 FALLA (no card, no strings); worker 727/728 (AJUSTES_DE_LINEA lists differ). GREEN: check-clis exit 0 (606 settings checks), panels 1778/1778, worker 728/728.
 
 ## Acceptance criteria
 

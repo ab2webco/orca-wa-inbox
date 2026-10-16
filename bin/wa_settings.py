@@ -353,6 +353,7 @@ AJUSTES_DE_LINEA = ("agentName", "ownerName", "tone", "owners", "approvalNumber"
                     "projects",
                     "syncMinutes",
                     "jevEnabled",
+                    "followUp",
                     )
 # Los ajustes de linea que otra linea NUNCA toma de la raiz: sin uno propio valen los de
 # fabrica. Los avisos de Orca son los mismos eventos para todas las lineas; heredarlos
@@ -537,6 +538,15 @@ PANEL_PRIMER_CAMPOS = {"mode": "first_reply_mode", "fallbackMinutes": "ack_fallb
 # `ack` es el acuse fijo de siempre; los otros dos los escribe el agente (Beta).
 MODOS_PRIMER = ("ack", "model", "model_with_ack_fallback")
 
+# El seguimiento de cada caso respondido (seguimiento-casos): cuanto espera lo que le debemos
+# al cliente, el seguimiento de una pregunta, el cierre de la pregunta sin respuesta y el de
+# lo que no espera nada. UNA clave del panel, como el primer mensaje, por el mismo cupo.
+PANEL_SEGUIMIENTO = "followUp"
+PANEL_SEGUIMIENTO_CAMPOS = {"usMinutes": "follow_up_us_minutes",
+                            "customerHours": "follow_up_customer_hours",
+                            "closeHours": "follow_up_close_hours",
+                            "doneHours": "follow_up_done_hours"}
+
 # Los avisos de Orca por WhatsApp (odd/tasks/avisos-orca.md): un agente que espera, uno que
 # termino y una automatizacion que fallo, al numero de aprobacion. Viajan en UNA clave del
 # panel, como el primer mensaje, por el mismo cupo del host. Todo apagado de fabrica.
@@ -579,7 +589,8 @@ CONFIG_NUMERICOS = ("inbox_days", "lock_ttl_s", "sync_minutes",
                     "ack_fallback_minutes", "update_every_minutes", "updates_max",
                     "sla_first_reply_minutes", "project_question_hours",
                     "ack_quiet_minutes", "orca_notice_hourly_cap", "orca_finished_delay_s",
-                    "orca_finished_digest_min")
+                    "orca_finished_digest_min", "follow_up_us_minutes",
+                    "follow_up_customer_hours", "follow_up_close_hours", "follow_up_done_hours")
 # Los numericos con un rango cerrado. Un respaldo de cero minutos es el acuse fijo de
 # siempre con otro nombre, y uno de un dia deja al cliente sin nada; un tope de avances
 # de cien es un cliente con el telefono sonando.
@@ -598,7 +609,14 @@ CONFIG_RANGOS = {"ack_fallback_minutes": (1, 60), "update_every_minutes": (1, 12
                  "orca_finished_delay_s": (10, 600),
                  # Cada cuantos minutos sale UN resumen de los "termino"; cero es el aviso de
                  # siempre, uno por cada uno. Mas de un dia ya no es un resumen.
-                 "orca_finished_digest_min": (0, 1440)}
+                 "orca_finished_digest_min": (0, 1440),
+                 # El seguimiento: cero revisaria en el acto. Lo que le debemos al cliente, hasta
+                 # un dia; su seguimiento, hasta una semana; los cierres, hasta un mes. Mas que
+                 # eso ya no es seguimiento, es un caso olvidado.
+                 "follow_up_us_minutes": (1, 1440),
+                 "follow_up_customer_hours": (1, 168),
+                 "follow_up_close_hours": (1, 720),
+                 "follow_up_done_hours": (1, 720)}
 # Los numericos que ademas tienen que ser mayores que cero. Una ventana de agrupacion de
 # cero horas no agrupa nunca: abre una tarjeta por mensaje sin decir por que. Un aviso de
 # aprobacion que vence a las cero horas no se podria contestar nunca (T14).
@@ -650,6 +668,16 @@ def settings_from_plugin(linea=None):
     primer = raw.get(PANEL_PRIMER)
     for campo, name in (PANEL_PRIMER_CAMPOS.items() if isinstance(primer, dict) else ()):
         value = primer.get(campo)
+        if isinstance(value, bool) or not isinstance(value, (str, int)):
+            continue
+        value = str(value).strip()
+        if value and not valida_ajuste(name, value):
+            out[name] = value
+    # El seguimiento viene agrupado tambien, y cada plazo se valida solo.
+    seguimiento = raw.get(PANEL_SEGUIMIENTO)
+    for campo, name in (PANEL_SEGUIMIENTO_CAMPOS.items() if isinstance(seguimiento, dict)
+                        else ()):
+        value = seguimiento.get(campo)
         if isinstance(value, bool) or not isinstance(value, (str, int)):
             continue
         value = str(value).strip()

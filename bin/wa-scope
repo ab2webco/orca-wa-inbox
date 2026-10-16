@@ -45,7 +45,7 @@ sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from wa_settings import (  # noqa: E402
     CONFIG_HORAS, CONFIG_NUMERICOS, CONFIG_OPCIONES, MODOS_PRIMER, PANEL_ORCA, PANEL_ORCA_CAMPOS,
-    PANEL_PRIMER, PANEL_PRIMER_CAMPOS,
+    PANEL_PRIMER, PANEL_PRIMER_CAMPOS, PANEL_SEGUIMIENTO, PANEL_SEGUIMIENTO_CAMPOS,
     PANEL_SETTINGS, PLUGIN_ID, VARIABLE_APROBADOR,
     PLUGIN_ID_ANTERIOR, duenos, store_de_linea, llave_aprobador, trae_llave_aprobador, idioma_aprobacion, numero_aprobacion, orca_cli_path, orca_env, orca_runtime_home, plugin_store_path,
     plugin_store_raw as plugin_store_crudo, vista_de_linea, escribir_en_linea, de_otra_linea,
@@ -1089,7 +1089,8 @@ def plugin_store_patch_run(trace):
 def mirror_to_panel(key, value):
     """Un ajuste que el panel tambien guarda tiene que viajar en las dos direcciones:
     si solo bajara del panel, un valor viejo del panel ganaria para siempre."""
-    for clave, campos in ((PANEL_ORCA, PANEL_ORCA_CAMPOS), (PANEL_PRIMER, PANEL_PRIMER_CAMPOS)):
+    for clave, campos in ((PANEL_ORCA, PANEL_ORCA_CAMPOS), (PANEL_PRIMER, PANEL_PRIMER_CAMPOS),
+                          (PANEL_SEGUIMIENTO, PANEL_SEGUIMIENTO_CAMPOS)):
         campo = next((c for c, name in campos.items() if name == key), None)
         if campo:
             # La fusion, dentro del candado: leida afuera, pisaba lo escrito en medio.
@@ -1266,6 +1267,8 @@ def push_to_plugin(con, with_activity=False):
                                for campo, name in PANEL_PRIMER_CAMPOS.items()}
         extra[PANEL_ORCA] = {campo: str(efectivos.get(name) or DEFAULT_CONFIG[name])
                              for campo, name in PANEL_ORCA_CAMPOS.items()}
+        extra[PANEL_SEGUIMIENTO] = {campo: str(efectivos.get(name) or DEFAULT_CONFIG[name])
+                                    for campo, name in PANEL_SEGUIMIENTO_CAMPOS.items()}
     # El alcance se vuelve a leer justo antes de escribir. Leer WhatsApp tarda hasta dos
     # minutos, y en ese rato el panel puede guardar o quitar una conversacion: escribir la
     # foto del principio borraba lo que el dueno acababa de autorizar, y revivia lo que
@@ -1649,6 +1652,8 @@ def nombres_de(flat):
         return tuple(PANEL_ORCA_CAMPOS.values())
     if flat == PANEL_PRIMER:
         return tuple(PANEL_PRIMER_CAMPOS.values())
+    if flat == PANEL_SEGUIMIENTO:
+        return tuple(PANEL_SEGUIMIENTO_CAMPOS.values())
     return (PANEL_SETTINGS[flat],) if flat in PANEL_SETTINGS else ()
 
 

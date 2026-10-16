@@ -1994,7 +1994,8 @@ export const AJUSTES_DE_LINEA = Object.freeze(['agentName', 'ownerName', 'tone',
   'routes',
   'projects',
   'syncMinutes',
-  'jevEnabled'
+  'jevEnabled',
+  'followUp'
 ])
 // Los que una linea NUNCA copia de la principal (`NO_HEREDAN` de wa_settings.py y del panel):
 // sin uno propio valen los de fabrica. Los avisos de Orca son los mismos eventos para todas
