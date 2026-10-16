@@ -69,7 +69,11 @@ line.
    A reply is enough: `caso propuesta <id> --tipo responder --respuesta "<text>" --actor agente`
    (the signature is added on sending, only on a line that signs). When your reply says
    work was done, pass what proves it with `--evidencia "<link, file or commit>"`: the
-   plugin's review reads it with the reply. Work in a codebase: `--tipo trabajar` (below).
+   plugin's review reads it with the reply. Say what the reply waits for once it is sent
+   with `--espera`: `cliente` when it asks the customer something, `nada` when nothing more
+   is needed, `nosotros` when you still owe the real answer. Without it, a reply with a
+   question waits for the customer and any other waits for nothing (see Follow-ups).
+   Work in a codebase: `--tipo trabajar` (below).
    The owner is needed: `--tipo escalar` (below). Doubtful: leave it classified as
    `doubtful` and propose nothing.
 5. **Wrap up.** `"$WA/wa-scope" unlock`, then at most 10 lines: the case id, what you
@@ -96,6 +100,19 @@ use `caso avance`.
    flagged claim (it does not count toward `updates_max`); if the rewrite is held too, drop it.
 4. Close with the final reply (your `responder` proposal, or `caso resultado --estado
    resuelto`): say concretely what was fixed and ask the customer to check it.
+
+## Follow-ups
+
+Every message the customer gets says what it waits for, and the plugin reviews the case
+when that time comes. An acknowledgement or an update waits for us: with no final reply
+after `follow_up_us_minutes`, the case comes back to you with a note quoting what was
+promised (a second miss tells the owner). A question waits for the customer: with no
+answer after `follow_up_customer_hours`, the case comes back to you with a note asking
+for one short follow-up; propose it as usual, about what you asked, without repeating
+the earlier message. Do it once: with no answer by `follow_up_close_hours` the plugin
+closes the case. A final reply with nothing new is closed after `follow_up_done_hours`,
+and a thanks after it closes it at once. Any message from the customer cancels the
+review.
 
 ## What never reaches you
 
@@ -315,6 +332,10 @@ exactly one outcome:
   the answer goes to a new agent with the whole thread and these reports.
 - `--estado bloqueado --resumen "<why>"`: destructive, outside the project, or it needs
   the owner. Nothing goes to the customer; the owner sees the reason.
+
+`--espera <nosotros|cliente|nada>` says what the reply waits for once sent, as in a
+proposal: `necesita` waits for the customer on its own, and `resuelto` is read from the
+reply unless you say it.
 
 `caso resultado` is the one way out (with `caso avance` in a Beta chat): it sends the
 reply at once through the plugin's review and the owner's rules, or holds it for the

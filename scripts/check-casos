@@ -19578,6 +19578,554 @@ if NODE:
         os.environ.update(antes)
 
 
+# ── Lo que espera una respuesta enviada (seguimiento-casos, S1) ──────────────────────
+# Un caso respondido se quedaba en `respondido` para siempre: nada miraba si todavia le
+# debiamos algo al cliente, si el cliente contesto nuestra pregunta o si ya se podia cerrar.
+# Cada mensaje que sale dice ahora lo que espera: `nosotros` (un acuse o un avance: falta la
+# respuesta de verdad), `cliente` (le preguntamos algo) o `nada`. El agente lo dice con
+# `--espera`; si no lo dice, se infiere del mensaje que salio.
+print("\nseguimiento S1: lo que espera una respuesta enviada")
+
+
+def seguimiento_de(home, cid):
+    con = db_de(home)
+    try:
+        fila = con.execute("select * from caso_seguimiento where case_id=?",
+                           (int(cid),)).fetchone()
+    except sqlite3.OperationalError:
+        fila = None
+    con.close()
+    return dict(fila) if fila else None
+
+
+def falta_para(fila):
+    """Cuanto falta para la revision del seguimiento, en minutos (None sin revision)."""
+    if not fila or not fila.get("revisar_at"):
+        return None
+    cuando = datetime.datetime.strptime(fila["revisar_at"], "%Y-%m-%d %H:%M:%S")
+    return (cuando - datetime.datetime.now()).total_seconds() / 60
+
+
+def propuesta_con(home, stanza, texto, *extra, chat=PERSONA):
+    cid = str(js(home, "caso", "crear", "--chat", chat, "--stanza", stanza,
+                 "--actor", "agente")[0]["case_id"])
+    js(home, "caso", "clasificar", cid, "--clase", "card", "--prioridad", "none",
+       "--actor", "agente")
+    js(home, "caso", "propuesta", cid, "--tipo", "responder", "--respuesta", texto, *extra,
+       "--actor", "agente")
+    return cid
+
+
+if NODE:
+    with tempfile.TemporaryDirectory() as home:
+        linea_lista(home)
+        sidecar = SidecarFalso(home)
+        try:
+            final = propuesta_con(home, "SG1", "Listo, ya quedo configurado el acceso.")
+            pregunta = propuesta_con(home, "SG2", "Ya lo cambie. ¿Te funciona ahora?")
+            enlace = propuesta_con(home, "SG3",
+                                   "Ya quedo: https://docs.example.com/plan?v=2&x=1")
+            dicha = propuesta_con(home, "SG4", "Te envio el formulario por correo.",
+                                  "--espera", "cliente")
+            tick(home)
+            f = seguimiento_de(home, final)
+            ok("una respuesta final sin pregunta, al salir, no espera nada",
+               js(home, "caso", "ver", final)[0]["etapa"] == "respondido" and f
+               and f["espera"] == "nada" and f["origen"] == "inferido"
+               and f["estado"] == "pendiente", f"{f}")
+            ok("y su revision queda para follow_up_done_hours (48 h)",
+               f and 48 * 60 - 3 <= falta_para(f) <= 48 * 60, f"{falta_para(f)}")
+            f = seguimiento_de(home, pregunta)
+            ok("una respuesta con una pregunta espera al cliente, revisada a las 24 h",
+               f and f["espera"] == "cliente" and 24 * 60 - 3 <= falta_para(f) <= 24 * 60,
+               f"{f} {falta_para(f)}")
+            ok("y guarda lo que se le pregunto", f and "¿Te funciona ahora?" in (f["texto"] or ""),
+               f"{f}")
+            f = seguimiento_de(home, enlace)
+            ok("el ? de un enlace no es una pregunta", f and f["espera"] == "nada", f"{f}")
+            f = seguimiento_de(home, dicha)
+            ok("lo que dice el agente con --espera manda sobre lo inferido",
+               f and f["espera"] == "cliente" and f["origen"] == "agente", f"{f}")
+            ok("y viaja en la propuesta que firma el dueno",
+               js(home, "caso", "ver", dicha)[0]["propuesta"].get("espera") == "cliente")
+            otro = caso_clasificado(home, "SG5", PERSONA)
+            p = corre(home, "caso", "propuesta", otro, "--tipo", "trabajar", "--instrucciones",
+                      "Revisar el login", "--espera", "cliente", "--actor", "agente")
+            ok("--espera solo va con una respuesta: un trabajo no le escribe a nadie",
+               error_de(p) == "E_ARGS", p.stderr)
+            p = corre(home, "caso", "propuesta", otro, "--tipo", "responder", "--respuesta",
+                      "Hola", "--espera", "manana", "--actor", "agente")
+            ok("un --espera que no existe se rechaza", p.returncode != 0
+               and seguimiento_de(home, otro) is None, p.stderr[-200:])
+
+            # El resultado del agente del proyecto: `necesita` es una pregunta al cliente.
+            cid, _ = caso_en_trabajo(home, "SG6", PERSONA)
+            r = js(home, "caso", "resultado", cid, "--estado", "necesita", "--respuesta",
+                   "Para revisarlo, dime la fecha del reporte.", "--resumen",
+                   "Falta la fecha del reporte", "--actor", "trabajador")[0]
+            tick(home)
+            f = seguimiento_de(home, cid)
+            ok("caso resultado --estado necesita espera al cliente, aunque no lleve ?",
+               r["propuesta"].get("espera") == "cliente" and f and f["espera"] == "cliente",
+               f"{r['propuesta']} {f}")
+            cid, _ = caso_en_trabajo(home, "SG7", PERSONA)
+            js(home, "caso", "resultado", cid, "--respuesta", "Ya quedo el reporte.",
+               "--resumen", "Corregi el filtro", "--espera", "cliente", "--actor", "trabajador")
+            tick(home)
+            f = seguimiento_de(home, cid)
+            ok("y caso resultado --espera lo dice el agente del proyecto",
+               f and f["espera"] == "cliente" and f["origen"] == "agente", f"{f}")
+            cid, _ = caso_en_trabajo(home, "SG8", PERSONA)
+            p = corre(home, "caso", "resultado", cid, "--estado", "bloqueado", "--resumen",
+                      "Sin acceso", "--espera", "nada", "--actor", "trabajador")
+            ok("un bloqueado no manda nada: --espera no va", error_de(p) == "E_ARGS", p.stderr)
+        finally:
+            sidecar.cerrar()
+
+    # El acuse y el avance: falta la respuesta de verdad, y la debemos nosotros.
+    falso = JevFalso(jev_y_borradores)
+    antes = dict(os.environ)
+    os.environ["WA_INBOX_JEV_ENDPOINT"] = falso.url
+    try:
+        with tempfile.TemporaryDirectory() as home:
+            pon_llave(home)
+            llegan(home, A, [msg(PERSONA, "SG10", "revisa este caso por favor", 3),
+                             msg(OPERACIONES, "SG11", "@duenio revisa este caso", 3,
+                                 mencion=True)])
+            js(home, "agent", "Agente De Ejemplo")
+            js(home, "set", PERSONA, "--provider", "ninguno", "--mode", "responder")
+            js(home, "set", OPERACIONES, "--provider", "ninguno", "--mode", "responder")
+            js(home, "set", OPERACIONES, "--first-reply", "model")
+            sidecar = SidecarFalso(home)
+            try:
+                ingiere(home)
+                acusado = caso_de_stanza(home, "SG10")["case_id"]
+                agente = caso_de_stanza(home, "SG11")["case_id"]
+                tick(home)
+                f = seguimiento_de(home, acusado)
+                ok("un acuse que salio espera de nosotros la respuesta, revisada a los 30 min",
+                   auto_de(home, acusado)["estado"] == "enviado" and f
+                   and f["espera"] == "nosotros" and 27 <= falta_para(f) <= 30, f"{f}")
+                ok("y cita lo que se prometio",
+                   f and "le respondemos" in (f["texto"] or ""), f"{f}")
+                p = avance(home, agente, PRIMERO)
+                f = seguimiento_de(home, agente)
+                ok("un avance que salio tambien espera de nosotros",
+                   (envio_de_avance(p) or {}).get("estado") == "enviado" and f
+                   and f["espera"] == "nosotros" and f["texto"] == PRIMERO, f"{f}")
+            finally:
+                sidecar.cerrar()
+    finally:
+        falso.cerrar()
+        os.environ.clear()
+        os.environ.update(antes)
+
+
+# ── La revision de cada seguimiento (seguimiento-casos, S2) ─────────────────────────────
+# El tick revisa cada seguimiento a su hora: lo que debemos nosotros vuelve al agente con lo
+# prometido y, si se vuelve a vencer, se le dice al dueno; la pregunta sin respuesta lleva
+# UN seguimiento que escribe el agente (nunca un texto fijo, nunca en horas de silencio) y
+# despues se cierra; lo que no espera nada se cierra como atendido. Un mensaje del cliente
+# cancela la revision.
+print("\nseguimiento S2: la revision de cada seguimiento")
+
+
+def vence_seguimiento(home, cid):
+    """La revision pendiente del caso, vencida hace un minuto."""
+    pasado = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(time.time() - 60))
+    con = db_de(home)
+    con.execute("update caso_seguimiento set revisar_at=? where case_id=? and "
+                "estado='pendiente'", (pasado, int(cid)))
+    con.commit()
+    con.close()
+
+
+def notas_del_caso(home, cid):
+    return [n["texto"] for n in js(home, "caso", "ver", str(cid))[0].get("notas") or []]
+
+
+def silencio_ahora(home):
+    """Horas de silencio de una hora antes a una hora despues de ahora."""
+    ahora = datetime.datetime.now()
+    js(home, "config", "orca_quiet_start",
+       (ahora - datetime.timedelta(hours=1)).strftime("%H:%M"))
+    js(home, "config", "orca_quiet_end", (ahora + datetime.timedelta(hours=1)).strftime("%H:%M"))
+
+
+if NODE:
+    # Lo que debemos nosotros: el acuse salio y la respuesta no.
+    falso = JevFalso(jev_y_borradores)
+    antes = dict(os.environ)
+    os.environ["WA_INBOX_JEV_ENDPOINT"] = falso.url
+    try:
+        with tempfile.TemporaryDirectory() as home:
+            pon_llave(home)
+            if not any(c["jid"] == DUENO_DM for c in CHATS):
+                CHATS.append({"jid": DUENO_DM, "nombre": "Dueno Directo", "grupo": False})
+            llegan(home, A, [msg(PERSONA, "SN1", "revisa este caso por favor", 3),
+                             msg(OPERACIONES, "SN2", "@duenio revisa este caso", 3,
+                                 mencion=True)])
+            js(home, "agent", "Agente De Ejemplo")
+            js(home, "set", PERSONA, "--provider", "ninguno", "--mode", "responder")
+            js(home, "set", OPERACIONES, "--provider", "ninguno", "--mode", "responder")
+            js(home, "set", DUENO_DM, "--provider", "ninguno", "--mode", "responder")
+            pon_duenos(home, DUENO_LID)
+            pon_aprobacion(home, DUENO_DM)
+            sidecar = SidecarFalso(home)
+            try:
+                ingiere(home)
+                cid = caso_de_stanza(home, "SN1")["case_id"]
+                otro = caso_de_stanza(home, "SN2")["case_id"]
+                tick(home)
+                con = db_de(home)
+                con.execute("update caso set necesita_agente=0 where case_id=?", (cid,))
+                con.commit()
+                con.close()
+                ok("antes de vencer, el caso no espera al agente y la revision no hace nada",
+                   necesita_agente(home, cid) == 0
+                   and (tick(home)[1] or {}).get("seguimientos") == 0)
+                vence_seguimiento(home, cid)
+                _, r = tick(home)
+                f = seguimiento_de(home, cid)
+                ok("nosotros vencido: el caso vuelve al agente",
+                   necesita_agente(home, cid) == 1
+                   and int(cid) in (json.loads(necesita(home).stdout or "{}").get("cases") or []),
+                   f"{necesita_agente(home, cid)}")
+                ok("con una nota que cita lo prometido",
+                   any("le respondemos" in n for n in notas_del_caso(home, cid)),
+                   f"{notas_del_caso(home, cid)}")
+                ok("una vez: la revision siguiente queda a los 30 min, y el resumen la cuenta",
+                   f and f["fase"] == 1 and f["estado"] == "pendiente"
+                   and 27 <= falta_para(f) <= 30 and (r or {}).get("seguimientos") == 1,
+                   f"{f} {r}")
+                ok("al cliente no le sale nada", not any(x.startswith(f"caso-{cid}-")
+                                                         and not x.endswith("-acuse")
+                                                         for x in sidecar.entregados),
+                   f"{sidecar.entregados}")
+                ok("y al dueno todavia no", not any(f"Caso {cid}" in (x["body"] or "")
+                                                    for x in al_dueno(home)), f"{al_dueno(home)}")
+                vence_seguimiento(home, cid)
+                _, r = tick(home)
+                _, r2 = tick(home)
+                avisos = [x for x in al_dueno(home) if f"Caso {cid}" in (x["body"] or "")]
+                ok("el segundo vencimiento le avisa al dueno, una vez",
+                   len(avisos) == 1 and "le respondemos" in avisos[0]["body"]
+                   and (r or {}).get("seguimientos_al_dueno") == 1
+                   and (r2 or {}).get("seguimientos_al_dueno") == 0, f"{avisos} {r} {r2}")
+                ok("y el seguimiento queda avisado, sin otra revision",
+                   seguimiento_de(home, cid)["estado"] == "avisado"
+                   and seguimiento_de(home, cid)["revisar_at"] is None,
+                   f"{seguimiento_de(home, cid)}")
+                ok("al cliente nunca le sale nada de esto",
+                   [x for x in sidecar.entregados if x.startswith(f"caso-{cid}-")]
+                   == [f"caso-{cid}-acuse"], f"{sidecar.entregados}")
+
+                # Un mensaje del cliente cancela la revision: sigue el camino de siempre.
+                js(home, "caso", "asignar", "SN3", "--chat", OPERACIONES,
+                   "--actor", "automatizacion")
+                ok("un mensaje del cliente cancela la revision pendiente",
+                   seguimiento_de(home, otro)["estado"] == "cancelado",
+                   f"{seguimiento_de(home, otro)}")
+                vence_seguimiento(home, otro)
+                _, r = tick(home)
+                ok("y el tick ya no hace nada con ella", (r or {}).get("seguimientos") == 0
+                   and not any("Follow-up" in n for n in notas_del_caso(home, otro)), f"{r}")
+            finally:
+                sidecar.cerrar()
+    finally:
+        falso.cerrar()
+        os.environ.clear()
+        os.environ.update(antes)
+
+    # La pregunta al cliente y la respuesta que no espera nada.
+    with tempfile.TemporaryDirectory() as home:
+        linea_lista(home)
+        sidecar = SidecarFalso(home)
+        try:
+            pregunta = propuesta_con(home, "SC1", "Ya lo cambie. ¿Te funciona ahora?")
+            callada = propuesta_con(home, "SC2", "Ya lo cambie. ¿Lo pruebas y me dices?")
+            final = propuesta_con(home, "SC3", "Listo, ya quedo configurado el acceso.")
+            contesta = propuesta_con(home, "SC4", "Ya quedo. ¿Te llego el correo?",
+                                     chat=OPERACIONES)
+            js(home, "set", OPERACIONES, "--provider", "ninguno", "--mode", "responder")
+            tick(home)
+            antes_tick = list(sidecar.entregados)
+            desde = seguimiento_de(home, pregunta)["desde"]
+
+            # En horas de silencio el seguimiento espera.
+            silencio_ahora(home)
+            vence_seguimiento(home, pregunta)
+            _, r = tick(home)
+            ok("en horas de silencio no se pide el seguimiento",
+               js(home, "caso", "ver", pregunta)[0]["etapa"] == "respondido"
+               and seguimiento_de(home, pregunta)["fase"] == 0
+               and (r or {}).get("seguimientos") == 0, f"{seguimiento_de(home, pregunta)} {r}")
+            js(home, "config", "orca_quiet_start", "")
+            js(home, "config", "orca_quiet_end", "")
+
+            _, r = tick(home)
+            ver = js(home, "caso", "ver", pregunta)[0]
+            f = seguimiento_de(home, pregunta)
+            ok("cliente vencido: el caso vuelve al agente para UN seguimiento",
+               ver["etapa"] == "recibido" and necesita_agente(home, pregunta) == 1
+               and (r or {}).get("seguimientos") == 1, f"{ver['etapa']} {r}")
+            ok("con una nota que pide un seguimiento corto y cita la pregunta",
+               any("follow-up" in n.lower() and "¿Te funciona ahora?" in n
+                   for n in notas_del_caso(home, pregunta)), f"{notas_del_caso(home, pregunta)}")
+            ok("el tick no le manda ningun texto fijo al cliente",
+               sidecar.entregados == antes_tick, f"{sidecar.entregados}")
+            ok("y la revision que queda es el cierre, a las 72 h de la pregunta",
+               f["fase"] == 1 and f["desde"] == desde and f["revisar_at"] ==
+               (datetime.datetime.strptime(desde, "%Y-%m-%d %H:%M:%S")
+                + datetime.timedelta(hours=72)).strftime("%Y-%m-%d %H:%M:%S"), f"{f}")
+            js(home, "caso", "clasificar", pregunta, "--clase", "card", "--prioridad", "none",
+               "--actor", "agente")
+            js(home, "caso", "propuesta", pregunta, "--tipo", "responder", "--respuesta",
+               "Hola de nuevo, ¿pudiste probar el cambio?", "--actor", "agente")
+            tick(home)
+            g = seguimiento_de(home, pregunta)
+            ok("el seguimiento sale por la revision de siempre y no reinicia la cuenta",
+               js(home, "caso", "ver", pregunta)[0]["etapa"] == "respondido"
+               and g["fase"] == 1 and g["revisar_at"] == f["revisar_at"], f"{g}")
+            vence_seguimiento(home, pregunta)
+            _, r = tick(home)
+            ver = js(home, "caso", "ver", pregunta)[0]
+            ok("sin respuesta al cierre, el caso se cierra: sin respuesta del cliente",
+               ver["etapa"] == "cerrado" and evento(ver, "cerrado")["detalle"]
+               == "sin respuesta del cliente" and (r or {}).get("cerrados_por_seguimiento") == 1,
+               f"{ver['etapa']} {r}")
+            ok("y el seguimiento queda cerrado", seguimiento_de(home, pregunta)["estado"] ==
+               "cerrado", f"{seguimiento_de(home, pregunta)}")
+
+            # Si el cliente contesta, no hay seguimiento ni cierre.
+            js(home, "caso", "asignar", "SC5", "--chat", OPERACIONES, "--actor", "automatizacion")
+            vence_seguimiento(home, contesta)
+            tick(home)
+            ok("la respuesta del cliente cancela el seguimiento: el caso sigue su camino",
+               seguimiento_de(home, contesta)["estado"] == "cancelado"
+               and js(home, "caso", "ver", contesta)[0]["etapa"] == "recibido"
+               and not any("follow-up" in n.lower() for n in notas_del_caso(home, contesta)),
+               f"{seguimiento_de(home, contesta)}")
+
+            # Lo que no espera nada se cierra como atendido.
+            vence_seguimiento(home, final)
+            _, r = tick(home)
+            ver = js(home, "caso", "ver", final)[0]
+            ok("nada vencido: se cierra como atendido, no requiere mas respuestas",
+               ver["etapa"] == "cerrado" and evento(ver, "cerrado")["detalle"]
+               == "atendido, no requiere mas respuestas", f"{ver['etapa']}")
+
+            # Un chat apagado no se toca.
+            js(home, "mode", PERSONA, "off")
+            vence_seguimiento(home, callada)
+            _, r = tick(home)
+            ok("en un chat apagado la revision no hace nada",
+               js(home, "caso", "ver", callada)[0]["etapa"] == "respondido"
+               and seguimiento_de(home, callada)["fase"] == 0, f"{seguimiento_de(home, callada)}")
+        finally:
+            sidecar.cerrar()
+
+    # El caso del dueno: ni seguimiento al cliente ni cierre solo.
+    with tempfile.TemporaryDirectory() as home:
+        linea_lista(home)
+        pon_duenos(home, PERSONA)
+        sidecar = SidecarFalso(home)
+        try:
+            suyo = propuesta_con(home, "SD1", "Ya lo revise. ¿Lo mando al grupo?")
+            listo = propuesta_con(home, "SD2", "Listo, ya quedo.")
+            tick(home)
+            f, g = seguimiento_de(home, suyo), seguimiento_de(home, listo)
+            ok("el caso del dueno dice lo que espera, sin revision",
+               f and f["espera"] == "cliente" and f["revisar_at"] is None
+               and g and g["espera"] == "nada" and g["revisar_at"] is None, f"{f} {g}")
+            con = db_de(home)
+            pasado = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(time.time() - 60))
+            con.execute("update caso_seguimiento set revisar_at=?", (pasado,))
+            con.commit()
+            con.close()
+            tick(home)
+            ok("y aunque se venciera, el tick no lo reabre ni lo cierra",
+               js(home, "caso", "ver", suyo)[0]["etapa"] == "respondido"
+               and js(home, "caso", "ver", listo)[0]["etapa"] == "respondido")
+        finally:
+            sidecar.cerrar()
+
+
+# ── El gracias despues de una respuesta final cierra el caso (seguimiento-casos, S3) ──────
+# "Gracias, ya funciona" tras una respuesta que no esperaba nada es el final del caso: se
+# cierra como atendido en el acto, en vez de quedar respondido. Si le preguntamos algo al
+# cliente, un gracias pelado no lo cierra.
+print("\nseguimiento S3: el gracias despues de una respuesta final cierra el caso")
+
+
+def jev_de_gracias(cuerpo):
+    """Jev de mentira: "ya funciona" es una cortesia que no se salta (vuelve al caso);
+    "mil gracias", una que se salta (abre su propio caso cerrado)."""
+    texto = cuerpo["state"].get("message_to_evaluate", {}).get("text", "")
+    if "ya funciona" in texto:
+        return 200, respuestas(cuerpo["questions"], choice="pleasantry", asks_owner_to_act=0.3)
+    if "mil gracias" in texto:
+        return 200, respuestas(cuerpo["questions"], choice="pleasantry")
+    return jev_segun_texto(cuerpo)
+
+
+def espera_en(home, cid, espera):
+    """El caso respondido con su seguimiento pendiente, como lo deja la respuesta al salir."""
+    momento = time.strftime("%Y-%m-%d %H:%M:%S")
+    revisar = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(time.time() + 3600))
+    con = db_de(home)
+    con.execute("insert into caso_seguimiento (case_id, account, espera, origen, desde, "
+                "revisar_at, fase, texto, estado, updated_at) values (?,?,?,?,?,?,0,?,?,?)",
+                (int(cid), A, espera, "inferido", momento, revisar, "Ya quedo, gracias.",
+                 "pendiente", momento))
+    con.commit()
+    con.close()
+
+
+if NODE:
+    falso = JevFalso(jev_de_gracias)
+    antes = dict(os.environ)
+    os.environ["WA_INBOX_JEV_ENDPOINT"] = falso.url
+    try:
+        with tempfile.TemporaryDirectory() as home:
+            pon_llave(home)
+            cid = caso_respondido(home, "GR1")
+            espera_en(home, cid, "nada")
+            llegan(home, A, [msg(SOPORTE, "GR2", "@duenio gracias, ya funciona", 5,
+                                 mencion=True)])
+            ingiere(home)
+            ver = js(home, "caso", "ver", str(cid))[0]
+            ok("\"gracias, ya funciona\" tras una respuesta final cierra el caso como atendido",
+               ver["etapa"] == "cerrado"
+               and evento(ver, "cerrado")["detalle"] == "atendido, no requiere mas respuestas",
+               f"{ver['etapa']} {ver['eventos'][-2:]}")
+            ok("y el seguimiento queda cerrado", seguimiento_de(home, cid)["estado"] == "cerrado",
+               f"{seguimiento_de(home, cid)}")
+
+        with tempfile.TemporaryDirectory() as home:
+            pon_llave(home)
+            cid = caso_respondido(home, "GR3")
+            espera_en(home, cid, "cliente")
+            llegan(home, A, [msg(SOPORTE, "GR4", "@duenio gracias, ya funciona", 5,
+                                 mencion=True)])
+            ingiere(home)
+            f = seguimiento_de(home, cid)
+            ok("si le preguntamos algo, un gracias pelado no lo cierra",
+               fila_de(home, cid)["etapa"] == "respondido", f"{fila_de(home, cid)['etapa']}")
+            ok("pero ya no espera la respuesta: espera nada, revisado a las 48 h",
+               f and f["espera"] == "nada" and f["estado"] == "pendiente"
+               and 48 * 60 - 3 <= falta_para(f) <= 48 * 60, f"{f}")
+
+        with tempfile.TemporaryDirectory() as home:
+            pon_llave(home)
+            cid = caso_respondido(home, "GR5")
+            espera_en(home, cid, "nada")
+            llegan(home, A, [msg(SOPORTE, "GR6", "@duenio mil gracias", 5, mencion=True)])
+            ingiere(home)
+            nuevo = caso_de_stanza(home, "GR6")
+            ok("un gracias que se salta (su propio caso cerrado) tambien cierra el respondido",
+               nuevo["case_id"] != cid and nuevo["etapa"] == "cerrado"
+               and fila_de(home, cid)["etapa"] == "cerrado"
+               and evento(js(home, "caso", "ver", str(cid))[0], "cerrado")["detalle"]
+               == "atendido, no requiere mas respuestas", f"{fila_de(home, cid)['etapa']}")
+
+        with tempfile.TemporaryDirectory() as home:
+            pon_llave(home)
+            cid = caso_respondido(home, "GR7")
+            espera_en(home, cid, "cliente")
+            llegan(home, A, [msg(SOPORTE, "GR8", "@duenio mil gracias", 5, mencion=True)])
+            ingiere(home)
+            ok("y si esperaba al cliente, tampoco lo cierra",
+               fila_de(home, cid)["etapa"] == "respondido"
+               and seguimiento_de(home, cid)["espera"] == "cliente", f"{seguimiento_de(home, cid)}")
+    finally:
+        falso.cerrar()
+        os.environ.clear()
+        os.environ.update(antes)
+
+
+# ── El tablero dice lo que espera cada caso y su marca de cierre (seguimiento-casos, S4) ──
+# La tarjeta lleva el seguimiento DENTRO de `reminder` (`reminder.follow_up`): el juego de
+# llaves de la tarjeta es contrato. Lo que espera, cuando se revisa y, en lo que cerro la
+# revision, por que.
+print("\nseguimiento S4: el tablero dice lo que espera y la marca de cierre")
+if NODE:
+    with tempfile.TemporaryDirectory() as home:
+        linea_lista(home)
+        sidecar = SidecarFalso(home)
+        try:
+            pregunta = propuesta_con(home, "ST1", "Ya lo cambie. ¿Te funciona ahora?")
+            final = propuesta_con(home, "ST2", "Listo, ya quedo configurado el acceso.")
+            sin_nada = caso_clasificado(home, "ST3", PERSONA)
+            tick(home)
+            t1 = tarjeta(home, pregunta) or {}
+            seg = (t1.get("reminder") or {}).get("follow_up") or {}
+            ok("la tarjeta dice que espera al cliente y cuando se revisa",
+               seg.get("waits") == "cliente" and seg.get("closed") is None
+               and iso_a_local(seg["at"]).strftime("%Y-%m-%d %H:%M:%S")
+               == seguimiento_de(home, pregunta)["revisar_at"], f"{t1.get('reminder')}")
+            ok("sin tocar el juego de llaves de la tarjeta", set(t1) == LLAVES_TARJETA,
+               f"{sorted(set(t1) ^ LLAVES_TARJETA)}")
+            ok("y sin recordatorio ni posposicion inventados",
+               isinstance(t1.get("reminder"), dict) and t1["reminder"].get("at") is None
+               and t1["reminder"].get("snoozed_until") is None, f"{t1.get('reminder')}")
+            ok("un caso sin seguimiento sigue sin reminder",
+               (tarjeta(home, sin_nada) or {}).get("reminder") is None)
+            vence_seguimiento(home, pregunta)
+            vence_seguimiento(home, final)
+            tick(home)
+            t1 = tarjeta(home, pregunta) or {}
+            ok("al pedir el seguimiento, la historia lo dice en codigos (sin el texto de la nota)",
+               [e.get("que") for e in t1.get("events", [])][-2:]
+               == ["follow_up_reopened", "follow_up_customer"]
+               and not any(e.get("nota") for e in t1.get("events", [])), f"{t1.get('events')}")
+            vence_seguimiento(home, pregunta)
+            tick(home)
+            for cid, marca, que in ((pregunta, "sin_respuesta", "follow_up_no_answer"),
+                                    (final, "atendido", "follow_up_attended")):
+                t2 = tarjeta(home, cid) or {}
+                seg = (t2.get("reminder") or {}).get("follow_up") or {}
+                ok(f"la tarjeta cerrada lleva su marca: {marca}",
+                   t2.get("stage") == "cerrado" and seg.get("closed") == marca
+                   and seg.get("at") is None, f"{t2.get('stage')} {t2.get('reminder')}")
+                ok(f"y la historia el cierre: {que}",
+                   [e for e in t2.get("events", []) if e.get("a") == "cerrado"
+                    and e.get("de") != "cerrado"][-1].get("que") == que, f"{t2.get('events')}")
+        finally:
+            sidecar.cerrar()
+
+    falso = JevFalso(jev_y_borradores)
+    antes = dict(os.environ)
+    os.environ["WA_INBOX_JEV_ENDPOINT"] = falso.url
+    try:
+        with tempfile.TemporaryDirectory() as home:
+            pon_llave(home)
+            llegan(home, A, [msg(PERSONA, "ST5", "revisa este caso por favor", 3)])
+            js(home, "agent", "Agente De Ejemplo")
+            js(home, "set", PERSONA, "--provider", "ninguno", "--mode", "responder")
+            sidecar = SidecarFalso(home)
+            try:
+                ingiere(home)
+                cid = caso_de_stanza(home, "ST5")["case_id"]
+                tick(home)
+                seg = ((tarjeta(home, cid) or {}).get("reminder") or {}).get("follow_up") or {}
+                ok("tras el acuse, la tarjeta dice que espera nuestra respuesta",
+                   seg.get("waits") == "nosotros" and seg.get("at"), f"{seg}")
+                vence_seguimiento(home, cid)
+                tick(home)
+                vence_seguimiento(home, cid)
+                tick(home)
+                ques = [e.get("que") for e in (tarjeta(home, cid) or {}).get("events", [])]
+                ok("y la historia dice que volvio al agente y que se aviso al dueno",
+                   "follow_up_us" in ques and "follow_up_owner" in ques, f"{ques}")
+            finally:
+                sidecar.cerrar()
+    finally:
+        falso.cerrar()
+        os.environ.clear()
+        os.environ.update(antes)
+
+
 print(f"\n{pruebas - len(fallos)}/{pruebas} en verde")
 if fallos:
     sys.exit(1)

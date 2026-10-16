@@ -326,6 +326,10 @@
       .card-recordatorio { font-size: 11px; overflow-wrap: anywhere;
               color: var(--muted-foreground, var(--fb-muted-foreground)); }
       #board-detail .card-recordatorio { margin-top: 6px; font-size: 12px; }
+      /* Lo que espera el caso y su revision (seguimiento-casos): como el recordatorio. */
+      .card-seguimiento { font-size: 11px; overflow-wrap: anywhere;
+              color: var(--muted-foreground, var(--fb-muted-foreground)); }
+      #board-detail .card-seguimiento { margin-top: 6px; font-size: 12px; }
       .card-aprobada { font-size: 11px; font-weight: 500;
               color: var(--muted-foreground, var(--fb-muted-foreground)); }
       .card-aprobada::before { content: "\2713  "; }
@@ -1195,7 +1199,7 @@
               "histProposal": "propuesta: {que}", "histApproved": "aprobada",
               "histSent": "enviado", "histRoute": "destino del caso",
               "histProject": "proyecto cambiado", "histClassified": "clasificado: {que}",
-              "histRetitled": "titulo nuevo", "histWithdrawn": "propuesta retirada", "histNote": "nota: {que}", "histReminderSet": "recordatorio puesto", "histReminder": "recordatorio vencido", "histReminderCancelled": "recordatorios cancelados", "histSnoozeEnded": "posposicion terminada: el cliente escribio", "boardReminder": "Recordatorio: {cuando}", "boardSnoozed": "Pospuesto hasta {cuando}", "histEdited": "editado: {que}", "campoPrioridad": "prioridad", "campoClase": "clase", "campoTitulo": "titulo",
+              "histRetitled": "titulo nuevo", "histWithdrawn": "propuesta retirada", "histNote": "nota: {que}", "histReminderSet": "recordatorio puesto", "histReminder": "recordatorio vencido", "histReminderCancelled": "recordatorios cancelados", "histSnoozeEnded": "posposicion terminada: el cliente escribio", "boardReminder": "Recordatorio: {cuando}", "boardSnoozed": "Pospuesto hasta {cuando}", "boardFollowUpCliente": "Espera al cliente", "boardFollowUpNosotros": "Espera nuestra respuesta", "boardFollowUpNada": "No espera nada", "boardFollowUpAt": "{que}, revision {cuando}", "boardFollowUpSinRespuesta": "Cerrado: sin respuesta del cliente", "boardFollowUpAtendido": "Cerrado: atendido, no requiere mas respuestas", "histFollowUpUs": "seguimiento: volvio al agente por lo prometido", "histFollowUpCustomer": "seguimiento: el cliente no contesto, el agente le escribe", "histFollowUpReopened": "reabierto para un seguimiento", "histFollowUpOwner": "seguimiento: aviso al dueno", "histFollowUpNoAnswer": "cerrado: sin respuesta del cliente", "histFollowUpAttended": "cerrado: atendido, no requiere mas respuestas", "histEdited": "editado: {que}", "campoPrioridad": "prioridad", "campoClase": "clase", "campoTitulo": "titulo",
               "histAuthorized": "excepciones autorizadas", "histAttend": "atender ahora",
               "motSecret": "un secreto", "motJevDown": "Jev no contesto",
               "motDelete": "borrar", "motDeploy": "desplegar a produccion",
@@ -1584,7 +1588,7 @@
               "histProposal": "proposal: {que}", "histApproved": "approved",
               "histSent": "sent", "histRoute": "case destination",
               "histProject": "project changed", "histClassified": "classified: {que}",
-              "histRetitled": "new title", "histWithdrawn": "proposal withdrawn", "histNote": "note: {que}", "histReminderSet": "reminder set", "histReminder": "reminder due", "histReminderCancelled": "reminders cancelled", "histSnoozeEnded": "snooze ended: the customer wrote", "boardReminder": "Reminder: {cuando}", "boardSnoozed": "Snoozed until {cuando}", "histEdited": "edited: {que}", "campoPrioridad": "priority", "campoClase": "kind", "campoTitulo": "title",
+              "histRetitled": "new title", "histWithdrawn": "proposal withdrawn", "histNote": "note: {que}", "histReminderSet": "reminder set", "histReminder": "reminder due", "histReminderCancelled": "reminders cancelled", "histSnoozeEnded": "snooze ended: the customer wrote", "boardReminder": "Reminder: {cuando}", "boardSnoozed": "Snoozed until {cuando}", "boardFollowUpCliente": "Waits for the customer", "boardFollowUpNosotros": "Waits for our reply", "boardFollowUpNada": "Waits for nothing", "boardFollowUpAt": "{que}, review {cuando}", "boardFollowUpSinRespuesta": "Closed: no answer from the customer", "boardFollowUpAtendido": "Closed: attended, needs no more replies", "histFollowUpUs": "follow-up: back to the agent for what was promised", "histFollowUpCustomer": "follow-up: the customer did not answer, the agent writes", "histFollowUpReopened": "reopened for a follow-up", "histFollowUpOwner": "follow-up: owner notified", "histFollowUpNoAnswer": "closed: no answer from the customer", "histFollowUpAttended": "closed: attended, needs no more replies", "histEdited": "edited: {que}", "campoPrioridad": "priority", "campoClase": "kind", "campoTitulo": "title",
               "histAuthorized": "exceptions authorized", "histAttend": "handle now",
               "motSecret": "a secret", "motJevDown": "Jev did not answer",
               "motDelete": "deleting", "motDeploy": "deploying to production",
@@ -1973,7 +1977,7 @@
               "histProposal": "proposta: {que}", "histApproved": "aprovada",
               "histSent": "enviado", "histRoute": "destino do caso",
               "histProject": "projeto alterado", "histClassified": "classificado: {que}",
-              "histRetitled": "titulo novo", "histWithdrawn": "proposta retirada", "histNote": "nota: {que}", "histReminderSet": "lembrete criado", "histReminder": "lembrete vencido", "histReminderCancelled": "lembretes cancelados", "histSnoozeEnded": "adiamento terminado: o cliente escreveu", "boardReminder": "Lembrete: {cuando}", "boardSnoozed": "Adiado ate {cuando}", "histEdited": "editado: {que}", "campoPrioridad": "prioridade", "campoClase": "tipo", "campoTitulo": "titulo",
+              "histRetitled": "titulo novo", "histWithdrawn": "proposta retirada", "histNote": "nota: {que}", "histReminderSet": "lembrete criado", "histReminder": "lembrete vencido", "histReminderCancelled": "lembretes cancelados", "histSnoozeEnded": "adiamento terminado: o cliente escreveu", "boardReminder": "Lembrete: {cuando}", "boardSnoozed": "Adiado ate {cuando}", "boardFollowUpCliente": "Espera o cliente", "boardFollowUpNosotros": "Espera nossa resposta", "boardFollowUpNada": "Nao espera nada", "boardFollowUpAt": "{que}, revisao {cuando}", "boardFollowUpSinRespuesta": "Fechado: sem resposta do cliente", "boardFollowUpAtendido": "Fechado: atendido, nao precisa de mais respostas", "histFollowUpUs": "acompanhamento: voltou ao agente pelo prometido", "histFollowUpCustomer": "acompanhamento: o cliente nao respondeu, o agente escreve", "histFollowUpReopened": "reaberto para um acompanhamento", "histFollowUpOwner": "acompanhamento: aviso ao dono", "histFollowUpNoAnswer": "fechado: sem resposta do cliente", "histFollowUpAttended": "fechado: atendido, nao precisa de mais respostas", "histEdited": "editado: {que}", "campoPrioridad": "prioridade", "campoClase": "tipo", "campoTitulo": "titulo",
               "histAuthorized": "excecoes autorizadas", "histAttend": "atender agora",
               "motSecret": "um segredo", "motJevDown": "o Jev nao respondeu",
               "motDelete": "apagar", "motDeploy": "publicar em producao",
@@ -2423,7 +2427,10 @@
         attend: 'histAttend', project_question: 'histProjectQuestion',
         project_answer: 'histProjectAnswer', note: 'histNote', edited: 'histEdited',
         reminder_set: 'histReminderSet', reminder: 'histReminder',
-        reminder_cancelled: 'histReminderCancelled', snooze_ended: 'histSnoozeEnded' }
+        reminder_cancelled: 'histReminderCancelled', snooze_ended: 'histSnoozeEnded',
+        follow_up_us: 'histFollowUpUs', follow_up_customer: 'histFollowUpCustomer',
+        follow_up_reopened: 'histFollowUpReopened', follow_up_owner: 'histFollowUpOwner',
+        follow_up_no_answer: 'histFollowUpNoAnswer', follow_up_attended: 'histFollowUpAttended' }
       // Los motivos y excepciones que viajan en `args`, en palabras.
       var MOTIVO_KEY = { money: 'excMoney', credential: 'excCredential',
         commitment: 'excCommitment', jev: 'excJev', secret: 'motSecret',
@@ -3413,6 +3420,29 @@
         return proximo ? crear('div', 'card-recordatorio', fmt('boardReminder', { cuando: proximo })) : null
       }
 
+      // Lo que espera un caso respondido y la marca de lo que cerro su revision
+      // (seguimiento-casos), por el codigo estable de wa-scope. Lo que no esta aca no se muestra.
+      var SEGUIMIENTO_KEY = { cliente: 'boardFollowUpCliente', nosotros: 'boardFollowUpNosotros',
+        nada: 'boardFollowUpNada' }
+      var CIERRE_SEGUIMIENTO_KEY = { sin_respuesta: 'boardFollowUpSinRespuesta',
+        atendido: 'boardFollowUpAtendido' }
+
+      /** Lo que espera el caso y cuando se revisa, o por que lo cerro su revision, en una linea. */
+      function seguimientoNodo (c) {
+        var r = esObjeto(c.reminder) ? c.reminder : null
+        var s = r && esObjeto(r.follow_up) ? r.follow_up : null
+        if (!s) return null
+        var tiene = function (mapa, k) { return typeof k === 'string' && Object.prototype.hasOwnProperty.call(mapa, k) }
+        if (c.stage === 'cerrado') {
+          return tiene(CIERRE_SEGUIMIENTO_KEY, s.closed)
+            ? crear('div', 'card-seguimiento', t(CIERRE_SEGUIMIENTO_KEY[s.closed])) : null
+        }
+        if (!tiene(SEGUIMIENTO_KEY, s.waits)) return null
+        var que = t(SEGUIMIENTO_KEY[s.waits])
+        var cuando = fechaHora(s.at)
+        return crear('div', 'card-seguimiento', cuando ? fmt('boardFollowUpAt', { que: que, cuando: cuando }) : que)
+      }
+
       function prioNodo (c) {
         if (!Object.prototype.hasOwnProperty.call(PRIO_KEY, c.prioridad)) return null
         return crear('span', 'card-prio' + (PRIO_CLASE[c.prioridad] ? ' ' + PRIO_CLASE[c.prioridad] : ''),
@@ -3642,6 +3672,8 @@
         if (c.read_only === true) nodos.push(crear('div', 'card-solo-leer', t('boardReadOnly')))
         var recordatorio = recordatorioNodo(c)
         if (recordatorio) nodos.push(recordatorio)
+        var seguimiento = seguimientoNodo(c)
+        if (seguimiento) nodos.push(seguimiento)
         var primaria = primariaDe(accionesDe(c))
         var aviso = formularios[id] ? null : mensajeNodo(id)
         if (primaria === 'atender') {
@@ -3999,6 +4031,8 @@
         if (preguntaNodo) caja.appendChild(preguntaNodo)
         var recordatorioDet = recordatorioNodo(c)
         if (recordatorioDet) caja.appendChild(recordatorioDet)
+        var seguimientoDet = seguimientoNodo(c)
+        if (seguimientoDet) caja.appendChild(seguimientoDet)
 
         // Un caso es un pedido: si este abrio aparte de uno que ya estaba, se dice cual.
         if (Number.isInteger(c.related_case) && c.related_case > 0) {

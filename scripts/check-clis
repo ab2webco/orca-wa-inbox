@@ -156,7 +156,31 @@ AJUSTES = [
     (["config", "orca_claude_recap", "si"], False, "off"),
     (["config", "orca_claude_recap", "on"], True, "on"),
     (["config", "orca_claude_recap", "off"], True, "off"),
+    # El seguimiento de cada caso respondido (seguimiento-casos, S5): enteros positivos con
+    # un tope razonable. Cero revisaria en el acto; un plazo de meses ya no es seguimiento.
+    (["config", "follow_up_us_minutes", "45"], True, "45"),
+    (["config", "follow_up_us_minutes", "0"], False, "45"),
+    (["config", "follow_up_us_minutes", "1441"], False, "45"),
+    (["config", "follow_up_us_minutes", "media hora"], False, "45"),
+    (["config", "follow_up_customer_hours", "12"], True, "12"),
+    (["config", "follow_up_customer_hours", "0"], False, "12"),
+    (["config", "follow_up_customer_hours", "169"], False, "12"),
+    (["config", "follow_up_customer_hours", "-2"], False, "12"),
+    (["config", "follow_up_close_hours", "96"], True, "96"),
+    (["config", "follow_up_close_hours", "0"], False, "96"),
+    (["config", "follow_up_close_hours", "721"], False, "96"),
+    (["config", "follow_up_close_hours", "tres dias"], False, "96"),
+    (["config", "follow_up_done_hours", "24"], True, "24"),
+    (["config", "follow_up_done_hours", "0"], False, "24"),
+    (["config", "follow_up_done_hours", "721"], False, "24"),
+    (["config", "follow_up_done_hours", "1.5"], False, "24"),
 ]
+
+# Con que arranca el seguimiento (seguimiento-casos): 30 minutos para lo que debemos, 24 horas
+# para el seguimiento al cliente, 72 para cerrar la pregunta sin respuesta y 48 para cerrar lo
+# que no espera nada.
+DEFAULTS_SEGUIMIENTO = {"follow_up_us_minutes": "30", "follow_up_customer_hours": "24",
+                        "follow_up_close_hours": "72", "follow_up_done_hours": "48"}
 
 # Con que arranca la meta del primer contacto: 15 minutos, y se cambia en Ajustes.
 DEFAULTS_INFORMES = {"sla_first_reply_minutes": "15"}
@@ -2647,7 +2671,7 @@ def revisa_ajustes(fallos: list) -> int:
         # Los arranques, ANTES de tocar nada: despues del bucle ya no son defaults.
         for clave, esperado in sorted({**DEFAULTS_RETENCION, **DEFAULTS_PRIMER,
                                        **DEFAULTS_INFORMES, **DEFAULTS_ACUSE,
-                                       **DEFAULTS_ORCA}.items()):
+                                       **DEFAULTS_ORCA, **DEFAULTS_SEGUIMIENTO}.items()):
             hechas += 1
             quedo = valor(env, clave)
             if quedo != esperado:
@@ -2708,6 +2732,13 @@ def revisa_ajustes(fallos: list) -> int:
         if espejo.get("orcaNotices") != orca:
             fallos.append(f"sync no le devolvio orcaNotices al panel: quedo "
                           f"{espejo.get('orcaNotices')!r} en vez de {orca!r}")
+        # El seguimiento, igual: UNA clave con sus cuatro plazos.
+        hechas += 1
+        seguimiento = {"usMinutes": "45", "customerHours": "12", "closeHours": "96",
+                       "doneHours": "24"}
+        if espejo.get("followUp") != seguimiento:
+            fallos.append(f"sync no le devolvio followUp al panel: quedo "
+                          f"{espejo.get('followUp')!r} en vez de {seguimiento!r}")
 
         # El panel escribe en el store del host sin pasar por el CLI, asi que un valor
         # sucio de ahi es lo unico que la validacion de escritura no puede atajar.
@@ -2720,8 +2751,18 @@ def revisa_ajustes(fallos: list) -> int:
                                                      "hourlyCap": "0",
                                                      "finishedDelaySeconds": True,
                                                      "finishedDigestMinutes": "1441",
-                                                     "claudeRecap": "a veces"}}),
+                                                     "claudeRecap": "a veces"},
+                                     "followUp": {"usMinutes": "0", "customerHours": "mil",
+                                                  "closeHours": True, "doneHours": "9999"}}),
                          encoding="utf-8")
+        hechas += 4
+        for clave, esperado in (("follow_up_us_minutes", "45"),
+                                ("follow_up_customer_hours", "12"),
+                                ("follow_up_close_hours", "96"), ("follow_up_done_hours", "24")):
+            quedo = valor(env, clave)
+            if quedo != esperado:
+                fallos.append(f"basura del panel en {clave}: llego {quedo!r} en vez de "
+                              f"{esperado!r}, el valor del CLI")
         hechas += 6
         for clave, esperado in (("orca_notice_waiting", "on"), ("orca_quiet_start", "22:00"),
                                 ("orca_notice_hourly_cap", "10"), ("orca_finished_delay_s", "60"),
@@ -2752,8 +2793,17 @@ def revisa_ajustes(fallos: list) -> int:
                                                      "quietEnd": "", "hourlyCap": 3,
                                                      "finishedDelaySeconds": "30",
                                                      "finishedDigestMinutes": "0",
-                                                     "claudeRecap": "on"}}),
+                                                     "claudeRecap": "on"},
+                                     "followUp": {"usMinutes": 20, "customerHours": "6",
+                                                  "closeHours": "48", "doneHours": "12"}}),
                          encoding="utf-8")
+        hechas += 4
+        for clave, esperado in (("follow_up_us_minutes", "20"),
+                                ("follow_up_customer_hours", "6"),
+                                ("follow_up_close_hours", "48"), ("follow_up_done_hours", "12")):
+            quedo = valor(env, clave)
+            if quedo != esperado:
+                fallos.append(f"el panel no le gano al CLI en {clave}: quedo {quedo!r}")
         hechas += 7
         for clave, esperado in (("orca_notice_waiting", "off"), ("orca_quiet_start", ""),
                                 ("orca_quiet_end", ""), ("orca_notice_hourly_cap", "3"),

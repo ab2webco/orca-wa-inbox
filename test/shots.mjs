@@ -514,6 +514,46 @@ const TABLERO_CASOS_CLI = [
   })
 ]
 
+// seguimiento-casos: lo que espera cada caso respondido, cuando se revisa y la marca de los
+// que cerro su revision.
+const TABLERO_SEGUIMIENTO = [
+  caso(51, 'respondido', {
+    title: 'No le llega el correo de confirmacion', chat_name: 'Cliente Uno',
+    updated_at: minutos(40), stage_at: minutos(40), actions: ['cerrar', 'reabrir'],
+    reminder: { at: null, snoozed_until: null,
+      follow_up: { waits: 'cliente', at: enMinutos(23 * 60), closed: null } },
+    events: [
+      { de: null, a: 'recibido', actor: 'automatizacion', que: 'message', at: minutos(70) },
+      { de: 'recibido', a: 'clasificado', actor: 'agente', que: 'classified', args: ['card'],
+        at: minutos(65) },
+      { de: 'clasificado', a: 'decision', actor: 'agente', que: 'proposal', args: ['responder'],
+        at: minutos(60) },
+      { de: 'decision', a: 'respondido', actor: 'automatizacion', que: 'sent', at: minutos(40) }]
+  }),
+  caso(52, 'clasificado', {
+    title: 'Revisar el cobro duplicado', chat_name: 'Facturacion — Cliente Norte',
+    updated_at: minutos(12), exceptions: [], proposal: null, jev: null,
+    reminder: { at: null, snoozed_until: null,
+      follow_up: { waits: 'nosotros', at: enMinutos(18), closed: null } }
+  }),
+  caso(53, 'cerrado', {
+    title: 'El formulario no guarda la direccion', updated_at: minutos(90), stage_at: minutos(90),
+    actions: ['reabrir'],
+    reminder: { at: null, snoozed_until: null,
+      follow_up: { waits: 'cliente', at: null, closed: 'sin_respuesta' } },
+    events: [{ de: 'respondido', a: 'cerrado', actor: 'automatizacion',
+      que: 'follow_up_no_answer', at: minutos(90) }]
+  }),
+  caso(54, 'cerrado', {
+    title: 'Cambio de contraseña del portal', chat_name: 'Operaciones internas',
+    updated_at: minutos(30), stage_at: minutos(30), actions: ['reabrir'],
+    reminder: { at: null, snoozed_until: null,
+      follow_up: { waits: 'nada', at: null, closed: 'atendido' } },
+    events: [{ de: 'respondido', a: 'cerrado', actor: 'automatizacion',
+      que: 'follow_up_attended', at: minutos(30) }]
+  })
+]
+
 const TABLERO_DESPACHO = [
   caso(31, 'trabajo', { title: 'El reporte de ventas sale en blanco', prioridad: 'high',
     updated_at: minutos(12),
@@ -1227,6 +1267,19 @@ const PANELES = [
     enTodosLosAnchos: true, espera: 400, datos: conTablero(tableroDe(TABLERO_CASOS_CLI)),
     guion: ABRIR_TABLERO + `;
       document.querySelector('.card[data-case="41"]').click()`
+  },
+  {
+    // seguimiento-casos: lo que espera cada caso, su revision y la marca de cierre.
+    nombre: 'tablero-seguimiento', archivo: 'activity.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, guion: ABRIR_TABLERO, espera: 400,
+    datos: conTablero(tableroDe(TABLERO_SEGUIMIENTO))
+  },
+  {
+    // Y el detalle del que espera al cliente.
+    nombre: 'tablero-seguimiento-detalle', archivo: 'activity.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, espera: 400, datos: conTablero(tableroDe(TABLERO_SEGUIMIENTO)),
+    guion: ABRIR_TABLERO + `;
+      document.querySelector('.card[data-case="51"]').click()`
   },
   {
     // T8: el despacho al agente del proyecto en cada estado.

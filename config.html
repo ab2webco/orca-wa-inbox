@@ -1096,6 +1096,40 @@
           </div>
         </section>
 
+        <!-- El seguimiento de cada caso respondido (seguimiento-casos): los cuatro plazos viajan
+             en UNA clave, `followUp`, como el primer mensaje: cada clave es un mensaje mas
+             contra el cupo del host. Los topes son los que valida wa-scope. -->
+        <section class="card" id="follow-up-card">
+          <h2 data-t="fuLegend"></h2>
+          <div class="fr-nums">
+            <div class="fr-num">
+              <label for="fu-us" data-t="fuUsLabel"></label>
+              <input id="fu-us" type="number" min="1" max="1440" step="1" inputmode="numeric"
+                     aria-describedby="fu-help" />
+            </div>
+            <div class="fr-num">
+              <label for="fu-customer" data-t="fuCustomerLabel"></label>
+              <input id="fu-customer" type="number" min="1" max="168" step="1"
+                     inputmode="numeric" aria-describedby="fu-help" />
+            </div>
+            <div class="fr-num">
+              <label for="fu-close" data-t="fuCloseLabel"></label>
+              <input id="fu-close" type="number" min="1" max="720" step="1" inputmode="numeric"
+                     aria-describedby="fu-help" />
+            </div>
+            <div class="fr-num">
+              <label for="fu-done" data-t="fuDoneLabel"></label>
+              <input id="fu-done" type="number" min="1" max="720" step="1" inputmode="numeric"
+                     aria-describedby="fu-help" />
+            </div>
+          </div>
+          <p class="hint" id="fu-help" data-t="fuHelp"></p>
+          <div class="actions">
+            <button class="primary" id="save-follow-up" data-t="saveCard"></button>
+            <span class="said" id="said-follow-up"></span>
+          </div>
+        </section>
+
         <!-- Jev (opcional): lo unico del plugin que manda texto de clientes fuera del
              equipo. Apagado de fabrica, y el aviso va ARRIBA de los controles y siempre a
              la vista. La llave no se muestra nunca: el panel solo sabe "guardada" o "sin
@@ -1668,6 +1702,19 @@
           pqHoursHelp: 'Si quien escribio no contesta "¿A o B?" en este plazo, la pregunta pasa ' +
             'a usted.',
           pqHoursRange: 'Son horas enteras, desde 1.',
+          // --- El seguimiento de cada caso respondido (seguimiento-casos) ---
+          fuLegend: 'Seguimiento de los casos',
+          fuUsLabel: 'Minutos para la respuesta prometida',
+          fuCustomerLabel: 'Horas antes de escribirle de nuevo al cliente',
+          fuCloseLabel: 'Horas para cerrar una pregunta sin respuesta',
+          fuDoneLabel: 'Horas para cerrar un caso ya atendido',
+          fuHelp: 'Tras un acuse o un avance sin la respuesta, el caso vuelve al agente y, si ' +
+            'se vence otra vez, le avisa a usted. Si el cliente no contesta una pregunta, el ' +
+            'agente le escribe una vez y despues se cierra. Una respuesta final sin nada nuevo ' +
+            'se cierra como atendida. Un mensaje del cliente cancela la revision.',
+          fuRange: 'Son enteros desde 1: hasta 1440 minutos, 168 horas para escribirle de nuevo ' +
+            'y 720 horas para cerrar.',
+          fuOrder: 'El cierre de la pregunta tiene que ser despues de escribirle de nuevo.',
           // --- Las personas de una conversacion y su rol (roles-por-numero, M11) ---
           peopleLegend: 'Personas y roles',
           peopleHelp: 'El rol sale del numero de cada persona, nunca de lo que diga un mensaje, y ' +
@@ -2277,6 +2324,19 @@
           pqHoursHelp: 'If whoever wrote does not answer "A or B?" within this time, the ' +
             'question goes to you.',
           pqHoursRange: 'Whole hours, from 1.',
+          // --- The follow-up of each answered case (seguimiento-casos) ---
+          fuLegend: 'Case follow-up',
+          fuUsLabel: 'Minutes for the promised reply',
+          fuCustomerLabel: 'Hours before writing to the customer again',
+          fuCloseLabel: 'Hours to close an unanswered question',
+          fuDoneLabel: 'Hours to close an attended case',
+          fuHelp: 'After an acknowledgement or an update without the reply, the case goes back ' +
+            'to the agent and, if it is missed again, you are told. If the customer does not ' +
+            'answer a question, the agent writes once more and then it is closed. A final reply ' +
+            'with nothing new is closed as attended. A message from the customer cancels the review.',
+          fuRange: 'Whole numbers from 1: up to 1440 minutes, 168 hours to write again and 720 ' +
+            'hours to close.',
+          fuOrder: 'Closing the question has to come after writing to the customer again.',
           // --- The people of a chat and their role (roles-por-numero, M11) ---
           peopleLegend: 'People and roles',
           peopleHelp: "The role comes from each person's number, never from what a message " +
@@ -2895,6 +2955,19 @@
         pqHoursHelp: 'Se quem escreveu nao responder "A ou B?" neste prazo, a pergunta passa ' +
           'para voce.',
         pqHoursRange: 'Sao horas inteiras, a partir de 1.',
+        // --- O acompanhamento de cada caso respondido (seguimiento-casos) ---
+        fuLegend: 'Acompanhamento dos casos',
+        fuUsLabel: 'Minutos para a resposta prometida',
+        fuCustomerLabel: 'Horas antes de escrever de novo ao cliente',
+        fuCloseLabel: 'Horas para fechar uma pergunta sem resposta',
+        fuDoneLabel: 'Horas para fechar um caso ja atendido',
+        fuHelp: 'Depois de uma confirmacao ou um avanco sem a resposta, o caso volta ao agente e, ' +
+          'se vencer de novo, avisa voce. Se o cliente nao responder uma pergunta, o agente ' +
+          'escreve uma vez e depois o caso e fechado. Uma resposta final sem nada novo e fechada ' +
+          'como atendida. Uma mensagem do cliente cancela a revisao.',
+        fuRange: 'Sao inteiros a partir de 1: ate 1440 minutos, 168 horas para escrever de novo ' +
+          'e 720 horas para fechar.',
+        fuOrder: 'O fechamento da pergunta tem que vir depois de escrever de novo.',
         // --- As pessoas de uma conversa e o seu papel (roles-por-numero, M11) ---
         peopleLegend: 'Pessoas e papeis',
         peopleHelp: 'O papel vem do numero de cada pessoa, nunca do que diz uma mensagem, e vale ' +
@@ -3598,7 +3671,8 @@
         'routes',
         'projects',
         'syncMinutes',
-        'jevEnabled'
+        'jevEnabled',
+        'followUp'
       ]
       // Los que otra linea NUNCA toma de la principal (`NO_HEREDAN`, la misma lista de
       // wa_settings.py y main.mjs): sin uno propio se pintan los de fabrica. Los avisos de Orca
@@ -3798,6 +3872,7 @@
       function pintarValor (key, valor, s) {
         if (key === 'firstReply') return pintarPrimer(valor, s)
         if (key === 'orcaNotices') return pintarOrca(valor, s)
+        if (key === 'followUp') return pintarSeguimiento(valor, s)
         var c = CONTROLES[key]
         if (!c || !hayRespuesta(valor) || !vigente(s) || sucios[c[0]]) return
         var n = el(c[0])
@@ -3882,6 +3957,8 @@
         { tarjeta: 'sla-card', boton: 'save-sla', said: 'said-sla', claves: ['slaMinutes'] },
         { tarjeta: 'pq-card', boton: 'save-pq-hours', said: 'said-pq-hours',
           claves: ['projectQuestionHours'] },
+        { tarjeta: 'follow-up-card', boton: 'save-follow-up', said: 'said-follow-up',
+          claves: ['followUp'] },
         { tarjeta: 'agent-card', boton: 'save-agent', said: 'said-agent',
           claves: ['agentName', 'ownerName', 'tone'] },
         { tarjeta: 'voice-card', boton: 'save-voice', said: 'said-voice',
@@ -3892,7 +3969,7 @@
       // Las de Su aprobacion que no estan en la vuelta (CLAVES): se piden al abrir SU
       // pestana. Primero los avisos de Orca, que son la tarjeta de arriba.
       var CLAVES_AUTO = ['orcaNotices', 'ackMode', 'ackText', 'ackQuietMinutes', 'greetingMode',
-        'greetingText', 'firstReply', 'slaMinutes', 'projectQuestionHours']
+        'greetingText', 'firstReply', 'slaMinutes', 'projectQuestionHours', 'followUp']
       var pintadas = {}
       var autoPedida = false
       function tarjetaLeida (c) {
@@ -4156,6 +4233,52 @@
         }
         el('pq-hours').value = String(Number(texto))
         guardarTarjeta(event.currentTarget, 'said-pq-hours', ['projectQuestionHours'])
+      })
+      // ---------- el seguimiento de cada caso respondido (seguimiento-casos) ----------
+      // UNA clave, `followUp`, en texto como el resto, con los rangos que valida wa-scope.
+      // Lo que falta o no sirve se pinta con el de fabrica.
+      var SEGUIMIENTO_DEFECTO = { usMinutes: '30', customerHours: '24', closeHours: '72',
+        doneHours: '48' }
+      var SEGUIMIENTO_NUMEROS = [['usMinutes', 'fu-us', 1, 1440],
+        ['customerHours', 'fu-customer', 1, 168], ['closeHours', 'fu-close', 1, 720],
+        ['doneHours', 'fu-done', 1, 720]]
+      SEGUIMIENTO_NUMEROS.forEach(function (n) { ensuciar(n[1]) })
+      function seguimientoValido (n, texto) {
+        var x = Number(texto)
+        return /^\d+$/.test(texto) && x >= n[2] && x <= n[3]
+      }
+      function pintarSeguimiento (valor, s) {
+        if (!hayRespuesta(valor) || !vigente(s)) return
+        var v = valor && typeof valor === 'object' ? valor : {}
+        SEGUIMIENTO_NUMEROS.forEach(function (n) {
+          if (sucios[n[1]] || document.activeElement === el(n[1])) return
+          var x = v[n[0]] === undefined || v[n[0]] === null ? '' : String(v[n[0]]).trim()
+          el(n[1]).value = seguimientoValido(n, x) ? String(Number(x)) : SEGUIMIENTO_DEFECTO[n[0]]
+        })
+      }
+      SEGUIMIENTO_NUMEROS.forEach(function (n) { el(n[1]).value = SEGUIMIENTO_DEFECTO[n[0]] })
+      el('save-follow-up').addEventListener('click', function (event) {
+        if (sinLeer('save-follow-up')) return
+        var salida = {}
+        var bien = SEGUIMIENTO_NUMEROS.every(function (n) {
+          var texto = el(n[1]).value.trim()
+          salida[n[0]] = String(Number(texto))
+          return seguimientoValido(n, texto)
+        })
+        if (!bien) { said('said-follow-up', t('fuRange'), true); return }
+        // Sin lugar para escribirle de nuevo antes del cierre, el seguimiento no sale nunca.
+        if (Number(salida.closeHours) <= Number(salida.customerHours)) {
+          said('said-follow-up', t('fuOrder'), true)
+          return
+        }
+        SEGUIMIENTO_NUMEROS.forEach(function (n) { el(n[1]).value = salida[n[0]] })
+        busy(event.currentTarget, guardar([['followUp', salida]]).then(function (mal) {
+          if (mal.indexOf('followUp') === -1) {
+            SEGUIMIENTO_NUMEROS.forEach(function (n) { delete sucios[n[1]] })
+          }
+          said('said-follow-up', mal.length ? t('saveFailed') : '✓ ' + t('savedOk'), !!mal.length)
+          pintarChecklist()
+        }))
       })
       // ---------- los avisos de Orca por WhatsApp (avisos-orca) ----------
       // UNA clave, `orcaNotices`, en texto como el resto, con los mismos rangos que valida
@@ -7266,7 +7389,7 @@
         numeroEnEdicion = null
         pintarDuenos()
         ;['said-agent', 'said-owners', 'said-orca', 'said-auto', 'said-sla', 'said-pq-hours',
-          'said-voice', 'said-reading'].forEach(function (id) { said(id, '') })
+          'said-follow-up', 'said-voice', 'said-reading'].forEach(function (id) { said(id, '') })
         pintarLecturas()
         olvidarReglasYProyectos()
       }

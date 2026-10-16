@@ -5875,6 +5875,89 @@ console.log('\nactivity.html — casos-cli K10: recordatorios y posponer en la t
   ok('una tarjeta sin recordatorio no lleva la linea', !doc.querySelector('.card-recordatorio'))
 }
 
+console.log('\nactivity.html — seguimiento-casos S4: lo que espera el caso y su marca de cierre')
+{
+  const pronto = new Date(Date.now() + 24 * 3600000).toISOString()
+  const espera = tarjeta({ case_id: 11, stage: 'respondido',
+    reminder: { at: null, snoozed_until: null,
+      follow_up: { waits: 'cliente', at: pronto, closed: null } },
+    events: [
+      { de: null, a: 'recibido', actor: 'automatizacion', que: 'message', at: hace(90 * 60000) },
+      { de: 'respondido', a: 'recibido', actor: 'automatizacion', que: 'follow_up_reopened',
+        at: hace(50 * 60000) },
+      { de: 'recibido', a: 'recibido', actor: 'automatizacion', que: 'follow_up_customer',
+        at: hace(50 * 60000) },
+      { de: 'recibido', a: 'recibido', actor: 'automatizacion', que: 'follow_up_us',
+        at: hace(40 * 60000) },
+      { de: 'recibido', a: 'recibido', actor: 'automatizacion', que: 'follow_up_owner',
+        at: hace(30 * 60000) }] })
+  const nuestra = tarjeta({ case_id: 12, stage: 'clasificado',
+    reminder: { at: null, snoozed_until: null,
+      follow_up: { waits: 'nosotros', at: pronto, closed: null } } })
+  const delDueno = tarjeta({ case_id: 13, stage: 'respondido',
+    reminder: { at: null, snoozed_until: null,
+      follow_up: { waits: 'nada', at: null, closed: null } } })
+  const sinRespuesta = tarjeta({ case_id: 14, stage: 'cerrado',
+    reminder: { at: null, snoozed_until: null,
+      follow_up: { waits: 'cliente', at: null, closed: 'sin_respuesta' } },
+    events: [{ de: 'respondido', a: 'cerrado', actor: 'automatizacion',
+      que: 'follow_up_no_answer', at: hace(10 * 60000) }] })
+  const atendido = tarjeta({ case_id: 15, stage: 'cerrado',
+    reminder: { at: null, snoozed_until: null,
+      follow_up: { waits: 'nada', at: null, closed: 'atendido' } },
+    events: [{ de: 'respondido', a: 'cerrado', actor: 'automatizacion',
+      que: 'follow_up_attended', at: hace(10 * 60000) }] })
+  const raro = tarjeta({ case_id: 16, stage: 'respondido',
+    reminder: { at: null, snoozed_until: null, follow_up: { waits: 'magia', at: pronto } } })
+  for (const [idioma, cliente, nosotros, nada, rev, cerrado1, cerrado2, hist] of [
+    ['es-419', /Espera al cliente/, /Espera nuestra respuesta/, /^No espera nada$/,
+      /revision/, /Cerrado: sin respuesta del cliente/,
+      /Cerrado: atendido, no requiere mas respuestas/,
+      [/reabierto para un seguimiento/, /el cliente no contesto/, /volvio al agente/,
+        /aviso al dueno/]],
+    ['en-US', /Waits for the customer/, /Waits for our reply/, /^Waits for nothing$/,
+      /review/, /Closed: no answer from the customer/,
+      /Closed: attended, needs no more replies/,
+      [/reopened for a follow-up/, /the customer did not answer/, /back to the agent/,
+        /owner notified/]],
+    ['pt-BR', /Espera o cliente/, /Espera nossa resposta/, /^Nao espera nada$/,
+      /revisao/, /Fechado: sem resposta do cliente/,
+      /Fechado: atendido, nao precisa de mais respostas/,
+      [/reaberto para um acompanhamento/, /o cliente nao respondeu/, /voltou ao agente/,
+        /aviso ao dono/]]]) {
+    const { doc } = await abrirTablero({ board: tablero([espera, nuestra, delDueno, sinRespuesta,
+      atendido, raro]) }, idioma)
+    const linea = (id) => {
+      const nodo = doc.querySelector(`.card[data-case="${id}"]`)
+      const l = nodo && nodo.querySelector('.card-seguimiento')
+      return l ? l.textContent : ''
+    }
+    ok(`${idioma}: la tarjeta dice que espera al cliente y cuando se revisa`,
+      cliente.test(linea(11)) && rev.test(linea(11)), linea(11))
+    ok(`${idioma}: o que espera nuestra respuesta`, nosotros.test(linea(12)) && rev.test(linea(12)),
+      linea(12))
+    ok(`${idioma}: sin revision (el caso del dueno) no inventa una hora`,
+      nada.test(linea(13)), linea(13))
+    ok(`${idioma}: la tarjeta cerrada lleva su marca`,
+      cerrado1.test(linea(14)) && cerrado2.test(linea(15)), `${linea(14)} | ${linea(15)}`)
+    ok(`${idioma}: lo que el panel no conoce no se muestra crudo`, linea(16) === '', linea(16))
+    const det = abrirDetalle(doc, 11)
+    const enDetalle = det.querySelector('.card-seguimiento')
+    ok(`${idioma}: el detalle tambien lo dice`, enDetalle && cliente.test(enDetalle.textContent),
+      enDetalle ? enDetalle.textContent : 'sin linea')
+    const filas = [...det.querySelectorAll('.det-hist li')].map((li) => li.textContent)
+    ok(`${idioma}: la historia dice el seguimiento en palabras`,
+      hist.every((re) => filas.some((f) => re.test(f))), JSON.stringify(filas))
+    const filas2 = [...abrirDetalle(doc, 14).querySelectorAll('.det-hist li')]
+      .map((li) => li.textContent)
+    ok(`${idioma}: y el cierre con su motivo`,
+      filas2.some((f) => /sin respuesta del cliente|no answer from the customer|sem resposta do cliente/
+        .test(f)), JSON.stringify(filas2))
+  }
+  const { doc } = await abrirTablero({ board: tablero([tarjeta({ case_id: 17 })]) })
+  ok('una tarjeta sin seguimiento no lleva la linea', !doc.querySelector('.card-seguimiento'))
+}
+
 console.log('\nactivity.html — T22: la historia dice que paso, y agrupa lo repetido')
 {
   const caso = tarjeta({ case_id: 4, events: [
@@ -7657,6 +7740,79 @@ await seccion(async () => {
   await espera(); await espera()
   ok('al abrir la pestana pinta la guardada', guardada.doc.getElementById('pq-hours').value === '48',
     guardada.doc.getElementById('pq-hours').value)
+})
+
+console.log('\nconfig.html — seguimiento-casos S5: los plazos del seguimiento')
+await seccion(async () => {
+  const { doc, storage } = await montar('config.html', {}, 'es-419')
+  await espera()
+  doc.getElementById('tab-aprobacion').click()
+  await espera(); await espera()
+  const CAMPOS = [['fu-us', '30', '1440'], ['fu-customer', '24', '168'], ['fu-close', '72', '720'],
+    ['fu-done', '48', '720']]
+  ok('los cuatro campos existen en Su aprobacion, enteros desde 1 y con su tope',
+    CAMPOS.every(([id, , max]) => {
+      const c = doc.getElementById(id)
+      return c && c.closest('#view-aprobacion') && c.type === 'number' && c.min === '1' &&
+        c.max === max && c.step === '1'
+    }), CAMPOS.map(([id]) => String(!!doc.getElementById(id))).join())
+  ok('sin nada guardado muestran 30, 24, 72 y 48',
+    CAMPOS.every(([id, def]) => doc.getElementById(id).value === def),
+    CAMPOS.map(([id]) => doc.getElementById(id).value).join())
+  ok('cada uno con su etiqueta, y la tarjeta con una pista',
+    CAMPOS.every(([id]) => (doc.querySelector(`label[for="${id}"]`)?.textContent || '').trim().length > 3) &&
+    /cliente/i.test(doc.getElementById('fu-help')?.textContent || ''),
+    doc.getElementById('fu-help')?.textContent)
+  escribir(doc, 'fu-us', '45')
+  escribir(doc, 'fu-customer', '12')
+  escribir(doc, 'fu-close', '96')
+  escribir(doc, 'fu-done', '24')
+  doc.getElementById('save-follow-up').click()
+  await espera(); await espera()
+  ok('guardar escribe UNA clave con los cuatro plazos en texto',
+    JSON.stringify(storage.followUp) ===
+      JSON.stringify({ usMinutes: '45', customerHours: '12', closeHours: '96', doneHours: '24' }),
+    JSON.stringify(storage.followUp))
+  for (const [id, malo] of [['fu-us', '0'], ['fu-us', '1441'], ['fu-customer', '2.5'],
+    ['fu-customer', '169'], ['fu-close', ''], ['fu-done', 'dos dias'], ['fu-close', '12']]) {
+    escribir(doc, id, malo)
+    doc.getElementById('save-follow-up').click()
+    await espera(); await espera()
+    ok(`${id} = "${malo}" no se guarda y lo dice`, storage.followUp.usMinutes === '45' &&
+      storage.followUp.closeHours === '96' &&
+      doc.getElementById('said-follow-up').className.includes('bad'),
+      `${JSON.stringify(storage.followUp)} ${doc.getElementById('said-follow-up').textContent}`)
+    escribir(doc, id, { 'fu-us': '45', 'fu-customer': '12', 'fu-close': '96', 'fu-done': '24' }[id])
+  }
+  const guardada = await montar('config.html', { followUp: { usMinutes: '20', customerHours: '6',
+    closeHours: '48', doneHours: '12' } }, 'es-419')
+  await espera()
+  guardada.doc.getElementById('tab-aprobacion').click()
+  await espera(); await espera()
+  ok('al abrir la pestana pinta los guardados',
+    ['fu-us', 'fu-customer', 'fu-close', 'fu-done'].map((id) => guardada.doc.getElementById(id).value)
+      .join() === '20,6,48,12',
+    ['fu-us', 'fu-customer', 'fu-close', 'fu-done'].map((id) => guardada.doc.getElementById(id).value).join())
+  const sucio = await montar('config.html', { followUp: { usMinutes: 'magia', customerHours: '0' } },
+    'es-419')
+  await espera()
+  sucio.doc.getElementById('tab-aprobacion').click()
+  await espera(); await espera()
+  ok('lo que falta o no sirve se pinta con el de fabrica',
+    ['fu-us', 'fu-customer', 'fu-close', 'fu-done'].map((id) => sucio.doc.getElementById(id).value)
+      .join() === '30,24,72,48',
+    ['fu-us', 'fu-customer', 'fu-close', 'fu-done'].map((id) => sucio.doc.getElementById(id).value).join())
+})
+await seccion(async () => {
+  const { window } = await montar('config.html')
+  const S = window.STRINGS
+  const nuevas = ['fuLegend', 'fuUsLabel', 'fuCustomerLabel', 'fuCloseLabel', 'fuDoneLabel',
+    'fuHelp', 'fuRange', 'fuOrder']
+  const faltan = nuevas.filter((k) => !S.es[k] || !S.en[k])
+  ok('los textos del seguimiento existen en espanol y en ingles', faltan.length === 0,
+    `faltan = ${JSON.stringify(faltan)}`)
+  const sinPt = nuevas.filter((k) => !S.pt[k] || S.pt[k] === S.en[k])
+  ok('y en portugues propio', sinPt.length === 0, `sin portugues = ${JSON.stringify(sinPt)}`)
 })
 
 console.log('\nconfig.html — proyectos-por-chat (M6): los textos nuevos en los tres idiomas')
