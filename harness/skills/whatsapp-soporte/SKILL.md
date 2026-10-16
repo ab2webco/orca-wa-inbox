@@ -72,7 +72,7 @@ line.
    plugin's review reads it with the reply. Say what the reply waits for once it is sent
    with `--espera`: `cliente` when it asks the customer something, `nada` when nothing more
    is needed, `nosotros` when you still owe the real answer. Without it, a reply with a
-   question waits for the customer and any other waits for nothing.
+   question waits for the customer and any other waits for nothing (see Follow-ups).
    Work in a codebase: `--tipo trabajar` (below).
    The owner is needed: `--tipo escalar` (below). Doubtful: leave it classified as
    `doubtful` and propose nothing.
@@ -100,6 +100,18 @@ use `caso avance`.
    flagged claim (it does not count toward `updates_max`); if the rewrite is held too, drop it.
 4. Close with the final reply (your `responder` proposal, or `caso resultado --estado
    resuelto`): say concretely what was fixed and ask the customer to check it.
+
+## Follow-ups
+
+Every message the customer gets says what it waits for, and the plugin reviews the case
+when that time comes. An acknowledgement or an update waits for us: with no final reply
+after `follow_up_us_minutes`, the case comes back to you with a note quoting what was
+promised (a second miss tells the owner). A question waits for the customer: with no
+answer after `follow_up_customer_hours`, the case comes back to you with a note asking
+for one short follow-up; propose it as usual, about what you asked, without repeating
+the earlier message. Do it once: with no answer by `follow_up_close_hours` the plugin
+closes the case. A final reply with nothing new is closed after `follow_up_done_hours`.
+Any message from the customer cancels the review.
 
 ## What never reaches you
 

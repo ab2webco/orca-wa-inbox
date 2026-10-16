@@ -4619,6 +4619,160 @@ def tick_preguntas_proyecto(con, resumen):
             raise
 
 
+# Lo que dicen los eventos del seguimiento (seguimiento-casos). La nota es para el agente,
+# en ingles como todo lo que lee; el tablero la reconoce por su comienzo y la dice en su
+# idioma. Los motivos de cierre son los que muestra la tarjeta cerrada.
+NOTA_SEGUIMIENTO = "Follow-up ("
+SEGUIMIENTO_REABRE = "seguimiento: el cliente no contesto"
+SEGUIMIENTO_AVISO = "seguimiento: aviso al dueno"
+CIERRE_SIN_RESPUESTA = "sin respuesta del cliente"
+CIERRE_ATENDIDO = "atendido, no requiere mas respuestas"
+# Donde se cierra una pregunta sin respuesta: respondida, o reabierta para el seguimiento
+# que el agente todavia no mando. En trabajo, listo o bloqueado algo mas esta pasando.
+ETAPAS_CIERRE_SEGUIMIENTO = ("respondido", "recibido", "clasificado", "decision")
+# Donde el agente escribe el seguimiento; en `observar` no redacta, y la pregunta solo se
+# cierra a su hora.
+MODOS_SEGUIMIENTO = ("responder", "borrador")
+
+
+def seguimiento_actualiza(con, case_id, **campos):
+    campos["updated_at"] = ahora_caso()
+    con.execute(f"update caso_seguimiento set {', '.join(f'{k}=?' for k in campos)} "
+                f"where case_id=?", (*campos.values(), case_id))
+    _TABLERO_SUCIO.append(case_id)
+
+
+def minutos_desde(sello):
+    try:
+        antes = datetime.datetime.strptime(str(sello), "%Y-%m-%d %H:%M:%S")
+    except (TypeError, ValueError):
+        return 0
+    return max(0, int((datetime.datetime.now() - antes).total_seconds() // 60))
+
+
+def seguimiento_cierra(con, caso, motivo):
+    """Cierra el caso por su seguimiento, con su motivo, y deja la fila cerrada. Sin commit."""
+    caso_valida(caso, "cerrado", motivo)
+    caso_mover(con, caso, "cerrado", "automatizacion", motivo)
+    seguimiento_actualiza(con, caso["case_id"], estado="cerrado", revisar_at=None)
+
+
+def seguimiento_nosotros(con, caso, s, plazos):
+    """Le debemos la respuesta y no salio: la primera vez el caso vuelve al agente con lo
+    prometido; la segunda, se le dice al dueno, una vez. Al cliente nunca le sale nada."""
+    cid, etapa = caso["case_id"], caso["etapa"]
+    promesa = recorta(s["texto"], LARGO_SEGUIMIENTO) or "-"
+    minutos = minutos_desde(s["desde"])
+    if s["fase"] == 0:
+        nota = (f"{NOTA_SEGUIMIENTO}us): {minutos} min ago the customer was told \"{promesa}\" "
+                f"and no final reply has gone out yet. Send the final reply now, or an honest "
+                f"update if it is not ready.")
+        campos = {"necesita_agente": 1} if etapa in ETAPAS_ATENDER else {}
+        caso_tocar(con, caso, "automatizacion", PREFIJO_NOTA + nota, **campos)
+        seguimiento_actualiza(con, cid, fase=1, revisar_at=sello_en(plazos["nosotros"]))
+        return "seguimientos"
+    tx = aviso_textos()
+    texto = tx["seguimiento"].format(
+        n=cid, chat=nombre_del_chat(con, caso["chat_jid"]), min=minutos,
+        x=tx["motivo_oculto"] if wa_reglas.secreto(promesa) else promesa)
+    encolado = aviso_encola(con, f"aviso-seg-{cid}-{re.sub(r'[^0-9]', '', s['desde'])}",
+                            "seguimiento", texto, case_id=cid)
+    caso_evento(con, cid, etapa, etapa, "automatizacion", SEGUIMIENTO_AVISO)
+    seguimiento_actualiza(con, cid, fase=2, estado="avisado", revisar_at=None)
+    return "seguimientos_al_dueno" if encolado else None
+
+
+def seguimiento_cliente(con, caso, s, plazos, modo, silencio):
+    """Le preguntamos algo y no contesto: UN seguimiento que escribe el agente (el caso
+    vuelve a recibido con una nota; nunca un texto fijo, nunca en horas de silencio), y sin
+    respuesta a `follow_up_close_hours` de la pregunta, cerrado."""
+    cid, etapa = caso["case_id"], caso["etapa"]
+    if pregunta_al_que_escribio(ruta_del_caso(caso)):
+        # La pregunta "A o B?" la escala `tick_preguntas_proyecto`.
+        seguimiento_actualiza(con, cid, estado="hecho", revisar_at=None)
+        return None
+    if s["fase"] == 0 and plazos["cliente"] < plazos["cierre"]:
+        if etapa != "respondido":
+            seguimiento_actualiza(con, cid, estado="hecho", revisar_at=None)
+            return None
+        if silencio:
+            return None
+        cierre = sello_en(plazos["cierre"], s["desde"])
+        if modo not in MODOS_SEGUIMIENTO:
+            seguimiento_actualiza(con, cid, fase=1, revisar_at=cierre)
+            return None
+        horas = plazos["cliente"] // 3600
+        pregunta = recorta(s["texto"], LARGO_SEGUIMIENTO) or "-"
+        nota = (f"{NOTA_SEGUIMIENTO}customer): the customer has not answered in {horas} h. We "
+                f"asked: \"{pregunta}\". Write one short follow-up about that question, without "
+                f"repeating the earlier message. With no answer {plazos['cierre'] // 3600} h after "
+                f"the question, the case closes on its own.")
+        caso_valida(caso, "recibido")
+        caso_mover(con, caso, "recibido", "automatizacion", f"{SEGUIMIENTO_REABRE} en {horas} h",
+                   necesita_agente=1)
+        caso_evento(con, cid, "recibido", "recibido", "automatizacion", PREFIJO_NOTA + nota)
+        seguimiento_actualiza(con, cid, fase=1, revisar_at=cierre)
+        return "seguimientos"
+    if etapa not in ETAPAS_CIERRE_SEGUIMIENTO:
+        seguimiento_actualiza(con, cid, estado="hecho", revisar_at=None)
+        return None
+    seguimiento_cierra(con, caso, CIERRE_SIN_RESPUESTA)
+    return "cerrados_por_seguimiento"
+
+
+def seguimiento_revisa(con, caso, s, modo, silencio):
+    """Lo que toca con un seguimiento vencido; devuelve el conteo del tick, o None."""
+    plazos = plazos_seguimiento(con, linea_del_caso(caso))
+    if s["espera"] == "nosotros":
+        if caso["etapa"] in ETAPAS_TERMINADAS:
+            seguimiento_actualiza(con, caso["case_id"], estado="hecho", revisar_at=None)
+            return None
+        return seguimiento_nosotros(con, caso, s, plazos)
+    if caso_del_dueno(con, caso):
+        # El caso del dueno no lleva seguimiento al cliente ni se cierra solo.
+        seguimiento_actualiza(con, caso["case_id"], revisar_at=None)
+        return None
+    if s["espera"] == "cliente":
+        return seguimiento_cliente(con, caso, s, plazos, modo, silencio)
+    if caso["etapa"] != "respondido":
+        seguimiento_actualiza(con, caso["case_id"], estado="hecho", revisar_at=None)
+        return None
+    seguimiento_cierra(con, caso, CIERRE_ATENDIDO)
+    return "cerrados_por_seguimiento"
+
+
+def tick_seguimiento(con, resumen):
+    """Las revisiones vencidas de la linea activa (seguimiento-casos), cada una en su
+    transaccion y una sola vez. Un chat apagado no se toca: su revision espera."""
+    filas = con.execute("select s.case_id, c.chat_jid from caso_seguimiento s join caso c on "
+                        "c.case_id = s.case_id where s.account=? and s.estado='pendiente' and "
+                        "s.revisar_at is not null and s.revisar_at <= ? order by s.revisar_at, "
+                        "s.case_id", (cuenta_activa(), ahora_caso())).fetchall()
+    if not filas:
+        return
+    alcance = merged_scope(con)
+    silencio = en_silencio(ajustes_orca(con)["silencio"], hora_local())
+    for f in filas:
+        modo = (alcance.get(f["chat_jid"]) or {}).get("mode") or "off"
+        if modo == "off":
+            continue
+        caso_toma(con)
+        try:
+            s = seguimiento_fila(con, f["case_id"])
+            fila = con.execute("select * from caso where case_id=?", (f["case_id"],)).fetchone()
+            if not (s and fila and s["estado"] == "pendiente" and s["revisar_at"]
+                    and s["revisar_at"] <= ahora_caso()):
+                con.rollback()
+                continue
+            conteo = seguimiento_revisa(con, dict(fila), s, modo, silencio)
+            con.commit()
+            if conteo:
+                resumen[conteo] += 1
+        except BaseException:
+            con.rollback()
+            raise
+
+
 def seccion_de_pregunta(con, caso):
     """La seccion del archivo del caso sobre la pregunta "A o B?", o [] sin pregunta."""
     p = ruta_del_caso(caso).get("pregunta")
@@ -6002,6 +6156,9 @@ def caso_suma_mensaje(con, caso, stanza, actor, reabre=True):
         caso_tocar(con, caso, actor, f"mensaje {stanza}")
     if caso.get("pospuesto_hasta"):
         termina_posposicion(con, caso, actor)
+    # El cliente escribio: la revision pendiente ya no vale, sigue el camino de siempre
+    # (seguimiento-casos).
+    seguimiento_termina(con, caso["case_id"], "cancelado")
 
 
 def plano(texto):
@@ -10410,7 +10567,8 @@ CONTEOS_TICK = ("enviados", "excepciones", "frenados", "esperando", "bloqueados"
                 "revisiones", "transcritos", "rancias", "despachados",
                 "bloqueados_por_despacho", "respuestas_al_proyecto", "agente_lanzado",
                 "agente_error", "trabajos_sin_clic", "limpieza_atascados", "avisos",
-                "avisos_error", "preguntas_al_dueno", "recordatorios")
+                "avisos_error", "preguntas_al_dueno", "recordatorios", "seguimientos",
+                "seguimientos_al_dueno", "cerrados_por_seguimiento")
 
 # La limpieza de los espacios que dejan las corridas del plugin. Orca fuerza `new_per_run`
 # en las automatizaciones de un plugin: cada corrida crea un hijo `::workspace:<uuid>` de
@@ -11202,6 +11360,8 @@ TEXTOS_AVISO = {
            "recuerda": "Recordatorio: el caso {n} sigue esperando su decision.",
            "meta": "Caso {n} · {chat}: el cliente espera respuesta hace {min} min (la meta es "
                    "{meta} min). Pide: {x}",
+           "seguimiento": "Caso {n} · {chat}: al cliente se le prometio una respuesta hace "
+                          "{min} min y todavia no ha salido. Se le dijo: {x}",
            "worker": "WhatsApp Inbox: el proceso de fondo del plugin no da senales hace {min} "
                      "min. La revision de cada minuto sigue, pero sin el no hay respaldo ni "
                      "avisos del plugin. Reiniciar Orca suele traerlo de vuelta.",
@@ -11248,6 +11408,8 @@ TEXTOS_AVISO = {
            "recuerda": "Reminder: case {n} is still waiting for your decision.",
            "meta": "Case {n} · {chat}: the client has waited {min} min for a reply (the target "
                    "is {meta} min). Asks: {x}",
+           "seguimiento": "Case {n} · {chat}: the client was promised a reply {min} min ago "
+                          "and none has gone out yet. They were told: {x}",
            "worker": "WhatsApp Inbox: the plugin's background process has given no sign of "
                      "life for {min} min. The every-minute check goes on, but without it there "
                      "is no backup and no plugin notices. Restarting Orca usually brings it "
@@ -13255,6 +13417,15 @@ def cmd_tick(con, a):
                 con.rollback()
             resumen["errores"] += 1
             print(f"wa-scope: project questions skipped: {exc}", file=sys.stderr)
+        # La revision de cada seguimiento (seguimiento-casos): antes de los avisos, para que el
+        # del dueno salga en esta misma vuelta.
+        try:
+            tick_seguimiento(con, resumen)
+        except (sqlite3.Error, CasoFalla) as exc:
+            if con.in_transaction:
+                con.rollback()
+            resumen["errores"] += 1
+            print(f"wa-scope: follow-ups skipped: {exc}", file=sys.stderr)
         # Los avisos de Orca (avisos-orca): los encola aca y salen con los de abajo.
         try:
             tick_orca_si_toca(con, resumen)
