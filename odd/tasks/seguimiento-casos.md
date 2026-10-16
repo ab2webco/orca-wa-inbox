@@ -57,6 +57,7 @@ Out of scope: per-chat business hours (the stored `hours` stays unused).
 - [x] S3 Thanks after a final reply closes the case. RED: `seguimiento S3` 4 FALLA (case stayed respondido). GREEN: 6/6.
 - [x] S4 Board shows the wait and the mark. RED: `seguimiento S4` 9 FALLA and panels 21 FALLA (no `reminder.follow_up`, no codes). GREEN: 11/11 and panels 1763/1763; shots at 1440/768/390/320, light and dark.
 - [x] S5 Settings. RED: check-clis rejected nothing (`follow_up_*` accepted 0, 1441, text) and no `followUp` in sync; panels 4 FALLA (no card, no strings); worker 727/728 (AJUSTES_DE_LINEA lists differ). GREEN: check-clis exit 0 (606 settings checks), panels 1778/1778, worker 728/728.
+- [x] Z1 Release checks and version: v4.30.11; the release suite is green (check-casos 2561/2561, panels 1778/1778, worker 728/728, almacen 370/370, envio 142/142, sidecar-mensajes 155/155, sidecar-pairing 129/129, manifest 112/112, resolver 55/55, userdata 25/25, check-panels, check-voseo, check-prompts, check-resolver, check-harness 105, check-clis 606, check-closing 36/36, check-lid 51/51, check-datos-reales, sidecar-build 11/11).
 
 ## Acceptance criteria
 
