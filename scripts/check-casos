@@ -4551,6 +4551,51 @@ else:
            sorted(llamadas(registro)) == sorted(f"t{i}.ogg" for i in range(1, 8)),
            f"{llamadas(registro)}")
 
+
+# atencion-casos J3: una nota de voz de un grupo solo se transcribia si el chat ya tenia un
+# caso abierto. La que abria el caso nunca se transcribia, y Jev la descartaba como "solo
+# audio". El chat ya esta autorizado (si no, ingest no lo lee): se transcribe antes de juzgar.
+def audio_de_grupo(home, mid, nombre, minutos=3):
+    return msg(SOPORTE, mid, "", minutos, media="audio", ruta=archivo_media(home, nombre),
+               bytes=15)
+
+
+print("\nlos audios de un grupo se transcriben antes de juzgarlos (J3)")
+if NODE:
+    falso = JevFalso(jev_segun_texto)
+    antes = dict(os.environ)
+    os.environ["WA_INBOX_JEV_ENDPOINT"] = falso.url
+    try:
+        with tempfile.TemporaryDirectory() as home:
+            env, registro = prepara_transcriptor(home)
+            pon_llave(home)
+            llegan(home, A, [audio_de_grupo(home, "GA1", "grupo1.ogg")])
+            autoriza(home)
+            r = ingiere_con(home, env)
+            ok("la nota de voz de un grupo sin caso abierto se transcribe",
+               llamadas(registro) == ["grupo1.ogg"], f"{llamadas(registro)} {r}")
+            ok("Jev la juzga por su texto, no como solo audio",
+               falso.textos() == ["revisa este caso: dijo grupo1.ogg"], f"{falso.textos()}")
+            c = caso_de_stanza(home, "GA1")
+            ok("y el pedido que dice abre su caso",
+               c is not None and c["etapa"] == "clasificado" and c["clase"] == "card",
+               f"{c and c['etapa']} {r}")
+
+        with tempfile.TemporaryDirectory() as home:
+            env, registro = prepara_transcriptor(home)
+            pon_llave(home)
+            llegan(home, A, [audio_de_grupo(home, f"GT{i}", f"g{i}.ogg", 60 - 5 * i)
+                             for i in range(1, 8)])
+            autoriza(home)
+            r = ingiere_con(home, env)
+            ok("en un grupo el tope de cinco audios por corrida sigue",
+               len(llamadas(registro)) == 5 and r.get("audios_diferidos") == 2,
+               f"{llamadas(registro)} {r}")
+    finally:
+        falso.cerrar()
+        os.environ.clear()
+        os.environ.update(antes)
+
 print("\nlos adjuntos en el hilo y en el brief")
 if NODE:
     import base64  # noqa: E402

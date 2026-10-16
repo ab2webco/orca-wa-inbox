@@ -7093,27 +7093,24 @@ def transcripcion_guarda(con, cuenta, chat, stanza, texto, razon):
     con.commit()
 
 
-def transcribe_nuevos(con, nuevos, horas, total):
+def transcribe_nuevos(con, nuevos, total):
     """Los mensajes nuevos, con el texto de sus audios. Un audio con transcripcion sigue con
     ella como `text` (se suma al pie, si lo tuviera); uno que no se pudo queda sin texto y
     con `sin_transcribir`: el codigo. Pasado el tope los audios que sobran se SACAN de la
     corrida (no se abren ni se marcan) y se cuentan en `audios_diferidos`.
 
-    Una linea suelta de un grupo solo se transcribe si va a sumarse a un caso: si el chat
-    ya tiene uno abierto, o si en este mismo lote hay algo que lo abre."""
+    Una linea suelta de un grupo tambien se transcribe, abra o no un caso (atencion-casos,
+    J3): la nota de voz que trae el pedido es justo la que abre el caso, y sin su texto Jev
+    la descarta como solo audio. Lo que llega aca ya es de un chat autorizado (`ingest`
+    descarta lo que no esta en el alcance o esta en `off`), y el tope sigue mandando."""
     ajustes = merged_settings(con)
     cuenta = cuenta_activa()
-    abre = {m["chat_jid"] for m in nuevos if m.get("kind") != "grupo"}
     gastados, salida = 0, []
     for m in nuevos:
         if not es_audio(m):
             salida.append(m)
             continue
         chat, stanza = m["chat_jid"], m["stanza_id"]
-        if (m.get("kind") == "grupo" and chat not in abre
-                and not caso_abierto_de_chat(con, chat, horas, ("cerrado", "respondido"))):
-            salida.append(m)
-            continue
         fila = transcripcion_de(con, cuenta, chat, stanza)
         if fila is None:
             if gastados >= TOPE_AUDIOS_INGEST:
@@ -8705,7 +8702,7 @@ def ingest_rezago(con, cuenta, leidos, scope, decisiones, prepara, horas, total,
                 continue
             # Los audios se transcriben como siempre; uno que pasa el tope de la corrida
             # entra igual, sin texto: el caso es UNO y no se parte en dos corridas.
-            hechos = {m["stanza_id"]: m for m in transcribe_nuevos(con, items, horas, total)}
+            hechos = {m["stanza_id"]: m for m in transcribe_nuevos(con, items, total)}
             items = [hechos.get(m["stanza_id"], m) for m in items]
             base = mensaje_de_rafaga(items) if len(items) > 1 else items[0]
             veredicto = veredicto_de(base, None, con)
@@ -8822,7 +8819,7 @@ def cmd_ingest(con, a):
                 total["respuestas"] += 1
                 continue
         nuevos.append(prepara(m, entrada))
-    nuevos = transcribe_nuevos(con, nuevos, horas, total)
+    nuevos = transcribe_nuevos(con, nuevos, total)
     # Lo que ya tiene decision del dueno o juicio del agente se resuelve solo; el resto,
     # junto con lo que llego pegado en el mismo chat, se juzga como una rafaga.
     # El juicio de Jev queda en la cache bajo el primer mensaje de la rafaga: ese no la

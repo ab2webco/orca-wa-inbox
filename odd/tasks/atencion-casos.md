@@ -51,7 +51,8 @@ contact names, the Jev service model itself.
 
 - [x] J2 Triage sees recent chat messages and the line's pending question.
   (check-casos J2 RED 10 FALLA, GREEN 13/13)
-- [ ] J3 Group voice notes transcribed before triage; attachments not skipped.
+- [x] J3 Group voice notes transcribed before triage; attachments not skipped.
+  (check-casos J3 RED 4 FALLA, GREEN 4/4; attachment-only skips left as they are)
 - [ ] K1 A blocked case does not absorb new messages.
 - [ ] M1 Chat memory in the case file and the worker brief.
 - [ ] O1 Owner order executes without a second ask.
