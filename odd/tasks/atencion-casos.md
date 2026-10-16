@@ -43,6 +43,10 @@ line already did in that chat.
   again whether to do it.
 - R1 Jev's draft review sees the agent's reported evidence (`--resumen`) and a status
   backed by it is not held.
+- C1 The case agent's tab closes only when Claude is idle: after `unlock` the agent may still
+  be working (publishing a document, or the owner typed in the tab), so the tick closes the
+  tab only with `tui-idle`; busy, it looks again on the next tick. The 30-minute deadline
+  stays the hard stop.
 
 Out of scope: per-chat configuration in the live store (the owner's call), duplicate
 contact names, the Jev service model itself.
@@ -61,6 +65,8 @@ contact names, the Jev service model itself.
   (check-harness RED 2 files, GREEN; check-casos owner-case section RED 3 FALLA, GREEN 29/29)
 - [x] R1 Draft review sees the agent's evidence.
   (check-casos R1 RED TypeError + 1 FALLA + unknown --evidencia, GREEN 9/9; envio 142/142)
+- [x] C1 The case agent's tab closes only when Claude is idle.
+  (check-casos T8 agent section RED 1 FALLA, GREEN 243/243)
 - [ ] Z1 Release checks and version.
 
 ## Acceptance criteria
@@ -74,6 +80,8 @@ contact names, the Jev service model itself.
 - An owner case brief says the order is the approval.
 - A reply that says the work was done, with evidence in `--resumen`, is not held as
   unverified.
+- A case agent that released the lock but is still busy keeps its tab open; once idle, the
+  tab closes and the run is `terminado`.
 
 ## Checks
 

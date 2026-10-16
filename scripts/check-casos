@@ -8513,6 +8513,27 @@ if NODE:
         ok("una terminal que ya no esta deja la corrida terminada",
            corridas_agente(home)[-1]["estado"] == "terminado", f"{corridas_agente(home)}")
 
+    with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as carpeta:
+        # atencion-casos C1: el agente solto el lock y sigue trabajando (publica un documento,
+        # o el dueno le escribio en la pestana). Visto en vivo: el tick la cerraba igual, al
+        # minuto, y cortaba el trabajo a la mitad. Se cierra solo con Claude quieto.
+        orca_casos(carpeta)
+        caso_para_agente(home, "AC8")
+        tick_orca(home, carpeta)
+        js(home, "lock", "--note", "triage")
+        js(home, "unlock")
+        envejece_agente(home, 120)
+        cambia_orca(carpeta, idle=False)
+        tick_orca(home, carpeta)
+        ok("con el lock suelto pero Claude ocupado, la corrida sigue activa y la pestana abierta",
+           corridas_agente(home)[-1]["estado"] == "activo" and cerradas(carpeta) == [],
+           f"{corridas_agente(home)} {cerradas(carpeta)}")
+        cambia_orca(carpeta, idle=True)
+        tick_orca(home, carpeta)
+        ok("con el lock suelto y Claude quieto, la corrida termina y la pestana se cierra",
+           corridas_agente(home)[-1]["estado"] == "terminado"
+           and cerradas(carpeta) == ["term_worker1"], f"{corridas_agente(home)} {cerradas(carpeta)}")
+
     # El caso en un archivo (caso-en-archivo, T1): el tick le deja al agente SU caso en
     # `casos/caso-<id>.md`. Bajo "Messages of the case" van solo los mensajes del caso; lo
     # de antes en el MISMO chat (otros casos, lo que la linea ya mando, las correcciones del

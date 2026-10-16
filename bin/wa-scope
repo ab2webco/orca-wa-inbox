@@ -15671,16 +15671,22 @@ def tick_vigila_agente(con, cli, resumen):
             continue
         if edad < AGENTE_ARRANQUE_S or lock_del_agente(con):
             continue
-        if reviso_despues(con, f):
+        # Solto el lock, o lleva rato sin moverse: se cierra solo con Claude quieto. Visto en
+        # vivo (atencion-casos, C1): tras `unlock` el agente seguia trabajando (publicaba un
+        # documento, o el dueno le escribio en la pestana) y el tick lo cortaba a la mitad.
+        # Ocupado, la pestana sigue abierta y se mira en el tick siguiente; AGENTE_PLAZO_S
+        # sigue siendo el corte duro.
+        if (reviso_despues(con, f) or edad > AGENTE_QUIETO_S) and agente_quieto(cli, f):
             agente_cierra(con, cli, f, "terminado")
-            continue
-        if edad > AGENTE_QUIETO_S:
-            res, error = orca_llama(cli, ["terminal", "wait", "--terminal", f["terminal"],
-                                          "--for", "tui-idle", "--timeout-ms",
-                                          str(AGENTE_QUIETO_MS)], AGENTE_QUIETO_MS // 1000 + 10)
-            espera = (res or {}).get("wait")
-            if not error and isinstance(espera, dict) and espera.get("satisfied") is True:
-                agente_cierra(con, cli, f, "terminado")
+
+
+def agente_quieto(cli, fila):
+    """Si el Claude de la corrida esta quieto (`tui-idle`) y no a mitad de un turno."""
+    res, error = orca_llama(cli, ["terminal", "wait", "--terminal", fila["terminal"],
+                                  "--for", "tui-idle", "--timeout-ms", str(AGENTE_QUIETO_MS)],
+                            AGENTE_QUIETO_MS // 1000 + 10)
+    espera = (res or {}).get("wait")
+    return not error and isinstance(espera, dict) and espera.get("satisfied") is True
 
 
 def caso_para_corrida(con, origen, casos):
