@@ -7301,6 +7301,10 @@ def veredicto_de(m, decision, con=None):
     if decision == "take":
         return {"accion": "clasificar", "clase": "card", "actor": "dueno",
                 "detalle": "tomado por el dueno"}
+    if m.get("pregunta_pendiente"):
+        # La respuesta a la pregunta que la linea dejo en el chat (J2): nunca se salta ni se
+        # cierra como charla, aunque sea un "Si". Jev la juzga igual, por lo que marca.
+        return veredicto_de_respuesta(jev_juzga(m, con))
     juicio = m.get("juicio")
     # Un veredicto de Jev cacheado entero se aplica entero: con sus excepciones y su
     # marca de agente, no solo con la clase.
@@ -7334,6 +7338,20 @@ def veredicto_de(m, decision, con=None):
         return {"accion": "cerrar", "actor": "automatizacion",
                 "motivo": motivo_sin_agente("cortesia")}
     return None
+
+
+def veredicto_de_respuesta(juicio):
+    """El veredicto de la respuesta a la pregunta pendiente de la linea (J2): se clasifica
+    para el agente y vuelve al ultimo caso del chat (`ingest_mensaje`). Lo que Jev marco
+    sigue valiendo: una credencial va al dueno, como siempre; lo unico que no vale es su
+    `skip`, ni que no necesite al agente."""
+    if juicio is None:
+        return {"accion": "clasificar", "clase": "card", "actor": "automatizacion",
+                "detalle": RESPUESTA_A_LA_LINEA, "respuesta_pendiente": True}
+    juicio = dict(juicio, skip=False, needs_agent="credential" not in juicio["exceptions"])
+    return {"accion": "clasificar", "clase": clase_de_jev(juicio), "actor": "jev",
+            "detalle": f"jev {juicio.get('attention_class') or '-'} · {RESPUESTA_A_LA_LINEA}",
+            "jev": juicio, "respuesta_pendiente": True}
 
 
 # menos-ruido M3: un agradecimiento, y lo que lo acompana sin pedir nada. Con Jev, Jev
@@ -7424,6 +7442,60 @@ def con_respuesta(con, m, horas):
     except (TypeError, ValueError, AttributeError):
         return m
     return dict(m, respuesta_previa=texto) if texto else m
+
+
+# Una pregunta de la linea sigue esperando su respuesta hasta esto (atencion-casos, J2).
+PREGUNTA_PENDIENTE_S = 24 * 3600
+# El detalle del evento con que se clasifica la respuesta a esa pregunta.
+RESPUESTA_A_LA_LINEA = "respuesta a la pregunta de la linea"
+
+
+def contexto_del_chat(m, rol_de):
+    """(recientes, pregunta_pendiente) de un mensaje que entra (atencion-casos, J2).
+
+    `recientes`: los ultimos `wa_jev.RECIENTES` mensajes del chat antes de este, en los dos
+    sentidos, del mas viejo al mas nuevo, con el rol de quien escribio. `pregunta_pendiente`:
+    el mensaje justo anterior es de la linea, pregunta algo y salio hace menos de
+    PREGUNTA_PENDIENTE_S; este es entonces su respuesta, porque no entro nada en medio. Sin
+    almacen no hay contexto, y nada esta pendiente."""
+    try:
+        fuente = wa_store.abrir()
+    except wa_store.SinFuente:
+        return [], False
+    try:
+        yo = fuente.execute("select rowid r, ts from mensaje where account=? and chat_jid=? "
+                            "and stanza_id=?", (m.get("account") or cuenta_activa(),
+                                                m.get("chat_jid"), m.get("stanza_id"))).fetchone()
+        if yo is None:
+            return [], False
+        filas = fuente.execute(
+            "select ts, from_me, sender_jid, body from mensaje where account=? and chat_jid=? "
+            "and revocado=0 and (ts < ? or (ts = ? and rowid < ?)) "
+            "order by ts desc, rowid desc limit ?",
+            (m.get("account") or cuenta_activa(), m.get("chat_jid"), yo["ts"], yo["ts"],
+             yo["r"], wa_jev.RECIENTES)).fetchall()
+    except sqlite3.Error:
+        return [], False
+    finally:
+        fuente.close()
+    recientes = [{"from_me": bool(r["from_me"]), "text": r["body"] or "",
+                  "rol": None if r["from_me"] else rol_de(
+                      dict(m, sender_jid=wa_store.jid_sin_dispositivo(r["sender_jid"])))}
+                 for r in reversed(filas)]
+    ultimo = filas[0] if filas else None
+    pendiente = bool(ultimo and ultimo["from_me"] and "?" in (ultimo["body"] or "")
+                     and ultimo["ts"] >= time.time() - PREGUNTA_PENDIENTE_S)
+    return recientes, pendiente
+
+
+def con_contexto(con, m, horas, rol_de):
+    """El mensaje con lo que Jev necesita para juzgarlo: la ultima respuesta enviada al
+    chat (`con_respuesta`), los mensajes de antes y si contesta una pregunta de la linea."""
+    m = con_respuesta(con, m, horas)
+    recientes, pendiente = contexto_del_chat(m, rol_de)
+    if recientes:
+        m = dict(m, recientes=recientes)
+    return dict(m, pregunta_pendiente=True) if pendiente else m
 
 
 def caso_de_rafaga_reciente(con, chat):
@@ -7945,8 +8017,11 @@ def ingest_mensaje(con, m, veredicto, horas):
         else:
             previo = caso_abierto_de_chat(con, chat, horas)
             aparte = None
-            if previo and ((previo["etapa"] == "respondido" and continuidad(veredicto) == "nuevo")
-                           or (previo["etapa"] == "trabajo" and es_pedido_nuevo(veredicto))):
+            # La respuesta a la pregunta de la linea sigue en el ultimo caso del chat (J2).
+            responde = bool(veredicto and veredicto.get("respuesta_pendiente"))
+            if previo and not responde and (
+                    (previo["etapa"] == "respondido" and continuidad(veredicto) == "nuevo")
+                    or (previo["etapa"] == "trabajo" and es_pedido_nuevo(veredicto))):
                 aparte = previo["case_id"]
             case_id, que = caso_asigna(con, stanza, chat, "automatizacion", aparte)
             hecho.update(nuevos=1, casos_creados=int(que == "nuevo"),
@@ -7962,7 +8037,7 @@ def ingest_mensaje(con, m, veredicto, horas):
                     primer_mensaje_al_agente(con, case_id, primero)
                 else:
                     auto_registra(con, case_id, veredicto["auto"])
-            if (que == "unido" and previo and previo["case_id"] == case_id
+            if (que == "unido" and previo and previo["case_id"] == case_id and not responde
                     and previo["etapa"] in ETAPAS_QUE_VUELVEN
                     and veredicto and es_charla_ajena(veredicto.get("jev"))):
                 caso_devuelve(con, caso_de(con, case_id), previo, veredicto["jev"])
@@ -8758,7 +8833,7 @@ def cmd_ingest(con, a):
     por_rafaga = {m["stanza_id"]: r for r in agrupa_rafagas(libres) for m in r}
     for m in nuevos:
         if m in sueltas:
-            veredicto = veredicto_de(con_respuesta(con, m, horas),
+            veredicto = veredicto_de(con_contexto(con, m, horas, rol_de),
                                      (decisiones.get(m["stanza_id"]) or {}).get("decision"), con)
             grupo = [m]
         else:
@@ -8766,7 +8841,7 @@ def cmd_ingest(con, a):
             if grupo[0] is not m:
                 continue
             base = mensaje_de_rafaga(grupo) if len(grupo) > 1 else m
-            veredicto = veredicto_de(con_respuesta(con, base, horas), None, con)
+            veredicto = veredicto_de(con_contexto(con, base, horas, rol_de), None, con)
         for x in grupo:
             if x.get("kind") == "grupo" and veredicto is None:
                 sueltos.append((x, veredicto))

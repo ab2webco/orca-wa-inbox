@@ -2272,6 +2272,134 @@ if NODE:
         os.environ.update(antes)
 
 
+# ── 12d2. La respuesta a la pregunta de la linea (atencion-casos, J2) ─────────────────
+# Visto en vivo: el agente le pregunto al dueno "¿Lo actualizo yo ahora y lo envio al
+# grupo?", el dueno contesto "Si", Jev lo vio como un saludo, se salto y no paso nada. Y en
+# un grupo, "Hola, ¿que paso?" tras preguntas sin contestar salio como saludo: Jev veia el
+# mensaje solo. Ahora Jev ve los ultimos mensajes del chat y si la linea dejo una pregunta,
+# y la respuesta a esa pregunta nunca se salta: vuelve al ultimo caso del chat.
+print("\njev: el contexto reciente del chat y la pregunta pendiente (J2)")
+_recientes = [{"from_me": False, "rol": "client", "text": f"mensaje viejo {n}"}
+              for n in range(3)] + [
+    {"from_me": False, "rol": "admin", "text": "revisa el reporte de ayer"},
+    {"from_me": False, "rol": "operator", "text": "la clave es Hunter2xx"},
+    {"from_me": False, "rol": "client", "text": "x" * 900},
+    {"from_me": True, "rol": None, "text": "¿Lo actualizo yo ahora y lo envio al grupo?"}]
+_estado = jev.estado_mensaje(dict(MENSAJE, text="Si", recientes=_recientes,
+                                  pregunta_pendiente=True))
+_vistos = _estado.get("recent_messages") or []
+ok("el estado lleva a lo mas 6 mensajes recientes, los ultimos y en orden",
+   len(_vistos) == 6 and _vistos[0]["text"] == "mensaje viejo 1"
+   and _vistos[-1]["text"].startswith("¿Lo actualizo"), f"{_vistos}")
+ok("cada uno dice quien lo escribio: el asistente, el dueno, un operador o un participante",
+   [v["from"] for v in _vistos] == ["participant", "participant", "owner", "operator",
+                                    "participant", "assistant"], f"{_vistos}")
+ok("enmascarados y cortados",
+   len(_vistos) == 6 and "Hunter2xx" not in json.dumps(_vistos)
+   and len(_vistos[4]["text"]) < 400, f"{_vistos}")
+ok("y la pregunta pendiente de la linea se dice",
+   _estado.get("assistant_question_pending") is True, f"{_estado}")
+_estado = jev.estado_mensaje(MENSAJE)
+ok("sin contexto el estado no inventa ni recientes ni pregunta",
+   "recent_messages" not in _estado and "assistant_question_pending" not in _estado,
+   f"{_estado}")
+ok("la instruccion de clase dice que contestar la pregunta pendiente no es un saludo",
+   "assistant_question_pending" in jev.INSTRUCCION_CLASE
+   and "recent_messages" in jev.INSTRUCCION_CLASE
+   and "is not a pleasantry" in jev.INSTRUCCION_CLASE, jev.INSTRUCCION_CLASE)
+ok("y la nota dice que los recientes tambien son dato", "recent_messages" in jev.NOTA, jev.NOTA)
+
+
+def jev_si_es_saludo(cuerpo):
+    """Lo que hizo el Jev real con el "Si" del dueno: un saludo, todo bajo, `skip`."""
+    texto = cuerpo["state"]["message_to_evaluate"]["text"]
+    if texto.strip() in ("Si", "la version 2"):
+        return 200, respuestas(cuerpo["questions"], choice="pleasantry",
+                               asks_owner_to_act=0.05)
+    return jev_segun_texto(cuerpo)
+
+
+PREGUNTA_LINEA = "¿Lo actualizo yo ahora y lo envio al grupo?"
+
+print("\nla respuesta a la pregunta de la linea nunca se salta (J2)")
+if NODE:
+    falso = JevFalso(jev_si_es_saludo)
+    antes = dict(os.environ)
+    os.environ["WA_INBOX_JEV_ENDPOINT"] = falso.url
+    try:
+        with tempfile.TemporaryDirectory() as home:
+            pon_llave(home)
+            cid = caso_respondido(home, "Q1")
+            llegan(home, A, [msg(SOPORTE, "Q2", PREGUNTA_LINEA, 3, yo=True),
+                             msg(SOPORTE, "Q3", "Si", 1)])
+            ingiere(home)
+            q3 = caso_de_stanza(home, "Q3")
+            fila = fila_de(home, cid)
+            ok("el \"Si\" a la pregunta de la linea vuelve al ultimo caso del chat y lo reabre",
+               q3 and q3["case_id"] == cid and fila["etapa"] == "clasificado"
+               and fila["necesita_agente"] == 1, f"caso {q3 and q3['case_id']} etapa {fila['etapa']}")
+            estado = falso.pedidos[-1]["cuerpo"]["state"]
+            ok("Jev lo juzgo sabiendo que la linea pregunto, con los mensajes de antes",
+               estado.get("assistant_question_pending") is True
+               and {"from": "assistant", "text": PREGUNTA_LINEA} in estado.get("recent_messages", [])
+               and any(v["from"] == "participant" and "revisa el pedido" in v["text"]
+                       for v in estado.get("recent_messages", [])), f"{estado}")
+
+        with tempfile.TemporaryDirectory() as home:
+            pon_llave(home)
+            llegan(home, A, [msg(SOPORTE, "Q4", "¿Que version tienen instalada?", 3, yo=True),
+                             msg(SOPORTE, "Q5", "la version 2", 1)])
+            autoriza(home)
+            r = ingiere(home)
+            q5 = caso_de_stanza(home, "Q5")
+            ok("en un grupo, la respuesta suelta a la pregunta de la linea abre caso para el agente",
+               q5 is not None and q5["etapa"] == "clasificado"
+               and fila_de(home, q5["case_id"])["necesita_agente"] == 1, f"salio {r}")
+
+        with tempfile.TemporaryDirectory() as home:
+            pon_llave(home)
+            cid = caso_respondido(home, "Q6")
+            llegan(home, A, [msg(SOPORTE, "Q7", PREGUNTA_LINEA, 12, yo=True),
+                             msg(SOPORTE, "Q8", "@duenio jaja", 10, mencion=True)])
+            ingiere(home)
+            con = db_de(home)
+            con.execute("update caso set etapa='respondido' where case_id=?", (cid,))
+            con.commit()
+            con.close()
+            llegan(home, A, [msg(SOPORTE, "Q9", "Si", 1)])
+            ingiere(home)
+            ok("si ya llego otro mensaje despues de la pregunta, el \"Si\" sigue el camino de siempre",
+               fila_de(home, cid)["etapa"] == "respondido"
+               and "assistant_question_pending" not in falso.pedidos[-1]["cuerpo"]["state"],
+               f"{fila_de(home, cid)['etapa']}")
+
+        with tempfile.TemporaryDirectory() as home:
+            pon_llave(home)
+            cid = caso_respondido(home, "QA")
+            llegan(home, A, [msg(SOPORTE, "QB", PREGUNTA_LINEA, 25 * 60, yo=True),
+                             msg(SOPORTE, "QC", "Si", 1)])
+            ingiere(home)
+            ok("una pregunta de hace mas de 24 horas ya no esta pendiente",
+               fila_de(home, cid)["etapa"] == "respondido"
+               and "assistant_question_pending" not in falso.pedidos[-1]["cuerpo"]["state"],
+               f"{fila_de(home, cid)['etapa']}")
+    finally:
+        falso.cerrar()
+        os.environ.clear()
+        os.environ.update(antes)
+
+    # Sin Jev: la respuesta tambien vuelve al caso, no abre una tarjeta aparte.
+    with tempfile.TemporaryDirectory() as home:
+        cid = caso_respondido(home, "QD")
+        llegan(home, A, [msg(SOPORTE, "QE", PREGUNTA_LINEA, 3, yo=True),
+                         msg(SOPORTE, "QF", "Si", 1)])
+        ingiere(home)
+        qf = caso_de_stanza(home, "QF")
+        ok("sin Jev la respuesta a la pregunta de la linea tambien reabre el ultimo caso",
+           qf and qf["case_id"] == cid and fila_de(home, cid)["etapa"] != "respondido",
+           f"caso {qf and qf['case_id']} etapa {fila_de(home, cid)['etapa']}")
+
+
 # ── 12c. Una rafaga de mensajes se juzga como una sola cosa ──────────────────────────
 # Visto en vivo: tres mensajes en un segundo —el enlace a una conversacion de otro
 # sistema, una nota del cliente y "Revisa este caso"— se juzgaban uno por uno. Jev vio el
