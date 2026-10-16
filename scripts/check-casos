@@ -19578,6 +19578,149 @@ if NODE:
         os.environ.update(antes)
 
 
+# ── Lo que espera una respuesta enviada (seguimiento-casos, S1) ──────────────────────
+# Un caso respondido se quedaba en `respondido` para siempre: nada miraba si todavia le
+# debiamos algo al cliente, si el cliente contesto nuestra pregunta o si ya se podia cerrar.
+# Cada mensaje que sale dice ahora lo que espera: `nosotros` (un acuse o un avance: falta la
+# respuesta de verdad), `cliente` (le preguntamos algo) o `nada`. El agente lo dice con
+# `--espera`; si no lo dice, se infiere del mensaje que salio.
+print("\nseguimiento S1: lo que espera una respuesta enviada")
+
+
+def seguimiento_de(home, cid):
+    con = db_de(home)
+    try:
+        fila = con.execute("select * from caso_seguimiento where case_id=?",
+                           (int(cid),)).fetchone()
+    except sqlite3.OperationalError:
+        fila = None
+    con.close()
+    return dict(fila) if fila else None
+
+
+def falta_para(fila):
+    """Cuanto falta para la revision del seguimiento, en minutos (None sin revision)."""
+    if not fila or not fila.get("revisar_at"):
+        return None
+    cuando = datetime.datetime.strptime(fila["revisar_at"], "%Y-%m-%d %H:%M:%S")
+    return (cuando - datetime.datetime.now()).total_seconds() / 60
+
+
+def propuesta_con(home, stanza, texto, *extra, chat=PERSONA):
+    cid = str(js(home, "caso", "crear", "--chat", chat, "--stanza", stanza,
+                 "--actor", "agente")[0]["case_id"])
+    js(home, "caso", "clasificar", cid, "--clase", "card", "--prioridad", "none",
+       "--actor", "agente")
+    js(home, "caso", "propuesta", cid, "--tipo", "responder", "--respuesta", texto, *extra,
+       "--actor", "agente")
+    return cid
+
+
+if NODE:
+    with tempfile.TemporaryDirectory() as home:
+        linea_lista(home)
+        sidecar = SidecarFalso(home)
+        try:
+            final = propuesta_con(home, "SG1", "Listo, ya quedo configurado el acceso.")
+            pregunta = propuesta_con(home, "SG2", "Ya lo cambie. ¿Te funciona ahora?")
+            enlace = propuesta_con(home, "SG3",
+                                   "Ya quedo: https://docs.example.com/plan?v=2&x=1")
+            dicha = propuesta_con(home, "SG4", "Te envio el formulario por correo.",
+                                  "--espera", "cliente")
+            tick(home)
+            f = seguimiento_de(home, final)
+            ok("una respuesta final sin pregunta, al salir, no espera nada",
+               js(home, "caso", "ver", final)[0]["etapa"] == "respondido" and f
+               and f["espera"] == "nada" and f["origen"] == "inferido"
+               and f["estado"] == "pendiente", f"{f}")
+            ok("y su revision queda para follow_up_done_hours (48 h)",
+               f and 48 * 60 - 3 <= falta_para(f) <= 48 * 60, f"{falta_para(f)}")
+            f = seguimiento_de(home, pregunta)
+            ok("una respuesta con una pregunta espera al cliente, revisada a las 24 h",
+               f and f["espera"] == "cliente" and 24 * 60 - 3 <= falta_para(f) <= 24 * 60,
+               f"{f} {falta_para(f)}")
+            ok("y guarda lo que se le pregunto", f and "¿Te funciona ahora?" in (f["texto"] or ""),
+               f"{f}")
+            f = seguimiento_de(home, enlace)
+            ok("el ? de un enlace no es una pregunta", f and f["espera"] == "nada", f"{f}")
+            f = seguimiento_de(home, dicha)
+            ok("lo que dice el agente con --espera manda sobre lo inferido",
+               f and f["espera"] == "cliente" and f["origen"] == "agente", f"{f}")
+            ok("y viaja en la propuesta que firma el dueno",
+               js(home, "caso", "ver", dicha)[0]["propuesta"].get("espera") == "cliente")
+            otro = caso_clasificado(home, "SG5", PERSONA)
+            p = corre(home, "caso", "propuesta", otro, "--tipo", "trabajar", "--instrucciones",
+                      "Revisar el login", "--espera", "cliente", "--actor", "agente")
+            ok("--espera solo va con una respuesta: un trabajo no le escribe a nadie",
+               error_de(p) == "E_ARGS", p.stderr)
+            p = corre(home, "caso", "propuesta", otro, "--tipo", "responder", "--respuesta",
+                      "Hola", "--espera", "manana", "--actor", "agente")
+            ok("un --espera que no existe se rechaza", p.returncode != 0
+               and seguimiento_de(home, otro) is None, p.stderr[-200:])
+
+            # El resultado del agente del proyecto: `necesita` es una pregunta al cliente.
+            cid, _ = caso_en_trabajo(home, "SG6", PERSONA)
+            r = js(home, "caso", "resultado", cid, "--estado", "necesita", "--respuesta",
+                   "Para revisarlo, dime la fecha del reporte.", "--resumen",
+                   "Falta la fecha del reporte", "--actor", "trabajador")[0]
+            tick(home)
+            f = seguimiento_de(home, cid)
+            ok("caso resultado --estado necesita espera al cliente, aunque no lleve ?",
+               r["propuesta"].get("espera") == "cliente" and f and f["espera"] == "cliente",
+               f"{r['propuesta']} {f}")
+            cid, _ = caso_en_trabajo(home, "SG7", PERSONA)
+            js(home, "caso", "resultado", cid, "--respuesta", "Ya quedo el reporte.",
+               "--resumen", "Corregi el filtro", "--espera", "cliente", "--actor", "trabajador")
+            tick(home)
+            f = seguimiento_de(home, cid)
+            ok("y caso resultado --espera lo dice el agente del proyecto",
+               f and f["espera"] == "cliente" and f["origen"] == "agente", f"{f}")
+            cid, _ = caso_en_trabajo(home, "SG8", PERSONA)
+            p = corre(home, "caso", "resultado", cid, "--estado", "bloqueado", "--resumen",
+                      "Sin acceso", "--espera", "nada", "--actor", "trabajador")
+            ok("un bloqueado no manda nada: --espera no va", error_de(p) == "E_ARGS", p.stderr)
+        finally:
+            sidecar.cerrar()
+
+    # El acuse y el avance: falta la respuesta de verdad, y la debemos nosotros.
+    falso = JevFalso(jev_y_borradores)
+    antes = dict(os.environ)
+    os.environ["WA_INBOX_JEV_ENDPOINT"] = falso.url
+    try:
+        with tempfile.TemporaryDirectory() as home:
+            pon_llave(home)
+            llegan(home, A, [msg(PERSONA, "SG10", "revisa este caso por favor", 3),
+                             msg(OPERACIONES, "SG11", "@duenio revisa este caso", 3,
+                                 mencion=True)])
+            js(home, "agent", "Agente De Ejemplo")
+            js(home, "set", PERSONA, "--provider", "ninguno", "--mode", "responder")
+            js(home, "set", OPERACIONES, "--provider", "ninguno", "--mode", "responder")
+            js(home, "set", OPERACIONES, "--first-reply", "model")
+            sidecar = SidecarFalso(home)
+            try:
+                ingiere(home)
+                acusado = caso_de_stanza(home, "SG10")["case_id"]
+                agente = caso_de_stanza(home, "SG11")["case_id"]
+                tick(home)
+                f = seguimiento_de(home, acusado)
+                ok("un acuse que salio espera de nosotros la respuesta, revisada a los 30 min",
+                   auto_de(home, acusado)["estado"] == "enviado" and f
+                   and f["espera"] == "nosotros" and 27 <= falta_para(f) <= 30, f"{f}")
+                ok("y cita lo que se prometio",
+                   f and "le respondemos" in (f["texto"] or ""), f"{f}")
+                p = avance(home, agente, PRIMERO)
+                f = seguimiento_de(home, agente)
+                ok("un avance que salio tambien espera de nosotros",
+                   (envio_de_avance(p) or {}).get("estado") == "enviado" and f
+                   and f["espera"] == "nosotros" and f["texto"] == PRIMERO, f"{f}")
+            finally:
+                sidecar.cerrar()
+    finally:
+        falso.cerrar()
+        os.environ.clear()
+        os.environ.update(antes)
+
+
 print(f"\n{pruebas - len(fallos)}/{pruebas} en verde")
 if fallos:
     sys.exit(1)
