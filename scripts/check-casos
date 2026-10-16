@@ -19529,7 +19529,9 @@ if NODE:
                 cid = str(caso_de_stanza(home, "EV1")["case_id"])
                 js(home, "caso", "clasificar", cid, "--clase", "card", "--prioridad", "none",
                    "--actor", "agente")
-                v1 = propone(home, cid, "El documento ya quedo actualizado.")
+                # `propone` de arriba ya no es la de la propuesta a esta altura del archivo.
+                js(home, "caso", "propuesta", cid, "--tipo", "responder", "--respuesta",
+                   "El documento ya quedo actualizado.", "--actor", "agente")
                 tick(home)
                 ok("sin evidencia, el estado que afirma lo hecho se retiene como siempre",
                    not sidecar.entregados and estados_de_borrador(falso)
