@@ -54,7 +54,7 @@ Out of scope: per-chat business hours (the stored `hours` stays unused).
 
 - [x] S1 What a sent reply waits for. RED: check-casos `seguimiento S1` failed (`caso propuesta --espera` unrecognized, no `caso_seguimiento`). GREEN: 15/15; full check-casos 2508/2508.
 - [x] S2 Scheduled review. RED: `seguimiento S2` 12 FALLA, then E_STAGE (no review, no cancel, no `seguimientos` count). GREEN: 24/24.
-- [ ] S3 Thanks after a final reply closes the case.
+- [x] S3 Thanks after a final reply closes the case. RED: `seguimiento S3` 4 FALLA (case stayed respondido). GREEN: 6/6.
 - [ ] S4 Board shows the wait and the mark.
 - [ ] S5 Settings.
 

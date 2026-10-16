@@ -110,8 +110,9 @@ promised (a second miss tells the owner). A question waits for the customer: wit
 answer after `follow_up_customer_hours`, the case comes back to you with a note asking
 for one short follow-up; propose it as usual, about what you asked, without repeating
 the earlier message. Do it once: with no answer by `follow_up_close_hours` the plugin
-closes the case. A final reply with nothing new is closed after `follow_up_done_hours`.
-Any message from the customer cancels the review.
+closes the case. A final reply with nothing new is closed after `follow_up_done_hours`,
+and a thanks after it closes it at once. Any message from the customer cancels the
+review.
 
 ## What never reaches you
 

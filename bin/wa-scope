@@ -6931,7 +6931,7 @@ SIN_AGENTE = {
     # saludo DIRIGIDO al asistente no esta aca: se contesta con un saludo.)
     "charla_de_grupo": "charla de un grupo que no es para el asistente",
     # Un gracias u ok despues de una respuesta, sin una sola pregunta ni marca: el caso sigue
-    # respondido.
+    # respondido, o se cierra como atendido si la respuesta no esperaba nada (seguimiento-casos).
     "gracias_sin_pregunta": "un gracias despues de una respuesta, sin ninguna pregunta",
     # Un sticker sin texto, en una rafaga que no trae nada mas: no pide nada.
     "sticker_suelto": "un sticker suelto, sin texto ni nada mas en la rafaga",
@@ -6961,6 +6961,11 @@ PREFIJO_SIN_AGENTE = "No requiere agente: "
 
 def motivo_sin_agente(regla):
     return f"{PREFIJO_SIN_AGENTE}{SIN_AGENTE[regla]}"
+
+
+# Lo que se descarta sin pedir nada y, despues de una respuesta final, es su gracias: Jev
+# lo salto, o sin Jev es solo cortesia (seguimiento-casos, S3).
+MOTIVOS_GRACIAS = (motivo_sin_agente("jev_skip"), motivo_sin_agente("cortesia"))
 
 
 def regla_de_motivo(detalle):
@@ -8100,6 +8105,28 @@ def caso_devuelve(con, caso, previo, juicio):
                f"{previo['etapa']}", seguimiento=False,
                propuesta=previo["propuesta"], propuesta_version=previo["propuesta_version"],
                propuesta_aprobada=previo["propuesta_aprobada"])
+    gracias_tras_respuesta(con, caso["case_id"], devuelto=True)
+
+
+def gracias_tras_respuesta(con, case_id, devuelto):
+    """Un gracias (o algo que no pide nada) despues de la respuesta (seguimiento-casos, S3).
+    Si la respuesta no esperaba nada, es el final: el caso se cierra como atendido. Si le
+    preguntamos algo al cliente, no se cierra; con el gracias en el caso (`devuelto`, la
+    revision ya se cancelo al sumarlo), deja de esperar la respuesta y pasa a no esperar
+    nada. El caso del dueno no se cierra solo. Sin commit."""
+    caso = caso_de(con, case_id)
+    s = seguimiento_fila(con, case_id)
+    if (caso["etapa"] != "respondido" or not s
+            or s["estado"] not in (("pendiente", "cancelado") if devuelto else ("pendiente",))):
+        return
+    if caso_del_dueno(con, caso):
+        if devuelto:
+            seguimiento_actualiza(con, case_id, estado="pendiente")
+        return
+    if s["espera"] == "nada":
+        seguimiento_cierra(con, caso, CIERRE_ATENDIDO)
+    elif devuelto and s["espera"] == "cliente":
+        seguimiento_pon(con, caso, "nada", s["texto"], "inferido")
 
 
 def caso_retitula(con, case_id, previo, stanza, texto):
@@ -8312,11 +8339,16 @@ def ingest_mensaje(con, m, veredicto, horas):
             # Lo que se descarta no se mezcla con el pedido de otro: abre su propio caso
             # y lo cierra. Sumarlo a uno abierto lo cerraria entero, o reabriria uno
             # respondido porque el cliente dijo "gracias".
+            previo = (caso_abierto_de_chat(con, chat, horas)
+                      if veredicto["motivo"] in MOTIVOS_GRACIAS else None)
             case_id = caso_nuevo(con, chat, "automatizacion", stanzas=[stanza],
                                  detalle=f"mensaje {stanza}")
             caso = caso_de(con, case_id)
             caso_valida(caso, "cerrado", veredicto["motivo"])
             caso_mover(con, caso, "cerrado", veredicto["actor"], veredicto["motivo"])
+            if previo:
+                # El gracias que se salta tambien cierra la respuesta final que agradece.
+                gracias_tras_respuesta(con, previo["case_id"], devuelto=False)
             if veredicto.get("jev"):
                 caso_marca_jev(con, case_id, veredicto["jev"], stanza)
             caso_marca_regla(con, case_id, piso, stanza)

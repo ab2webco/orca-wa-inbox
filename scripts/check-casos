@@ -19951,6 +19951,99 @@ if NODE:
             sidecar.cerrar()
 
 
+# ── El gracias despues de una respuesta final cierra el caso (seguimiento-casos, S3) ──────
+# "Gracias, ya funciona" tras una respuesta que no esperaba nada es el final del caso: se
+# cierra como atendido en el acto, en vez de quedar respondido. Si le preguntamos algo al
+# cliente, un gracias pelado no lo cierra.
+print("\nseguimiento S3: el gracias despues de una respuesta final cierra el caso")
+
+
+def jev_de_gracias(cuerpo):
+    """Jev de mentira: "ya funciona" es una cortesia que no se salta (vuelve al caso);
+    "mil gracias", una que se salta (abre su propio caso cerrado)."""
+    texto = cuerpo["state"].get("message_to_evaluate", {}).get("text", "")
+    if "ya funciona" in texto:
+        return 200, respuestas(cuerpo["questions"], choice="pleasantry", asks_owner_to_act=0.3)
+    if "mil gracias" in texto:
+        return 200, respuestas(cuerpo["questions"], choice="pleasantry")
+    return jev_segun_texto(cuerpo)
+
+
+def espera_en(home, cid, espera):
+    """El caso respondido con su seguimiento pendiente, como lo deja la respuesta al salir."""
+    momento = time.strftime("%Y-%m-%d %H:%M:%S")
+    revisar = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(time.time() + 3600))
+    con = db_de(home)
+    con.execute("insert into caso_seguimiento (case_id, account, espera, origen, desde, "
+                "revisar_at, fase, texto, estado, updated_at) values (?,?,?,?,?,?,0,?,?,?)",
+                (int(cid), A, espera, "inferido", momento, revisar, "Ya quedo, gracias.",
+                 "pendiente", momento))
+    con.commit()
+    con.close()
+
+
+if NODE:
+    falso = JevFalso(jev_de_gracias)
+    antes = dict(os.environ)
+    os.environ["WA_INBOX_JEV_ENDPOINT"] = falso.url
+    try:
+        with tempfile.TemporaryDirectory() as home:
+            pon_llave(home)
+            cid = caso_respondido(home, "GR1")
+            espera_en(home, cid, "nada")
+            llegan(home, A, [msg(SOPORTE, "GR2", "@duenio gracias, ya funciona", 5,
+                                 mencion=True)])
+            ingiere(home)
+            ver = js(home, "caso", "ver", str(cid))[0]
+            ok("\"gracias, ya funciona\" tras una respuesta final cierra el caso como atendido",
+               ver["etapa"] == "cerrado"
+               and evento(ver, "cerrado")["detalle"] == "atendido, no requiere mas respuestas",
+               f"{ver['etapa']} {ver['eventos'][-2:]}")
+            ok("y el seguimiento queda cerrado", seguimiento_de(home, cid)["estado"] == "cerrado",
+               f"{seguimiento_de(home, cid)}")
+
+        with tempfile.TemporaryDirectory() as home:
+            pon_llave(home)
+            cid = caso_respondido(home, "GR3")
+            espera_en(home, cid, "cliente")
+            llegan(home, A, [msg(SOPORTE, "GR4", "@duenio gracias, ya funciona", 5,
+                                 mencion=True)])
+            ingiere(home)
+            f = seguimiento_de(home, cid)
+            ok("si le preguntamos algo, un gracias pelado no lo cierra",
+               fila_de(home, cid)["etapa"] == "respondido", f"{fila_de(home, cid)['etapa']}")
+            ok("pero ya no espera la respuesta: espera nada, revisado a las 48 h",
+               f and f["espera"] == "nada" and f["estado"] == "pendiente"
+               and 48 * 60 - 3 <= falta_para(f) <= 48 * 60, f"{f}")
+
+        with tempfile.TemporaryDirectory() as home:
+            pon_llave(home)
+            cid = caso_respondido(home, "GR5")
+            espera_en(home, cid, "nada")
+            llegan(home, A, [msg(SOPORTE, "GR6", "@duenio mil gracias", 5, mencion=True)])
+            ingiere(home)
+            nuevo = caso_de_stanza(home, "GR6")
+            ok("un gracias que se salta (su propio caso cerrado) tambien cierra el respondido",
+               nuevo["case_id"] != cid and nuevo["etapa"] == "cerrado"
+               and fila_de(home, cid)["etapa"] == "cerrado"
+               and evento(js(home, "caso", "ver", str(cid))[0], "cerrado")["detalle"]
+               == "atendido, no requiere mas respuestas", f"{fila_de(home, cid)['etapa']}")
+
+        with tempfile.TemporaryDirectory() as home:
+            pon_llave(home)
+            cid = caso_respondido(home, "GR7")
+            espera_en(home, cid, "cliente")
+            llegan(home, A, [msg(SOPORTE, "GR8", "@duenio mil gracias", 5, mencion=True)])
+            ingiere(home)
+            ok("y si esperaba al cliente, tampoco lo cierra",
+               fila_de(home, cid)["etapa"] == "respondido"
+               and seguimiento_de(home, cid)["espera"] == "cliente", f"{seguimiento_de(home, cid)}")
+    finally:
+        falso.cerrar()
+        os.environ.clear()
+        os.environ.update(antes)
+
+
 print(f"\n{pruebas - len(fallos)}/{pruebas} en verde")
 if fallos:
     sys.exit(1)
