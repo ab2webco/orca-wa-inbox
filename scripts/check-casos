@@ -19473,7 +19473,9 @@ with tempfile.TemporaryDirectory() as home:
 # --evidence` le pasa lo que el agente reporto (`caso propuesta --evidencia`, o el --resumen
 # de `caso resultado`) y el mensaje que se contesta; sin evidencia, se retiene como antes.
 print("\njev: la revision del borrador ve la evidencia del agente (R1)")
-_estado = jev.estado_borrador("Ya actualizamos el documento", evidencia="Actualizado: "
+# `jev` ya no es el cliente a esta altura del archivo (una prueba lo reusa): uno propio.
+_jev = carga_jev()
+_estado = _jev.estado_borrador("Ya actualizamos el documento", evidencia="Actualizado: "
                               "https://docs.example.com/d1 token: ghp_abcdefghijklmnop1234")
 ok("con evidencia, el estado del borrador la lleva como work_reported_by_the_agent",
    "https://docs.example.com/d1" in (_estado.get("work_reported_by_the_agent") or ""),
@@ -19481,13 +19483,13 @@ ok("con evidencia, el estado del borrador la lleva como work_reported_by_the_age
 ok("enmascarada como todo lo demas",
    "ghp_abcdefghijklmnop1234" not in json.dumps(_estado), f"{_estado}")
 ok("sin evidencia el estado no la inventa",
-   "work_reported_by_the_agent" not in jev.estado_borrador("Ya quedo"))
-_estado_q = jev.preguntas_borrador()["states_status_not_verified"]["instructions"]
+   "work_reported_by_the_agent" not in _jev.estado_borrador("Ya quedo"))
+_estado_q = _jev.preguntas_borrador()["states_status_not_verified"]["instructions"]
 ok("la pregunta del estado sin verificar acepta lo que respalda work_reported_by_the_agent",
    "work_reported_by_the_agent" in _estado_q and "counts as shown by the state" in _estado_q,
    _estado_q)
 t = Transporte(jev_dice())
-jev.revisa_borrador("Ya quedo", LLAVE, t, evidencia="commit abc1234")
+_jev.revisa_borrador("Ya quedo", LLAVE, t, evidencia="commit abc1234")
 ok("revisa_borrador manda la evidencia que recibe",
    t.pedidos[0]["cuerpo"]["state"].get("work_reported_by_the_agent") == "commit abc1234",
    f"{t.pedidos[0]['cuerpo']['state']}")
