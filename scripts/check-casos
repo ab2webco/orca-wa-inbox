@@ -20044,6 +20044,88 @@ if NODE:
         os.environ.update(antes)
 
 
+# ── El tablero dice lo que espera cada caso y su marca de cierre (seguimiento-casos, S4) ──
+# La tarjeta lleva el seguimiento DENTRO de `reminder` (`reminder.follow_up`): el juego de
+# llaves de la tarjeta es contrato. Lo que espera, cuando se revisa y, en lo que cerro la
+# revision, por que.
+print("\nseguimiento S4: el tablero dice lo que espera y la marca de cierre")
+if NODE:
+    with tempfile.TemporaryDirectory() as home:
+        linea_lista(home)
+        sidecar = SidecarFalso(home)
+        try:
+            pregunta = propuesta_con(home, "ST1", "Ya lo cambie. ¿Te funciona ahora?")
+            final = propuesta_con(home, "ST2", "Listo, ya quedo configurado el acceso.")
+            sin_nada = caso_clasificado(home, "ST3", PERSONA)
+            tick(home)
+            t1 = tarjeta(home, pregunta) or {}
+            seg = (t1.get("reminder") or {}).get("follow_up") or {}
+            ok("la tarjeta dice que espera al cliente y cuando se revisa",
+               seg.get("waits") == "cliente" and seg.get("closed") is None
+               and iso_a_local(seg["at"]).strftime("%Y-%m-%d %H:%M:%S")
+               == seguimiento_de(home, pregunta)["revisar_at"], f"{t1.get('reminder')}")
+            ok("sin tocar el juego de llaves de la tarjeta", set(t1) == LLAVES_TARJETA,
+               f"{sorted(set(t1) ^ LLAVES_TARJETA)}")
+            ok("y sin recordatorio ni posposicion inventados",
+               isinstance(t1.get("reminder"), dict) and t1["reminder"].get("at") is None
+               and t1["reminder"].get("snoozed_until") is None, f"{t1.get('reminder')}")
+            ok("un caso sin seguimiento sigue sin reminder",
+               (tarjeta(home, sin_nada) or {}).get("reminder") is None)
+            vence_seguimiento(home, pregunta)
+            vence_seguimiento(home, final)
+            tick(home)
+            t1 = tarjeta(home, pregunta) or {}
+            ok("al pedir el seguimiento, la historia lo dice en codigos (sin el texto de la nota)",
+               [e.get("que") for e in t1.get("events", [])][-2:]
+               == ["follow_up_reopened", "follow_up_customer"]
+               and not any(e.get("nota") for e in t1.get("events", [])), f"{t1.get('events')}")
+            vence_seguimiento(home, pregunta)
+            tick(home)
+            for cid, marca, que in ((pregunta, "sin_respuesta", "follow_up_no_answer"),
+                                    (final, "atendido", "follow_up_attended")):
+                t2 = tarjeta(home, cid) or {}
+                seg = (t2.get("reminder") or {}).get("follow_up") or {}
+                ok(f"la tarjeta cerrada lleva su marca: {marca}",
+                   t2.get("stage") == "cerrado" and seg.get("closed") == marca
+                   and seg.get("at") is None, f"{t2.get('stage')} {t2.get('reminder')}")
+                ok(f"y la historia el cierre: {que}",
+                   [e for e in t2.get("events", []) if e.get("a") == "cerrado"
+                    and e.get("de") != "cerrado"][-1].get("que") == que, f"{t2.get('events')}")
+        finally:
+            sidecar.cerrar()
+
+    falso = JevFalso(jev_y_borradores)
+    antes = dict(os.environ)
+    os.environ["WA_INBOX_JEV_ENDPOINT"] = falso.url
+    try:
+        with tempfile.TemporaryDirectory() as home:
+            pon_llave(home)
+            llegan(home, A, [msg(PERSONA, "ST5", "revisa este caso por favor", 3)])
+            js(home, "agent", "Agente De Ejemplo")
+            js(home, "set", PERSONA, "--provider", "ninguno", "--mode", "responder")
+            sidecar = SidecarFalso(home)
+            try:
+                ingiere(home)
+                cid = caso_de_stanza(home, "ST5")["case_id"]
+                tick(home)
+                seg = ((tarjeta(home, cid) or {}).get("reminder") or {}).get("follow_up") or {}
+                ok("tras el acuse, la tarjeta dice que espera nuestra respuesta",
+                   seg.get("waits") == "nosotros" and seg.get("at"), f"{seg}")
+                vence_seguimiento(home, cid)
+                tick(home)
+                vence_seguimiento(home, cid)
+                tick(home)
+                ques = [e.get("que") for e in (tarjeta(home, cid) or {}).get("events", [])]
+                ok("y la historia dice que volvio al agente y que se aviso al dueno",
+                   "follow_up_us" in ques and "follow_up_owner" in ques, f"{ques}")
+            finally:
+                sidecar.cerrar()
+    finally:
+        falso.cerrar()
+        os.environ.clear()
+        os.environ.update(antes)
+
+
 print(f"\n{pruebas - len(fallos)}/{pruebas} en verde")
 if fallos:
     sys.exit(1)

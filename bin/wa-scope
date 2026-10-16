@@ -9475,6 +9475,19 @@ def que_del_evento(detalle, medios=None):
     decir: el panel entonces muestra "actualizado", como antes."""
     # El texto retirado (K16) es de otro: no decide que fue el evento.
     d = detalle.split(MARCA_RETIRADO, 1)[0].strip()
+    # El seguimiento (seguimiento-casos): su nota es para el agente; el tablero dice que paso
+    # con un codigo, sin el texto.
+    if d.startswith(PREFIJO_NOTA + NOTA_SEGUIMIENTO):
+        return ("follow_up_customer" if d.startswith(PREFIJO_NOTA + NOTA_SEGUIMIENTO + "customer")
+                else "follow_up_us"), []
+    if d.startswith(SEGUIMIENTO_REABRE):
+        return "follow_up_reopened", []
+    if d == SEGUIMIENTO_AVISO:
+        return "follow_up_owner", []
+    if d == CIERRE_SIN_RESPUESTA:
+        return "follow_up_no_answer", []
+    if d == CIERRE_ATENDIDO:
+        return "follow_up_attended", []
     if d.startswith(PREFIJO_NOTA):
         return "note", []
     if d.startswith(PREFIJO_RECORDATORIO):
@@ -9661,6 +9674,35 @@ def build_board(con, ahora=None):
             "cards": datos["cards"]}
 
 
+# La marca del cierre por el seguimiento, por lo que esperaba: la pregunta sin respuesta, o
+# la respuesta final que no esperaba nada.
+MARCA_CIERRE_SEGUIMIENTO = {"cliente": "sin_respuesta", "nada": "atendido"}
+
+
+def seguimientos_de_tarjeta(con, casos):
+    """{case_id: {waits, at, closed}} de los casos con seguimiento que decir: el pendiente
+    (o el que ya se le aviso al dueno) de un caso abierto, y la marca del que cerro su
+    revision mientras siga cerrado."""
+    etapas = {c["case_id"]: c["etapa"] for c in casos}
+    ids = list(etapas)
+    salida = {}
+    for i in range(0, len(ids), 500):
+        parte = ids[i:i + 500]
+        for r in con.execute(
+                f"select case_id, espera, revisar_at, estado from caso_seguimiento where "
+                f"estado in ('pendiente', 'avisado', 'cerrado') and "
+                f"case_id in ({','.join('?' * len(parte))})", parte):
+            cerrado = etapas[r["case_id"]] == "cerrado"
+            if r["estado"] == "cerrado" and cerrado:
+                salida[r["case_id"]] = {"waits": r["espera"], "at": None,
+                                        "closed": MARCA_CIERRE_SEGUIMIENTO.get(r["espera"])}
+            elif r["estado"] != "cerrado" and not cerrado:
+                salida[r["case_id"]] = {"waits": r["espera"],
+                                        "at": iso_caso(r["revisar_at"]) if r["revisar_at"]
+                                        else None, "closed": None}
+    return salida
+
+
 def tarjetas_de(con, casos, tope_eventos=EVENTOS_EN_TARJETA):
     """Las tarjetas de estos casos con lo que el tablero calcula para cada una: sus acciones,
     el despacho, el motivo del bloqueo, la regla sin agente, solo leer, el proyecto, el
@@ -9750,14 +9792,19 @@ def tarjetas_de(con, casos, tope_eventos=EVENTOS_EN_TARJETA):
             proximos[r["case_id"]] = r["cuando"]
     pospuestos = {c["case_id"]: c["pospuesto_hasta"] if "pospuesto_hasta" in c.keys() else None
                   for c in casos}
+    # Lo que espera cada caso y, en lo que cerro su revision, por que (seguimiento-casos).
+    # Viaja dentro de `reminder`: el juego de llaves de la tarjeta es contrato.
+    seguimientos = seguimientos_de_tarjeta(con, casos)
     cards = [dict(tarjeta_de(c, nombres, titulos, motivos, eventos, sin_agente, solo_leer,
                              despachos, alcance, catalogo),
-                  reminder=({"at": iso_caso(proximos.get(c["case_id"]))
-                             if proximos.get(c["case_id"]) else None,
-                             "snoozed_until": iso_caso(pospuestos[c["case_id"]])
-                             if pospuestos[c["case_id"]] else None}
+                  reminder=(dict({"at": iso_caso(proximos.get(c["case_id"]))
+                                  if proximos.get(c["case_id"]) else None,
+                                  "snoozed_until": iso_caso(pospuestos[c["case_id"]])
+                                  if pospuestos[c["case_id"]] else None},
+                                 **({"follow_up": seguimientos[c["case_id"]]}
+                                    if c["case_id"] in seguimientos else {}))
                             if proximos.get(c["case_id"]) or pospuestos[c["case_id"]]
-                            else None),
+                            or c["case_id"] in seguimientos else None),
                   # Lo cuenta `agent_waiting`: el panel le pone la falla de `agent_launch` a
                   # estas tarjetas.
                   waits_agent=c["case_id"] in esperan,
