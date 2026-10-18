@@ -10709,12 +10709,12 @@ def carpeta_del_plugin(automatizaciones):
     return None
 
 
-def orca_json(cli, args):
+def orca_json(cli, args, cwd=None, plazo=LIMPIEZA_PLAZO_S, env=None):
     """Una llamada a la CLI de Orca con `--json`: el sobre {ok, ...} o None si no hay CLI,
     se acabo el plazo o no devolvio JSON. Nunca imprime lo que contesto."""
     try:
         p = subprocess.run([cli, *args, "--json"], capture_output=True, text=True,
-                           timeout=LIMPIEZA_PLAZO_S, env=orca_env())
+                           timeout=plazo, env=orca_env() if env is None else env, cwd=cwd)
         sobre = json.loads(p.stdout or "null")
     except (OSError, subprocess.SubprocessError, ValueError):
         return None
@@ -11367,6 +11367,14 @@ SI_NO = re.compile(r"^(si|sí|yes|ok|dale|no)(?:\s+#?(\d+))?$", re.I)
 SOLO_CON_NUMERO = ("ok", "dale")
 CORRIGE = re.compile(r"^#?(\d+)\s+(.+)$", re.S)
 ESTADO = re.compile(r"^(estado|status)$", re.I)
+# La flota de Orca en `estado` (estado-flota, WAINBOX-55): una llamada por proyecto, con
+# plazo corto y un tope para todas; un tope de miembros por proyecto. Sin estas variables
+# `game fleet` resuelve el proyecto por la carpeta, no por la terminal que lanzo el tick.
+FLOTA_PLAZO_S = 5
+FLOTA_PRESUPUESTO_S = 15
+TOPE_FLOTA = 8
+ENV_DE_TERMINAL = ("ORCA_TERMINAL_HANDLE", "ORCA_WORKTREE_ID", "ORCA_PANE_KEY", "ORCA_TAB_ID")
+FASES_FLOTA = ("needs-you", "limited", "working", "idle", "finished")
 
 # Los motivos de una espera, en palabras del chat. Lo que no esta aca sale con su codigo.
 MOTIVOS_AVISO = {
@@ -11440,6 +11448,15 @@ TEXTOS_AVISO = {
            "agente_pausado": "Caso {n} · {chat}: el agente lo intento {x} veces seguidas sin "
                              "avanzar; no lo vuelve a intentar en una hora. Mirelo en el tablero.",
            "estado_mas": "y {x} mas en el tablero.",
+           "flota": "Equipos de Orca:",
+           "flota_proyecto": "{p} · {r}/{c} en curso · {x}",
+           "flota_mas": "y {x} mas.",
+           "flota_conteos": {"needs-you": "le necesitan {x}", "limited": "limitados {x}",
+                             "working": "trabajando {x}", "idle": "en espera {x}",
+                             "finished": "terminados {x}"},
+           "flota_fases": {"needs-you": "le necesita", "limited": "limitado",
+                           "working": "trabajando", "idle": "en espera",
+                           "finished": "terminado"},
            "desde": "desde {x}",
            "recuerda": "Recordatorio: el caso {n} sigue esperando su decision.",
            "meta": "Caso {n} · {chat}: el cliente espera respuesta hace {min} min (la meta es "
@@ -11488,6 +11505,14 @@ TEXTOS_AVISO = {
            "agente_pausado": "Case {n} · {chat}: the agent tried {x} times in a row without "
                              "progress; it will not try again for an hour. Check the board.",
            "estado_mas": "and {x} more on the board.",
+           "flota": "Orca teams:",
+           "flota_proyecto": "{p} · {r}/{c} running · {x}",
+           "flota_mas": "and {x} more.",
+           "flota_conteos": {"needs-you": "needs you {x}", "limited": "limited {x}",
+                             "working": "working {x}", "idle": "idle {x}",
+                             "finished": "finished {x}"},
+           "flota_fases": {"needs-you": "needs you", "limited": "limited",
+                           "working": "working", "idle": "idle", "finished": "finished"},
            "desde": "since {x}",
            "recuerda": "Reminder: case {n} is still waiting for your decision.",
            "meta": "Case {n} · {chat}: the client has waited {min} min for a reply (the target "
@@ -12112,7 +12137,10 @@ def atiende_respuesta(con, m, relevado=None):
             return False
         aviso = relevado
     elif r["accion"] == "estado":
-        aviso_encola(con, req, "respuesta", texto_de_estado(con), stanza=stanza)
+        texto = texto_de_estado(con)
+        flota = texto_de_flota(con)
+        aviso_encola(con, req, "respuesta", texto if flota is None else f"{texto}\n\n{flota}",
+                     stanza=stanza)
         con.commit()
         return True
     elif r["caso"] is None:
@@ -12538,6 +12566,59 @@ def texto_de_estado(con):
     if len(filas) > TOPE_ESTADO:
         lineas.append(tx["estado_mas"].format(x=len(filas) - TOPE_ESTADO))
     return "\n".join(lineas)
+
+
+def flota_de(cli, ruta, env):
+    """El `result` de `orca game fleet` parado en `ruta`; {} si contesto sin `ok` (esa
+    carpeta no es un proyecto de Orca), None si no hay CLI, `game` o plazo."""
+    sobre = orca_json(cli, ["game", "fleet"], cwd=ruta, plazo=FLOTA_PLAZO_S, env=env)
+    if sobre is None:
+        return None
+    res = sobre.get("result")
+    return res if sobre.get("ok") is True and isinstance(res, dict) else {}
+
+
+def texto_de_flota(con):
+    """`estado`: la flota de Orca de cada proyecto aceptado, solo lectura, o None. Es
+    opcional: sin CLI, sin `game`, con el plazo vencido o sin miembros en ningun proyecto
+    no hay seccion y `estado` dice lo de siempre. De cada miembro va su fase, su ticket y
+    su PR; nunca su rama, su cuenta ni su siguiente paso."""
+    cli = orca_cli_path()
+    if not cli:
+        return None
+    env = {k: v for k, v in orca_env().items() if k not in ENV_DE_TERMINAL}
+    tx = aviso_textos()
+    vistas, lineas = set(), []
+    inicio = time.monotonic()
+    for p in proyectos_del_dueno(con):
+        ruta = p["path"]
+        if ruta in vistas or not os.path.isdir(ruta):
+            continue
+        if time.monotonic() - inicio > FLOTA_PRESUPUESTO_S:
+            break
+        primera = not vistas
+        vistas.add(ruta)
+        flota = flota_de(cli, ruta, env)
+        # La primera dice si hay `game` en esta maquina: sin ella no se insiste.
+        if flota is None or (primera and not flota):
+            break
+        filas = [f for f in flota.get("rows") or [] if isinstance(f, dict)]
+        if not filas:
+            continue
+        cuentas = flota.get("counts") if isinstance(flota.get("counts"), dict) else {}
+        conteos = ", ".join(tx["flota_conteos"][f].format(x=cuentas.get(f, 0))
+                            for f in FASES_FLOTA)
+        lineas.append(tx["flota_proyecto"].format(p=p["name"], r=flota.get("running", 0),
+                                                  c=flota.get("cap", 0), x=conteos))
+        for f in filas[:TOPE_FLOTA]:
+            partes = [f.get("ticket") or f.get("name") or "-",
+                      tx["flota_fases"].get(f.get("phase"), str(f.get("phase") or "-"))]
+            if f.get("review"):
+                partes.append(f"PR {f['review']}")
+            lineas.append("- " + " · ".join(str(x) for x in partes))
+        if len(filas) > TOPE_FLOTA:
+            lineas.append(tx["flota_mas"].format(x=len(filas) - TOPE_FLOTA))
+    return "\n".join([tx["flota"], *lineas]) if lineas else None
 
 
 # ── Los avisos de Orca por WhatsApp (odd/tasks/avisos-orca.md) ──────────────────────────

@@ -3860,21 +3860,28 @@ def term(handle, espacio, hace_s=600):
 
 
 def orca_falso(carpeta, corridas=(), automatizaciones=None, worktrees=None, terminales=(),
-               pegados=(), trunca=False, dormidas_vieja=False):
+               pegados=(), trunca=False, dormidas_vieja=False, flotas=None, flota_lenta=False):
     """Una `orca` de mentira con estado: `worktree rm` quita el espacio de la lista (salvo
     los `pegados`, que contestan `removed: true` y siguen ahi, como en vivo) y `terminal
     close` quita la terminal. Anota cada llamada en calls.log.
 
     Una terminal dormida (`liveness: sleeping`) tiene un handle nuevo en cada lista, y con
     uno viejo Orca contesta `terminal_handle_stale`. Con el de ahora y `--tab`, Orca
-    1.4.160-lab.94 cierra la pestana; con `dormidas_vieja`, como la lab.93, no la cierra."""
+    1.4.160-lab.94 cierra la pestana; con `dormidas_vieja`, como la lab.93, no la cierra.
+
+    `game fleet` (estado-flota) contesta la flota de `flotas` por la carpeta en que corre
+    (sin miembros si no esta), y anota la carpeta y el handle de terminal que heredo. Sin
+    `flotas` es una CLI sin `game`. Con `flota_lenta` tarda mas que cualquier plazo."""
     carpeta = pathlib.Path(carpeta)
     (carpeta / "estado.json").write_text(json.dumps({
         "automations": AUTOS_PLUGIN if automatizaciones is None else automatizaciones,
         "runs": list(corridas),
         "worktrees": [wt("", raiz=True)] if worktrees is None else list(worktrees),
         "terminals": list(terminales), "pegados": list(pegados), "trunca": trunca,
-        "dormidas_vieja": dormidas_vieja, "listas": 0}),
+        "dormidas_vieja": dormidas_vieja, "listas": 0,
+        "flotas": None if flotas is None else {os.path.realpath(k): v
+                                                for k, v in flotas.items()},
+        "flota_lenta": flota_lenta}),
         encoding="utf-8")
     exe = carpeta / "orca"
     exe.write_text("""#!/usr/bin/env python3
@@ -3901,6 +3908,16 @@ if clave == "automations list":
     sale({"ok": True, "result": {"automations": e["automations"]}})
 if clave == "automations runs":
     sale({"ok": True, "result": {"runs": e["runs"]}})
+if clave == "game fleet" and e.get("flotas") is not None:
+    aqui = os.path.realpath(os.getcwd())
+    open(os.path.join(d, "calls.log"), "a").write(
+        f"  cwd={aqui} handle={os.environ.get('ORCA_TERMINAL_HANDLE', '')}\\n")
+    if e.get("flota_lenta"):
+        import time
+        time.sleep(5)
+    vacia = {"rows": [], "counts": {"needs-you": 0, "limited": 0, "working": 0, "idle": 0,
+                                    "finished": 0}, "cap": 4, "running": 0, "free": 4}
+    sale({"ok": True, "result": e["flotas"].get(aqui, vacia)})
 if clave == "worktree list":
     sale({"ok": True, "result": {"worktrees": e["worktrees"], "totalCount": len(e["worktrees"]),
                                  "truncated": e["trunca"]}})
@@ -20125,6 +20142,147 @@ if NODE:
         os.environ.clear()
         os.environ.update(antes)
 
+
+
+# ── estado-flota (WAINBOX-55): la flota de Orca en `estado` ────────────────────────────
+# `estado` en el directo de aprobacion suma, por cada proyecto aceptado, los miembros de
+# `orca game fleet` de esa carpeta. Opcional: sin CLI, sin `game`, con un plazo vencido o
+# sin miembros, la respuesta es la de siempre, byte a byte. Solo lectura.
+print("\nestado-flota: la flota de Orca en `estado` (WAINBOX-55)")
+
+
+def acepta_carpetas(home, carpetas):
+    """Proyectos aceptados con carpetas que existen: `game fleet` corre parado en ellas."""
+    ruta = storage_de(home)
+    ruta.parent.mkdir(parents=True, exist_ok=True)
+    datos = json.loads(ruta.read_text(encoding="utf-8")) if ruta.exists() else {}
+    datos["projects"] = [{"id": i, "name": i.replace("-", " ").title(), "path": str(c),
+                          "note": ""} for i, c in carpetas.items()]
+    ruta.write_text(json.dumps(datos), encoding="utf-8")
+
+
+FLOTA_ALFA = {"rows": [
+    {"phase": "needs-you", "ticket": "DEMO-1", "name": "demo-1", "review": "#7 open",
+     "next": "contestar la pregunta", "branch": "feat/demo-1", "account": "cuenta-demo"},
+    {"phase": "working", "ticket": None, "name": "demo-libre", "review": None}],
+    "counts": {"needs-you": 1, "limited": 0, "working": 1, "idle": 0, "finished": 0},
+    "cap": 4, "running": 2, "free": 2}
+
+
+def calls_de_orca(carpeta):
+    """El calls.log de `orca_falso` (`llamadas` mas abajo lee otro registro)."""
+    ruta = pathlib.Path(carpeta) / "calls.log"
+    return ruta.read_text(encoding="utf-8").splitlines() if ruta.exists() else []
+
+
+def flota_en_calls(carpeta):
+    return [x.strip() for x in calls_de_orca(carpeta) if x.strip().startswith("cwd=")]
+
+
+def estado_con(home, stanza, cli, de=DUENO_LID, extra=None):
+    llegan(home, A, [msg(DUENO_DM, stanza, "estado", 1, de=de)])
+    p = corre(home, "ingest", extra={"ORCA_CLI_COMMAND": str(cli), **(extra or {})})
+    if p.returncode != 0:
+        raise AssertionError(f"ingest salio {p.returncode}: {p.stderr.strip()}")
+    return al_dueno(home)[-1]["body"] if al_dueno(home) else ""
+
+
+if NODE:
+    if not any(c["jid"] == DUENO_DM for c in CHATS):
+        CHATS.append({"jid": DUENO_DM, "nombre": "Dueno Directo", "grupo": False})
+    with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as raiz:
+        alfa, beta = pathlib.Path(raiz) / "alfa", pathlib.Path(raiz) / "beta"
+        alfa.mkdir()
+        beta.mkdir()
+        sin_game = pathlib.Path(raiz) / "sin-game"
+        con_flota = pathlib.Path(raiz) / "con-flota"
+        vacia = pathlib.Path(raiz) / "vacia"
+        for c in (sin_game, con_flota, vacia):
+            c.mkdir()
+        orca_falso(sin_game)
+        orca_falso(con_flota, flotas={str(alfa): FLOTA_ALFA})
+        orca_falso(vacia, flotas={})
+        linea_lista(home)
+        js(home, "config", "ack", "off")
+        js(home, "set", DUENO_DM, "--provider", "ninguno", "--mode", "responder")
+        pon_duenos(home, DUENO_LID)
+        pon_aprobacion(home, DUENO_LID)
+        acepta_carpetas(home, {"alfa-demo": alfa, "beta-demo": beta,
+                               "fantasma-demo": pathlib.Path(raiz) / "no-existe"})
+        sidecar = SidecarFalso(home)
+        try:
+            hoy = estado_con(home, "F1", SIN_ORCA)
+            ok("sin la CLI de Orca, `estado` contesta como siempre",
+               hoy.startswith("No hay casos abiertos.") and "Alfa Demo" not in hoy, hoy)
+            ok("con una CLI sin `game`, la respuesta es la misma, byte a byte",
+               estado_con(home, "F2", sin_game / "orca") == hoy)
+            ok("y no insiste proyecto por proyecto",
+               len([x for x in calls_de_orca(sin_game) if x.startswith("game fleet")]) == 1,
+               f"{calls_de_orca(sin_game)}")
+            ok("con `game` pero ningun miembro, la respuesta es la misma",
+               estado_con(home, "F3", vacia / "orca") == hoy)
+            con_miembros = estado_con(home, "F4", con_flota / "orca",
+                                      extra={"ORCA_TERMINAL_HANDLE": "term_demo"})
+            lineas = con_miembros.splitlines()
+            ok("con miembros, `estado` suma la flota despues de los casos",
+               con_miembros.startswith("No hay casos abiertos.\n\n") and "Alfa Demo" in con_miembros
+               and "2/4" in con_miembros, con_miembros)
+            ok("cada miembro con su ticket, su fase y su PR",
+               any("DEMO-1" in l and "le necesita" in l and "#7 open" in l for l in lineas)
+               and any("demo-libre" in l and "trabajando" in l for l in lineas), con_miembros)
+            ok("los conteos de la flota van en la linea del proyecto",
+               any("Alfa Demo" in l and "le necesitan 1" in l and "trabajando 1" in l
+                   for l in lineas), con_miembros)
+            ok("un proyecto sin miembros no ocupa lugar", "Beta Demo" not in con_miembros)
+            ok("lo interno del miembro no viaja (rama, cuenta, siguiente paso)",
+               not any(x in con_miembros for x in ("feat/demo-1", "cuenta-demo",
+                                                   "contestar la pregunta")), con_miembros)
+            vistas = flota_en_calls(con_flota)
+            ok("`game fleet` corre parado en cada carpeta aceptada que existe",
+               sorted(v.split()[0] for v in vistas)
+               == sorted(f"cwd={os.path.realpath(c)}" for c in (alfa, beta)), f"{vistas}")
+            ok("sin el handle de la terminal: Orca resuelve el proyecto por la carpeta",
+               vistas and all(v.endswith("handle=") for v in vistas), f"{vistas}")
+            antes_otro = len(flota_en_calls(con_flota))
+            envios = len(al_dueno(home))
+            llegan(home, A, [msg(DUENO_DM, "F5", "estado", 1, de=OTRO_LID)])
+            corre(home, "ingest", extra={"ORCA_CLI_COMMAND": str(con_flota / "orca")})
+            ok("un `estado` de quien no es el dueno no pregunta la flota",
+               len(flota_en_calls(con_flota)) == antes_otro
+               and not any("Alfa Demo" in a["body"] for a in al_dueno(home)[envios:]),
+               f"{al_dueno(home)[envios:]}")
+            ok("nada de esto salio a otro chat", a_otro(home) == 0)
+        finally:
+            sidecar.cerrar()
+
+    # El plazo: una CLI que no contesta no frena el tick, y el ingles.
+    antes_flota = dict(os.environ)
+    with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as raiz:
+        try:
+            alfa = pathlib.Path(raiz) / "alfa"
+            alfa.mkdir()
+            lenta, rapida = pathlib.Path(raiz) / "lenta", pathlib.Path(raiz) / "rapida"
+            lenta.mkdir()
+            rapida.mkdir()
+            orca_falso(lenta, flotas={str(alfa): FLOTA_ALFA}, flota_lenta=True)
+            orca_falso(rapida, flotas={str(alfa): FLOTA_ALFA})
+            acepta_carpetas(home, {"alfa-demo": alfa})
+            pon_aprobacion(home, DUENO_LID, "en")
+            wsf = carga_wa_scope(home)
+            wsf.FLOTA_PLAZO_S = 0.5
+            con = wsf.db()
+            os.environ["ORCA_CLI_COMMAND"] = str(lenta / "orca")
+            t0 = time.monotonic()
+            ok("una CLI que no contesta a tiempo no suma la flota",
+               wsf.texto_de_flota(con) is None and time.monotonic() - t0 < 3)
+            os.environ["ORCA_CLI_COMMAND"] = str(rapida / "orca")
+            ingles = wsf.texto_de_flota(con) or ""
+            ok("la flota sale en el idioma del panel",
+               "Alfa Demo" in ingles and "running" in ingles and "needs you" in ingles, ingles)
+            con.close()
+        finally:
+            os.environ.clear()
+            os.environ.update(antes_flota)
 
 print(f"\n{pruebas - len(fallos)}/{pruebas} en verde")
 if fallos:
