@@ -25,7 +25,7 @@ Layer 1 of the WhatsApp to Orca game bridge.
   env stripped, per-project cwd.
 - [x] F2 `orca_json` takes optional cwd/plazo/env; `texto_de_flota` and the `es`/`en`
   texts; `estado` appends the section (GREEN).
-- [ ] F3 `npm run check` without shots green; PR opened.
+- [x] F3 `npm run check` without shots green; PR opened.
 
 ## Acceptance
 
