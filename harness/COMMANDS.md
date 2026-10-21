@@ -74,6 +74,8 @@ without the flagged claim (a held update does not count toward `updates_max`); i
 is held too, drop it. It answers exit 2 with `E_FIRST_REPLY_MODE`, `E_CHAT_MODE`,
 `E_STAGE`, `E_EXCEPTION`, `E_PACING` (the last message was less than
 `update_every_minutes` ago) or `E_MAX_UPDATES` (`updates_max` reached): then do not send it.
+After `E_EXCEPTION` with nothing sent yet, the plugin sends the fixed acknowledgement in its
+place: the customer is never left in silence.
 
 To wait for an answer, `"$WA/wa-read" wait --chat "<chat_jid>" --after <stanza_id> --timeout
 <S> --json` blocks until the other side writes in that chat, and prints what arrived (each

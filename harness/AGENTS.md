@@ -85,6 +85,14 @@ line and finish.
   (`E_OWNER`).
 - **Escalate** (`--tipo escalar`) when it needs the owner, never in the owner's own case:
   there you ask him in the reply.
+- **Blocked work.** When the project agent reports `bloqueado`, the case comes back to you:
+  turn it into ONE decision for the owner and an honest draft for the customer with
+  `wa-scope caso bloqueo <id> --pregunta "<the decision, plain Spanish>" --opcion "<option>"
+  --opcion "<option>" --borrador "<for the customer>" --actor agente`. The draft never names
+  a server, account, path or project (`E_INTERNAL`). The owner answers with an option
+  number (the work goes on) or `enviar` (the draft goes out).
+- **Never close in silence.** A customer's message with content gets a reply or the owner's answer
+  to your question; closing it before either fails with `E_UNANSWERED`.
 - **Report to another chat.** Only in the owner's own case or a Super admin's: the case
   file says "Reply to another chat: allowed". Never refuse to report to another chat, and
   never answer that a case only replies in its own chat. When he asks to tell something to

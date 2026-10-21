@@ -5346,7 +5346,8 @@ if NODE:
                    f"{error_de(p)}")
                 ok("los retenidos no cuentan para el tope, los enviados si",
                    len([r for r in sidecar.entregados if "-avance-" in r]) == 2, f"{sidecar.entregados}")
-                js(home, "caso", "mover", str(cid), "cerrado", "--motivo", "listo", "--actor", "agente")
+                # sin-silencio U3: sin respuesta final, el que cierra es el dueno.
+                js(home, "caso", "mover", str(cid), "cerrado", "--motivo", "listo", "--actor", "dueno")
                 js(home, "config", "updates_max", "5")
                 p = avance(home, cid, "Una cosa mas sobre su reporte.")
                 ok("un caso cerrado no recibe avances", error_de(p) == "E_STAGE", f"{error_de(p)}")
@@ -20142,6 +20143,405 @@ if NODE:
         os.environ.clear()
         os.environ.update(antes)
 
+
+
+# ── sin-silencio U1: la urgencia o la insistencia nunca es una cortesia (WAINBOX-62) ────────
+# Visto en vivo: "por favor atiendan esto con urgencia" salio `pleasantry`, Jev lo salto y el
+# cliente no recibio nada. La urgencia tampoco es un riesgo: frenaba el acuse y el avance.
+print("\nsin-silencio U1: la urgencia o la insistencia nunca es una cortesia")
+
+URGE = "por favor atiendan esto con urgencia"
+
+
+def jev_de_urgencia(cuerpo):
+    """Jev de mentira que se equivoca como en vivo: la insistencia sale `pleasantry` con la
+    urgencia marcada, y sus puntajes la saltan."""
+    if "message_to_evaluate" not in cuerpo["state"]:
+        return 200, respuestas(cuerpo["questions"])
+    if "urgencia" in cuerpo["state"]["message_to_evaluate"]["text"]:
+        return 200, respuestas(cuerpo["questions"], choice="pleasantry", urgency_pressure=0.85)
+    return jev_segun_texto(cuerpo)
+
+
+cortesia = carga_jev().CLASES_ATENCION["pleasantry"]
+ok("Jev lee que apurar, insistir o volver a preguntar no es una cortesia",
+   "urgen" in cortesia and "insists" in cortesia and "follows up" in cortesia, cortesia)
+
+if NODE:
+    antes = dict(os.environ)
+    with tempfile.TemporaryDirectory() as home:
+        wsu = carga_wa_scope(home)
+        salto = {"attention_class": "pleasantry", "skip": True, "needs_agent": False,
+                 "flags": ["urgency_pressure"], "exceptions": [],
+                 "scores": {"urgency_pressure": 0.85}}
+        j = wsu.skip_que_vale({"rol": None, "kind": "directo"}, salto)
+        ok("un veredicto (tambien el del cache) que salta una urgencia de un cliente no vale",
+           j["skip"] is False, f"{j}")
+        ok("y la urgencia no es un riesgo: no frena el acuse ni el avance",
+           "urgency_pressure" in wsu.BANDERAS_SIN_RIESGO)
+        ok("el que insiste recibe el acuse aunque Jev no lo llame un pedido",
+           wsu.auto_de_jev({"modo": "responder", "kind": "directo", "auto_acuse": True},
+                           dict(j)) == "acuse", f"{j}")
+    os.environ.clear()
+    os.environ.update(antes)
+
+    falso = JevFalso(jev_de_urgencia)
+    os.environ["WA_INBOX_JEV_ENDPOINT"] = falso.url
+    try:
+        with tempfile.TemporaryDirectory() as home:
+            pon_llave(home)
+            llegan(home, A, [msg(PERSONA, "UR1", URGE, 5)])
+            js(home, "agent", "Agente De Ejemplo")
+            js(home, "set", PERSONA, "--provider", "ninguno", "--mode", "responder")
+            js(home, "config", "ack", "on")
+            ingiere(home)
+            c = caso_de_stanza(home, "UR1")
+            ok("una urgencia que Jev llama cortesia no se cierra: llega al agente",
+               c and c["etapa"] != "cerrado" and int(c["case_id"]) in para_el_agente(home),
+               f"{c and c['etapa']} {para_el_agente(home)}")
+            ok("y recibe el acuse", c and (auto_de(home, c["case_id"]) or {}).get("estado")
+               == "pendiente", f"{c and auto_de(home, c['case_id'])}")
+
+        with tempfile.TemporaryDirectory() as home:
+            pon_llave(home)
+            cid = caso_respondido(home, "UR2")
+            espera_en(home, cid, "nada")
+            llegan(home, A, [msg(SOPORTE, "UR3", "@duenio " + URGE, 5, mencion=True)])
+            ingiere(home)
+            ver = js(home, "caso", "ver", str(cid))[0]
+            nuevo = caso_de_stanza(home, "UR3")
+            ok("la insistencia tras una respuesta no cierra el caso como atendido",
+               not any(ev["a"] == "cerrado" for ev in ver["eventos"]),
+               f"{ver['etapa']} {ver['eventos'][-2:]}")
+            ok("y vuelve al agente", nuevo and nuevo["etapa"] != "cerrado"
+               and int(nuevo["case_id"]) in para_el_agente(home),
+               f"{nuevo and nuevo['etapa']} {para_el_agente(home)}")
+    finally:
+        falso.cerrar()
+        os.environ.clear()
+        os.environ.update(antes)
+
+
+# ── sin-silencio U2: el primer mensaje rechazado cae al acuse (WAINBOX-62) ──────────────
+# Visto en vivo: el primer mensaje del agente se rechazo con E_EXCEPTION y, en `model`, al
+# cliente no le llego nada. El acuse fijo no afirma nada: sale en su lugar, una vez.
+print("\nsin-silencio U2: el primer mensaje rechazado cae al acuse")
+
+
+def modelo_con(home, stanza, texto):
+    """Un chat `responder` cuyo primer mensaje es del agente, con un caso de ese texto."""
+    pon_llave(home)
+    llegan(home, A, [msg(PERSONA, stanza, texto, 5)])
+    js(home, "agent", "Agente De Ejemplo")
+    js(home, "set", PERSONA, "--provider", "ninguno", "--mode", "responder")
+    js(home, "set", PERSONA, "--first-reply", "model")
+    ingiere(home)
+    return caso_de_stanza(home, stanza)["case_id"]
+
+
+if NODE:
+    falso = JevFalso(jev_y_borradores)
+    antes = dict(os.environ)
+    os.environ["WA_INBOX_JEV_ENDPOINT"] = falso.url
+    try:
+        with tempfile.TemporaryDirectory() as home:
+            cid = modelo_con(home, "RA1", "cuanto cuesta el plan anual")
+            sidecar = SidecarFalso(home)
+            try:
+                p = avance(home, cid, PRIMERO)
+                ok("el primer mensaje con una bandera de riesgo se sigue rechazando",
+                   error_de(p) == "E_EXCEPTION", f"{error_de(p)} {p.stderr[-200:]}")
+                ok("pero deja el acuse fijo pendiente en su lugar",
+                   (auto_de(home, cid) or {}).get("estado") == "pendiente", f"{auto_de(home, cid)}")
+                tick(home)
+                ok("el tick lo manda aunque el caso tenga la bandera: el acuse no afirma nada",
+                   entregas(sidecar, "acuse") == [f"caso-{cid}-acuse"]
+                   and (auto_de(home, cid) or {}).get("estado") == "enviado",
+                   f"{sidecar.entregados} {auto_de(home, cid)}")
+                f = seguimiento_de(home, cid) or {}
+                ok("y lo que se le prometio lo debemos nosotros: 30 min para la respuesta",
+                   f.get("espera") == "nosotros" and f.get("estado") == "pendiente", f"{f}")
+                p = avance(home, cid, SEGUNDO)
+                tick(home)
+                ok("un segundo rechazo no manda otro acuse",
+                   entregas(sidecar, "acuse") == [f"caso-{cid}-acuse"], f"{sidecar.entregados}")
+            finally:
+                sidecar.cerrar()
+
+        with tempfile.TemporaryDirectory() as home:
+            cid = modelo_con(home, "RA2", "@duenio la clave es Hunter2xx")
+            p = avance(home, cid, PRIMERO)
+            ok("con una credencial no hay acuse de respaldo: el caso es del dueno",
+               auto_de(home, cid) is None, f"{error_de(p)} {auto_de(home, cid)}")
+    finally:
+        falso.cerrar()
+        os.environ.clear()
+        os.environ.update(antes)
+
+
+# ── sin-silencio U3: un caso con contenido no se cierra en silencio (WAINBOX-62) ─────────
+# El agente decidia no contestar y cerraba: el cliente nunca supo nada y el dueno tampoco.
+# Sin una respuesta o una pregunta al dueno, cerrar se rechaza con E_UNANSWERED.
+print("\nsin-silencio U3: un caso con contenido no se cierra en silencio")
+
+
+def caso_del_cliente(home, stanza, texto="necesito ayuda con mi factura", **extra):
+    llegan(home, A, [msg(PERSONA, stanza, texto, 5, **extra)])
+    js(home, "set", PERSONA, "--provider", "ninguno", "--mode", "responder")
+    cid = str(js(home, "caso", "crear", "--chat", PERSONA, "--stanza", stanza,
+                 "--actor", "agente")[0]["case_id"])
+    js(home, "caso", "clasificar", cid, "--clase", "card", "--prioridad", "none",
+       "--actor", "agente")
+    return cid
+
+
+def cierra(home, cid, actor="agente"):
+    return corre(home, "caso", "mover", cid, "cerrado", "--motivo", "no requiere respuesta",
+                 "--actor", actor)
+
+
+if NODE:
+    with tempfile.TemporaryDirectory() as home:
+        cid = caso_del_cliente(home, "SC1")
+        p = cierra(home, cid)
+        ok("el agente no cierra un caso del cliente con contenido que nadie contesto",
+           error_de(p) == "E_UNANSWERED" and fila_de(home, int(cid))["etapa"] == "clasificado",
+           f"{error_de(p)} {fila_de(home, int(cid))['etapa']}")
+        detalle = (json.loads(p.stderr.strip().splitlines()[-1]).get("detail") or ""
+                   if p.stderr.strip() else "")
+        ok("y le dice que hacer: proponer la respuesta, o preguntarle al dueno con la que propone",
+           "--tipo responder" in detalle and "--tipo escalar" in detalle, detalle)
+        ok("un trabajador tampoco", error_de(cierra(home, cid, "trabajador")) == "E_UNANSWERED")
+        ok("el dueno si", cierra(home, cid, "dueno").returncode == 0
+           and fila_de(home, int(cid))["etapa"] == "cerrado")
+
+    with tempfile.TemporaryDirectory() as home:
+        cid = caso_del_cliente(home, "SC2")
+        js(home, "caso", "propuesta", cid, "--tipo", "escalar", "--instrucciones",
+           "No veo nada que contestar. Propongo: Gracias por escribirnos.", "--actor", "agente")
+        ok("proponerle una pregunta al dueno no basta: todavia no la vio",
+           error_de(cierra(home, cid)) == "E_UNANSWERED")
+        js(home, "caso", "propuesta", cid, "--tipo", "descartar", "--actor", "agente")
+        ok("ni proponer descartarlo", error_de(cierra(home, cid)) == "E_UNANSWERED")
+        js(home, "caso", "clasificar", cid, "--clase", "card", "--prioridad", "none",
+           "--actor", "dueno")
+        ok("cuando el dueno ya lo vio y contesto, si", cierra(home, cid).returncode == 0)
+
+    with tempfile.TemporaryDirectory() as home:
+        cid = caso_del_cliente(home, "SC3")
+        con = db_de(home)
+        con.execute("update caso set etapa='respondido' where case_id=?", (int(cid),))
+        con.execute("insert into caso_evento (case_id, de, a, actor, detalle, at) values "
+                    "(?, 'listo', 'respondido', 'automatizacion', 'enviado', datetime('now'))",
+                    (int(cid),))
+        con.commit()
+        con.close()
+        ok("con una respuesta que salio, tambien", cierra(home, cid).returncode == 0)
+
+    with tempfile.TemporaryDirectory() as home:
+        cid = caso_del_cliente(home, "SC4", "", media="sticker")
+        ok("un caso sin contenido (un sticker suelto) se cierra como siempre",
+           cierra(home, cid).returncode == 0)
+
+
+# ── sin-silencio B1: el trabajo bloqueado es una pregunta al dueno y un borrador (WAINBOX-60) ──
+# Antes el caso quedaba en Bloqueado, el dueno recibia el resumen tecnico en ingles y el
+# cliente nada. Ahora vuelve al agente de casos, que lo convierte en UNA pregunta al dueno,
+# con sus opciones, y un borrador honesto para el cliente sin nombres internos.
+print("\nsin-silencio B1: el trabajo bloqueado es una pregunta al dueno y un borrador")
+
+BLOQUEO = ("Need the owner to decide: move order 1042 to shipped on srv-demo-01 "
+           "(user deploy_demo, ops@demo.example)")
+PREGUNTA_B = "¿Pasamos el pedido a enviado aunque todavía falte la guía?"
+OPCIONES_B = ("Sí, pasarlo a enviado ahora", "No, esperar la guía del cliente")
+BORRADOR_B = ("Hola, revisamos su pedido y estamos esperando una confirmación interna para "
+              "continuar. Le escribimos apenas la tengamos.")
+if NODE and not any(c["jid"] == DUENO_DM for c in CHATS):
+    CHATS.append({"jid": DUENO_DM, "nombre": "Dueno Directo", "grupo": False})
+
+
+def bloqueado_por_proyecto(home, stanza):
+    """Un caso de un cliente cuyo trabajo aprobado reporto `bloqueado`, con el numero de
+    aprobacion elegido (el aviso crudo saldria)."""
+    linea_lista(home)
+    js(home, "config", "ack", "off")
+    js(home, "set", DUENO_DM, "--provider", "ninguno", "--mode", "responder")
+    pon_duenos(home, DUENO_LID)
+    pon_aprobacion(home, DUENO_LID)
+    llegan(home, A, [msg(PERSONA, stanza, "necesito que pasen mi pedido a enviado", 30)])
+    cid, _ = caso_en_trabajo(home, stanza, PERSONA)
+    js(home, "caso", "resultado", cid, "--estado", "bloqueado", "--resumen", BLOQUEO,
+       "--actor", "trabajador")
+    return cid
+
+
+def bloqueo(home, cid, borrador=BORRADOR_B):
+    args = ["caso", "bloqueo", cid, "--pregunta", PREGUNTA_B]
+    for opcion in OPCIONES_B:
+        args += ["--opcion", opcion]
+    return corre(home, *args, "--borrador", borrador, "--actor", "agente")
+
+
+def archivo_del_caso(home, cid):
+    antes_ = dict(os.environ)
+    try:
+        wsb = carga_wa_scope(home)
+        con = wsb.db()
+        return wsb.archivo_de_caso(con, wsb.caso_de(con, int(cid)))
+    finally:
+        os.environ.clear()
+        os.environ.update(antes_)
+
+
+if NODE:
+    with tempfile.TemporaryDirectory() as home:
+        cid = bloqueado_por_proyecto(home, "BQ1")
+        sidecar = SidecarFalso(home)
+        try:
+            ok("el bloqueo del agente del proyecto deja el caso en bloqueado, para el agente de casos",
+               fila_de(home, int(cid))["etapa"] == "bloqueado" and int(cid) in para_el_agente(home),
+               f"{fila_de(home, int(cid))['etapa']} {para_el_agente(home)}")
+            tick(home)
+            ok("y el dueno no recibe el aviso crudo del bloqueo",
+               cuenta(home, "select count(*) from aviso where tipo='bloqueo'") == 0
+               and not any("se bloqueo" in a["body"] for a in al_dueno(home)), f"{al_dueno(home)}")
+            archivo = archivo_del_caso(home, cid)
+            ok("el archivo del caso le dice al agente que hacer, con el motivo del bloqueo",
+               "caso bloqueo" in archivo and "--opcion" in archivo and "--borrador" in archivo
+               and "srv-demo-01" in archivo, archivo[-1500:])
+            for interno in ("srv-demo-01", "deploy_demo", "ops@demo.example", "10.0.0.7"):
+                p = bloqueo(home, cid, f"Hola, el pedido sigue en {interno}, le avisamos.")
+                ok(f"un borrador con un nombre interno ({interno}) no se acepta",
+                   error_de(p) == "E_INTERNAL" and fila_de(home, int(cid))["etapa"] == "bloqueado",
+                   f"{error_de(p)}")
+            p = bloqueo(home, cid)
+            ver = js(home, "caso", "ver", cid)[0]
+            ok("la pregunta y el borrador llevan el caso a decision, como una pregunta al dueno",
+               p.returncode == 0 and ver["etapa"] == "decision"
+               and ver["propuesta"]["tipo"] == "escalar"
+               and ver["propuesta"]["instrucciones"] == PREGUNTA_B
+               and ver["propuesta"]["borrador"] == BORRADOR_B
+               and all(o in ver["propuesta"]["opciones"] for o in OPCIONES_B),
+               f"{p.stderr[-300:]} {ver['etapa']} {ver.get('propuesta')}")
+            ok("y ya no espera al agente", int(cid) not in para_el_agente(home))
+            tick(home)
+            aviso = next((a["body"] for a in al_dueno(home) if "le pregunta" in a["body"]), "")
+            ok("al dueno le llega la pregunta en palabras simples, con las opciones numeradas",
+               PREGUNTA_B in aviso and f"1. {OPCIONES_B[0]}" in aviso
+               and f"2. {OPCIONES_B[1]}" in aviso, aviso)
+            ok("con el borrador para el cliente y como contestar",
+               BORRADOR_B in aviso and f"{cid} 1" in aviso and f"{cid} enviar" in aviso, aviso)
+            ok("y sin el resumen tecnico", "srv-demo-01" not in aviso and "deploy_demo" not in aviso,
+               aviso)
+            ok("al cliente no le salio nada todavia", not any(
+                e["req_id"].startswith(f"caso-{cid}-") for e in envios(home)
+                if e["estado"] == "enviado"), f"{envios(home)}")
+            p = bloqueo(home, cid)
+            ok("un caso que ya no esta bloqueado no recibe otra pregunta", error_de(p) == "E_STAGE",
+               f"{error_de(p)}")
+        finally:
+            sidecar.cerrar()
+
+    with tempfile.TemporaryDirectory() as home:
+        cid = bloqueado_por_proyecto(home, "BQ2")
+        sidecar = SidecarFalso(home)
+        try:
+            con = db_de(home)
+            con.execute("update caso_evento set at=datetime('now', 'localtime', '-20 minutes') "
+                        "where case_id=? and a='bloqueado'", (int(cid),))
+            con.commit()
+            con.close()
+            tick(home)
+            ok("si el agente de casos no lo convierte en 15 minutos, el dueno recibe el aviso del "
+               "bloqueo igual", cuenta(home, "select count(*) from aviso where tipo='bloqueo'") == 1,
+               f"{al_dueno(home)}")
+            tick(home)
+            ok("una sola vez", cuenta(home, "select count(*) from aviso where tipo='bloqueo'") == 1)
+        finally:
+            sidecar.cerrar()
+
+
+# ── sin-silencio B2: la respuesta del dueno mueve el caso bloqueado (WAINBOX-60) ──────────
+# El numero de una opcion vuelve a despachar el trabajo con esa decision; `enviar` le manda
+# el borrador al cliente. Cualquier otra cosa va al agente, como la respuesta a un `escalar`.
+print("\nsin-silencio B2: la respuesta del dueno mueve el caso bloqueado")
+
+
+def pregunta_hecha(home, stanza):
+    """Un caso bloqueado por el proyecto, con su pregunta ya avisada al dueno."""
+    cid = bloqueado_por_proyecto(home, stanza)
+    js(home, "caso", "bloqueo", cid, "--pregunta", PREGUNTA_B, "--opcion", OPCIONES_B[0],
+       "--opcion", OPCIONES_B[1], "--borrador", BORRADOR_B, "--actor", "agente")
+    return cid
+
+
+def contesta(home, stanza, texto):
+    llegan(home, A, [msg(DUENO_DM, stanza, texto, 0, de=DUENO_LID, nombre="Dueno Real")])
+    ingiere(home)
+
+
+def por_despachar(home):
+    antes_ = dict(os.environ)
+    try:
+        wsd = carga_wa_scope(home)
+        return [c["case_id"] for c, *_ in wsd.casos_por_despachar(wsd.db())]
+    finally:
+        os.environ.clear()
+        os.environ.update(antes_)
+
+
+if NODE:
+    with tempfile.TemporaryDirectory() as home:
+        cid = pregunta_hecha(home, "BD1")
+        sidecar = SidecarFalso(home)
+        try:
+            tick(home)
+            contesta(home, "BR1", f"{cid} 1")
+            ver = js(home, "caso", "ver", cid)[0]
+            instrucciones = (ver.get("propuesta") or {}).get("instrucciones") or ""
+            ok("el numero de una opcion vuelve a mandar el trabajo, firmado por el dueno",
+               ver["etapa"] == "trabajo" and ver["propuesta"]["tipo"] == "trabajar"
+               and ver["aprobada"] and "Corregir el login" in instrucciones
+               and OPCIONES_B[0] in instrucciones, f"{ver['etapa']} {ver.get('propuesta')}")
+            ok("y el tick lo despacha al agente del proyecto", int(cid) in por_despachar(home),
+               f"{por_despachar(home)}")
+            tick(home)
+            ok("el dueno recibe la confirmacion", any(
+                f"Caso {cid}" in a["body"] and "sigue con su decision" in a["body"]
+                for a in al_dueno(home)[-2:]),
+               f"{al_dueno(home)[-2:]}")
+        finally:
+            sidecar.cerrar()
+
+    with tempfile.TemporaryDirectory() as home:
+        cid = pregunta_hecha(home, "BD2")
+        sidecar = SidecarFalso(home)
+        try:
+            tick(home)
+            contesta(home, "BR2", f"{cid} enviar")
+            ver = js(home, "caso", "ver", cid)[0]
+            req = f"caso-{cid}-{ver['propuesta_version'][:12]}"
+            ok("`enviar` le manda el borrador al cliente", ver["etapa"] == "respondido"
+               and req in sidecar.entregados and BORRADOR_B in (cuerpo_de(home, req) or ""),
+               f"{ver['etapa']} {sidecar.entregados} {cuerpo_de(home, req)!r}")
+            f = seguimiento_de(home, int(cid)) or {}
+            ok("y la respuesta la seguimos debiendo nosotros: rige el plazo de 30 min",
+               f.get("espera") == "nosotros" and f.get("estado") == "pendiente", f"{f}")
+        finally:
+            sidecar.cerrar()
+
+    with tempfile.TemporaryDirectory() as home:
+        cid = pregunta_hecha(home, "BD3")
+        sidecar = SidecarFalso(home)
+        try:
+            tick(home)
+            contesta(home, "BR3", f"{cid} 7")
+            ver = js(home, "caso", "ver", cid)[0]
+            ok("una opcion que no existe, o cualquier otra respuesta, vuelve al agente",
+               ver["etapa"] == "clasificado" and necesita_agente(home, cid) == 1,
+               f"{ver['etapa']} {ver['eventos'][-2:]}")
+        finally:
+            sidecar.cerrar()
 
 
 # ── estado-flota (WAINBOX-55): la flota de Orca en `estado` ────────────────────────────
