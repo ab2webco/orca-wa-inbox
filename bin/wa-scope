@@ -12644,7 +12644,7 @@ def aplica_respuesta(con, aviso, r, tx):
 
 
 # Lo que el dueno contesta para mandarle al cliente el borrador de un bloqueo (B2).
-ENVIAR_BORRADOR = ("enviar", "envialo", "enviarlo", "envia", "manda", "mandalo", "mandar",
+ENVIAR_BORRADOR = ("enviar", "envialo", "enviarlo", "envia", "manda", "mandar",
                    "send", "send it")
 DECISION_DEL_DUENO = "The owner's decision on the block you reported: "
 
