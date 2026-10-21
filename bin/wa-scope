@@ -6995,8 +6995,12 @@ LARGO_AUTO = 300
 # Lo que Jev llama un pedido: lo que merece saber que se recibio.
 CLASES_PEDIDO = ("support_request", "bug_report", "status_question",
                  "client_waiting_or_down", "needs_decision", "deploy_request")
-# Las banderas de Jev que NO son un riesgo: dicen que algo se pide y que alguien espera.
-BANDERAS_SIN_RIESGO = ("asks_owner_to_act", "client_waiting_or_service_down")
+# Las banderas de Jev que NO son un riesgo: dicen que algo se pide y que alguien espera. La
+# urgencia tampoco (sin-silencio, U1): visto en vivo, frenaba el acuse y el avance de quien
+# insistia, y el cliente quedaba sin nada.
+BANDERAS_SIN_RIESGO = ("asks_owner_to_act", "client_waiting_or_service_down", "urgency_pressure")
+# Las banderas de quien apura o insiste: nunca es una cortesia, nunca se salta (U1).
+BANDERAS_DE_INSISTENCIA = ("urgency_pressure", "client_waiting_or_service_down")
 # Un saludo de verdad (y no un gracias): lo unico que se contesta con un saludo.
 SALUDO = re.compile(r"\b(hola|ola|hello|hi|hey|buen(?:os|as)?\s+(?:dias?|tardes?|noches?)|"
                     r"bom\s+dia|boa\s+(?:tarde|noite)|saludos)\b")
@@ -7055,7 +7059,7 @@ def auto_de_jev(m, juicio):
     if riesgo:
         return None
     clase = juicio.get("attention_class")
-    if clase in CLASES_PEDIDO and m.get("auto_acuse"):
+    if (clase in CLASES_PEDIDO or insiste(juicio)) and m.get("auto_acuse"):
         # En un grupo sin mencion solo cuenta si abre un caso nuevo: ingest lo usa solo ahi.
         return "acuse"
     if kind == "grupo":
@@ -7579,6 +7583,11 @@ def jev_juzga(mensaje, con=None):
     return juicio
 
 
+def insiste(juicio):
+    """Si Jev marco que el mensaje apura o insiste (U1): la clase que le haya dado no importa."""
+    return bool(set((juicio or {}).get("flags") or []) & set(BANDERAS_DE_INSISTENCIA))
+
+
 def skip_que_vale(m, juicio):
     """El veredicto con el `skip` que vale: el de Jev, salvo en un pedido (una clase de
     `CLASES_QUE_PIDEN`) de quien no es el dueno, que nunca se salta (linea-viva, V1).
@@ -7591,6 +7600,13 @@ def skip_que_vale(m, juicio):
     if (juicio and juicio.get("skip") and juicio.get("attention_class") in CLASES_QUE_PIDEN
             and rol_del_mensaje(m) != wa_store.ROL_ADMIN):
         return dict(juicio, skip=False)
+    # sin-silencio (U1): la urgencia o la insistencia de un cliente nunca es una cortesia. Visto
+    # en vivo: "por favor atiendan esto con urgencia" salio `pleasantry` con `skip`, se cerro, y
+    # tras una respuesta final cerro tambien el caso como atendido. Fuera de un grupo despierta
+    # al agente; en un grupo sigue los chequeos de siempre.
+    if juicio and juicio.get("skip") and insiste(juicio) and rol_del_mensaje(m) != wa_store.ROL_ADMIN:
+        agente = m.get("kind") != "grupo" and "credential" not in (juicio.get("exceptions") or [])
+        return dict(juicio, skip=False, needs_agent=bool(juicio.get("needs_agent") or agente))
     return juicio
 
 

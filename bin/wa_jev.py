@@ -204,7 +204,9 @@ CLASES_ATENCION = {
     "client_waiting_or_down": "message_to_evaluate says a service or a site is down, or "
                               "that a client is waiting or has asked more than once.",
     "pleasantry": "message_to_evaluate is a greeting, a joke, laughter, thanks, an 'ok', a "
-                  "congratulation or small talk.",
+                  "congratulation or small talk. A message that urges, insists or "
+                  "follows up on an earlier request (\"please, urgently\", \"any news?\") "
+                  "is not a pleasantry.",
     "meeting": "message_to_evaluate schedules, confirms or discusses a meeting, a call, a "
                "calendar slot or a video link.",
     "bare_mention": "message_to_evaluate only mentions or tags the owner with no text, or "

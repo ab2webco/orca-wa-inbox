@@ -20144,6 +20144,83 @@ if NODE:
 
 
 
+# ── sin-silencio U1: la urgencia o la insistencia nunca es una cortesia (WAINBOX-62) ────────
+# Visto en vivo: "por favor atiendan esto con urgencia" salio `pleasantry`, Jev lo salto y el
+# cliente no recibio nada. La urgencia tampoco es un riesgo: frenaba el acuse y el avance.
+print("\nsin-silencio U1: la urgencia o la insistencia nunca es una cortesia")
+
+URGE = "por favor atiendan esto con urgencia"
+
+
+def jev_de_urgencia(cuerpo):
+    """Jev de mentira que se equivoca como en vivo: la insistencia sale `pleasantry` con la
+    urgencia marcada, y sus puntajes la saltan."""
+    if "message_to_evaluate" not in cuerpo["state"]:
+        return 200, respuestas(cuerpo["questions"])
+    if "urgencia" in cuerpo["state"]["message_to_evaluate"]["text"]:
+        return 200, respuestas(cuerpo["questions"], choice="pleasantry", urgency_pressure=0.85)
+    return jev_segun_texto(cuerpo)
+
+
+cortesia = carga_jev().CLASES_ATENCION["pleasantry"]
+ok("Jev lee que apurar, insistir o volver a preguntar no es una cortesia",
+   "urgen" in cortesia and "insists" in cortesia and "follows up" in cortesia, cortesia)
+
+if NODE:
+    antes = dict(os.environ)
+    with tempfile.TemporaryDirectory() as home:
+        wsu = carga_wa_scope(home)
+        salto = {"attention_class": "pleasantry", "skip": True, "needs_agent": False,
+                 "flags": ["urgency_pressure"], "exceptions": [],
+                 "scores": {"urgency_pressure": 0.85}}
+        j = wsu.skip_que_vale({"rol": None, "kind": "directo"}, salto)
+        ok("un veredicto (tambien el del cache) que salta una urgencia de un cliente no vale",
+           j["skip"] is False, f"{j}")
+        ok("y la urgencia no es un riesgo: no frena el acuse ni el avance",
+           "urgency_pressure" in wsu.BANDERAS_SIN_RIESGO)
+        ok("el que insiste recibe el acuse aunque Jev no lo llame un pedido",
+           wsu.auto_de_jev({"modo": "responder", "kind": "directo", "auto_acuse": True},
+                           dict(j)) == "acuse", f"{j}")
+    os.environ.clear()
+    os.environ.update(antes)
+
+    falso = JevFalso(jev_de_urgencia)
+    os.environ["WA_INBOX_JEV_ENDPOINT"] = falso.url
+    try:
+        with tempfile.TemporaryDirectory() as home:
+            pon_llave(home)
+            llegan(home, A, [msg(PERSONA, "UR1", URGE, 5)])
+            js(home, "agent", "Agente De Ejemplo")
+            js(home, "set", PERSONA, "--provider", "ninguno", "--mode", "responder")
+            js(home, "config", "ack", "on")
+            ingiere(home)
+            c = caso_de_stanza(home, "UR1")
+            ok("una urgencia que Jev llama cortesia no se cierra: llega al agente",
+               c and c["etapa"] != "cerrado" and int(c["case_id"]) in para_el_agente(home),
+               f"{c and c['etapa']} {para_el_agente(home)}")
+            ok("y recibe el acuse", c and (auto_de(home, c["case_id"]) or {}).get("estado")
+               == "pendiente", f"{c and auto_de(home, c['case_id'])}")
+
+        with tempfile.TemporaryDirectory() as home:
+            pon_llave(home)
+            cid = caso_respondido(home, "UR2")
+            espera_en(home, cid, "nada")
+            llegan(home, A, [msg(SOPORTE, "UR3", "@duenio " + URGE, 5, mencion=True)])
+            ingiere(home)
+            ver = js(home, "caso", "ver", str(cid))[0]
+            nuevo = caso_de_stanza(home, "UR3")
+            ok("la insistencia tras una respuesta no cierra el caso como atendido",
+               not any(ev["a"] == "cerrado" for ev in ver["eventos"]),
+               f"{ver['etapa']} {ver['eventos'][-2:]}")
+            ok("y vuelve al agente", nuevo and nuevo["etapa"] != "cerrado"
+               and int(nuevo["case_id"]) in para_el_agente(home),
+               f"{nuevo and nuevo['etapa']} {para_el_agente(home)}")
+    finally:
+        falso.cerrar()
+        os.environ.clear()
+        os.environ.update(antes)
+
+
 # ── estado-flota (WAINBOX-55): la flota de Orca en `estado` ────────────────────────────
 # `estado` en el directo de aprobacion suma, por cada proyecto aceptado, los miembros de
 # `orca game fleet` de esa carpeta. Opcional: sin CLI, sin `game`, con un plazo vencido o
