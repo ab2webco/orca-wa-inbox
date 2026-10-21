@@ -34,7 +34,7 @@ approval is bound to the version the notice showed.
 - [x] E2 wa-scope: approval paths, card, notice and split sending (GREEN).
 - [x] E3 Board: `acciones.mjs` enviar and `activity.html` card and actions (GREEN).
 - [x] E4 Harness: the three-field contract for `escalar`.
-- [ ] E5 `npm run check` without shots, reduced shots of the board, PR.
+- [x] E5 `npm run check` without shots, reduced shots of the board, PR.
 
 ## Acceptance
 
