@@ -141,8 +141,19 @@ voseo, no diminutives.
 Money, scope, a decision, access, a deploy, a waiting client that you cannot answer:
 `wa-scope caso propuesta <id> --tipo escalar --instrucciones "<why the owner is needed>" --actor agente`.
 The reason is for the owner, so it carries no secret and no long quote: write it as the one
-question he has to answer, because it can reach him on WhatsApp. Never in the
-owner's own case (below): there you ask him in the reply.
+question he has to answer, in Spanish, in one line and plain words, because it can reach
+him on WhatsApp. Never in the owner's own case (below): there you ask him in the reply.
+
+When you already drafted the message for the customer and only need his OK, each thing
+goes in its own field, never mixed:
+
+- `--respuesta "<the exact text for the customer>"`: what goes out if he approves, byte
+  for byte. Nothing else: no quotes around it, no notes.
+- `--instrucciones "<the one question for the owner>"`.
+- `--evidencia "<what you verified and what you did not>"`: it stays on the board.
+
+Never put the customer text inside `--instrucciones`: approving sends only `--respuesta`,
+and an escalation without it sends nothing to the customer.
 
 The owner may answer a held proposal from the board or over WhatsApp (`18 <correction>`).
 Either way the case comes back to you in `clasificado` with its current proposal, and the

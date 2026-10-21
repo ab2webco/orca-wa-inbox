@@ -41,6 +41,9 @@ board, and anyone else gets `E_NOT_OWNER`.
     "$WA/wa-scope" voice "<chat_jid>" --json    # tone and instructions for that chat
     "$WA/wa-scope" caso clasificar <id> --clase <card|alert|doubtful> --prioridad <p> --actor agente
     "$WA/wa-scope" caso propuesta <id> --tipo <responder|trabajar|escalar|descartar> --actor agente ...
+    # escalar with a drafted customer text: --respuesta "<customer text>" (the only thing
+    # that goes out when the owner approves) --instrucciones "<one question for the owner>"
+    # --evidencia "<what you verified>"
     "$WA/wa-scope" caso mover <id> cerrado --motivo "<why>" --actor agente
     "$WA/wa-scope" caso destinos <id> --json    # another chat this case may report to
     "$WA/wa-read" chat "<chat_jid>" --json      # anything else in the conversation
