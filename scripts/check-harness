@@ -40,6 +40,16 @@ REGLAS = [
      r"never promise a date"),
     ("el idioma y el registro salen del tono configurado",
      r"language and (the )?register come from"),
+    # WAINBOX-63: el bot es la cara del negocio. Natural, no acartonado, pero profesional.
+    ("escribe como un experto de atencion al cliente",
+     r"expert customer-service representative"),
+    ("natural, nunca acartonado, siempre profesional",
+     r"natural[^.]*never stiff[^.]*always professional"),
+    ("un tema por mensaje y a una persona", r"one topic per message"),
+    ("empieza por la respuesta o el siguiente paso", r"start with the answer or the next step"),
+    ("nunca nombres internos", r"no internal names"),
+    ("nunca silencio ni relleno", r"never silence"),
+    ("lee lo que ya se envio antes de escribir", r"replies already sent"),
 ]
 
 # Los archivos que el plugin GENERA en la carpeta del orquestador y que no salen de

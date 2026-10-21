@@ -282,6 +282,25 @@ for codigo in wa_reglas.CALIDAD:
            f"{panel.count(f'{chr(34)}{clave}{chr(34)}:')}")
 
 
+# ── Q4. Lo que el plugin mismo le escribe al cliente cumple el estandar ──────────────
+print("\nQ4: los textos del plugin al cliente pasan el guardia")
+with tempfile.TemporaryDirectory() as home:
+    antes = dict(os.environ)
+    try:
+        ws = carga("wa_scope_textos", WA_SCOPE, home)
+        muestra = {
+            "el acuse por defecto": ws.DEFAULT_CONFIG["ack_text"],
+            "el saludo por defecto": ws.DEFAULT_CONFIG["greeting_text"],
+            "el cierre de un resuelto": ws.closing_text("completed", "SOP-12", "Acceso al panel"),
+            "el cierre de un cancelado": ws.closing_text("cancelled", "SOP-12", "Acceso al panel"),
+            "el cierre sin titulo": ws.closing_text("completed", "SOP-12"),
+        }
+        for nombre, texto in muestra.items():
+            ok(f"{nombre} pasa limpio", calidad(texto) == [], f"{calidad(texto)}: {texto!r}")
+    finally:
+        os.environ.clear()
+        os.environ.update(antes)
+
 print(f"\n{pruebas - len(fallos)}/{pruebas} en verde")
 if fallos:
     sys.exit(1)
