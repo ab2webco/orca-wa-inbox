@@ -5078,6 +5078,40 @@ console.log('\nactivity.html — tablero: sin respuesta del plugin')
   ok('el boton vuelve', !botonTarjeta(doc, 1, 'enviar').disabled)
 }
 
+console.log('\nactivity.html — tablero: un escalar con texto para el cliente (WAINBOX-57)')
+{
+  // La tarjeta trae aparte el texto para el cliente (`texto`) y la pregunta al dueno
+  // (`pregunta`): el texto es lo que Enviar manda y lo que el editor trae; la pregunta se
+  // lee, pero nunca va en la caja.
+  const esc = tarjeta({ case_id: 21, exceptions: [],
+    proposal: { tipo: 'escalar', texto: 'Hola, el reporte ya quedo publicado.',
+      pregunta: 'Confirmar mensaje critico. Verificado: el reporte existe.', version: 'v-esc-texto' },
+    actions: ['enviar', 'editar', 'reclasificar', 'cerrar'] })
+  const w = conWorker({ ok: true, code: 'enviado' })
+  const { doc } = await abrirConWorker([esc], w)
+  const d = abrirDetalle(doc, 21)
+  ok('el detalle muestra el texto para el cliente en la caja de la propuesta',
+    d.querySelector('.det-prop .card-prop')?.textContent === 'Hola, el reporte ya quedo publicado.',
+    d.innerHTML.slice(0, 400))
+  ok('y la pregunta al dueno aparte, dicha como suya',
+    /El agente le pregunta: Confirmar mensaje critico/.test(d.querySelector('.det-prop').textContent) &&
+    !/Verificado/.test(d.querySelector('.det-prop .card-prop').textContent))
+  ok('ofrece Enviar', !!botonDe(doc, 21, 'enviar'))
+  botonDe(doc, 21, 'editar').click()
+  const area = doc.querySelector('#board-detail[data-case="21"] .card-form textarea')
+  ok('el editor trae el texto para el cliente, nunca las instrucciones',
+    !!area && area.value === 'Hola, el reporte ya quedo publicado.', area && area.value)
+  const sinTexto = tarjeta({ case_id: 22, exceptions: [],
+    proposal: { tipo: 'escalar', texto: null, pregunta: 'Lo aprueba usted?', version: 'v-esc-sin' },
+    actions: ['enviar', 'editar', 'reclasificar', 'cerrar'] })
+  const otro = await abrirConWorker([sinTexto], conWorker({ ok: true, code: 'enviado' }))
+  const d2 = abrirDetalle(otro.doc, 22)
+  ok('sin texto para el cliente no hay nada que enviar, aunque el CLI lo ofrezca',
+    !botonDe(otro.doc, 22, 'enviar'))
+  ok('y la nota del escalar muestra la pregunta', /El agente le pregunta: Lo aprueba usted\?/
+    .test(d2.querySelector('.det-escalar')?.textContent || ''), d2.innerHTML.slice(0, 400))
+}
+
 console.log('\nactivity.html — tablero: Editar y enviar')
 {
   const w = conWorker({ ok: true, code: 'enviado' })

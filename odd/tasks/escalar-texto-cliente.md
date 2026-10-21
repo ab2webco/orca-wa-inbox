@@ -32,8 +32,8 @@ approval is bound to the version the notice showed.
   live shapes; old shape sends nothing; long text arrives whole in parts; a stale version
   is refused with the `cambio` message; card fields and actions.
 - [x] E2 wa-scope: approval paths, card, notice and split sending (GREEN).
-- [ ] E3 Board: `acciones.mjs` enviar and `activity.html` card and actions (GREEN).
-- [ ] E4 Harness: the three-field contract for `escalar`.
+- [x] E3 Board: `acciones.mjs` enviar and `activity.html` card and actions (GREEN).
+- [x] E4 Harness: the three-field contract for `escalar`.
 - [ ] E5 `npm run check` without shots, reduced shots of the board, PR.
 
 ## Acceptance

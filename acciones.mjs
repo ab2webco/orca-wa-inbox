@@ -81,6 +81,8 @@ const ACTOR = 'dueno'
 const VERSION = /^[0-9a-f]{64}$/
 const TEXTO_MAX = 4096
 const NOTA_MAX = 500
+// Las propuestas que Enviar manda: las que traen `respuesta` (TIPOS_CON_RESPUESTA en wa-scope).
+const TIPOS_CON_RESPUESTA = ['responder', 'escalar']
 // El CLI no deja cerrar una tarjeta sin decir por que; si el dueno no lo dice, lo dice
 // el worker. Va en ingles: es el texto de un evento, no de la pantalla.
 const MOTIVO_CIERRE = 'closed by the owner'
@@ -291,8 +293,10 @@ export function crearAccionesCaso ({ run, herramienta, motivoDe, lanzarTriage, l
       const version = versionDe(pedido)
       const c = await ver(id)
       exigirVersion(c, version)
+      // Un `escalar` con texto para el cliente se envia como una respuesta: sale su campo
+      // `respuesta`, byte por byte, nunca sus instrucciones (WAINBOX-57).
       const texto = c.propuesta?.respuesta
-      if (c.propuesta?.tipo !== 'responder' || typeof texto !== 'string' || !texto) {
+      if (!TIPOS_CON_RESPUESTA.includes(c.propuesta?.tipo) || typeof texto !== 'string' || !texto) {
         throw new Rechazo(CASO_VEREDICTO.ACCION_INVALIDA, 'the proposal is not a reply')
       }
       await aprobar(id, version)
