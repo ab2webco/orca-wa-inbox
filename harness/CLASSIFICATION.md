@@ -18,7 +18,7 @@ You classify a case in `recibido` with
 `wa-scope caso clasificar <id> --clase <card|alert|doubtful> --prioridad <none|low|medium|high|urgent> --actor agente`
 and then decide ONE proposal (see `AGENTS.md`). A case with nothing to attend to is
 closed: `wa-scope caso mover <id> cerrado --motivo "<why>" --actor agente`. A customer's
-message with content is never closed in silence: with no reply sent and no question to the
+message with content is never closed in silence: with no reply sent and no answer from the
 owner, closing it fails with `E_UNANSWERED`. Propose the reply, or, if you think it needs
 none, `escalar` to the owner with why and the reply you would send. Urgency, pressure or a
 follow-up ("any news?") is never a pleasantry.

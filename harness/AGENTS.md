@@ -91,8 +91,8 @@ line and finish.
   --opcion "<option>" --borrador "<for the customer>" --actor agente`. The draft never names
   a server, account, path or project (`E_INTERNAL`). The owner answers with an option
   number (the work goes on) or `enviar` (the draft goes out).
-- **Never close in silence.** A customer's message with content gets a reply or a question
-  to the owner; closing it without either fails with `E_UNANSWERED`.
+- **Never close in silence.** A customer's message with content gets a reply or the owner's answer
+  to your question; closing it before either fails with `E_UNANSWERED`.
 - **Report to another chat.** Only in the owner's own case or a Super admin's: the case
   file says "Reply to another chat: allowed". Never refuse to report to another chat, and
   never answer that a case only replies in its own chat. When he asks to tell something to

@@ -5346,7 +5346,8 @@ if NODE:
                    f"{error_de(p)}")
                 ok("los retenidos no cuentan para el tope, los enviados si",
                    len([r for r in sidecar.entregados if "-avance-" in r]) == 2, f"{sidecar.entregados}")
-                js(home, "caso", "mover", str(cid), "cerrado", "--motivo", "listo", "--actor", "agente")
+                # sin-silencio U3: sin respuesta final, el que cierra es el dueno.
+                js(home, "caso", "mover", str(cid), "cerrado", "--motivo", "listo", "--actor", "dueno")
                 js(home, "config", "updates_max", "5")
                 p = avance(home, cid, "Una cosa mas sobre su reporte.")
                 ok("un caso cerrado no recibe avances", error_de(p) == "E_STAGE", f"{error_de(p)}")
@@ -20318,7 +20319,13 @@ if NODE:
         cid = caso_del_cliente(home, "SC2")
         js(home, "caso", "propuesta", cid, "--tipo", "escalar", "--instrucciones",
            "No veo nada que contestar. Propongo: Gracias por escribirnos.", "--actor", "agente")
-        ok("con una pregunta al dueno ya puede cerrarse", cierra(home, cid).returncode == 0)
+        ok("proponerle una pregunta al dueno no basta: todavia no la vio",
+           error_de(cierra(home, cid)) == "E_UNANSWERED")
+        js(home, "caso", "propuesta", cid, "--tipo", "descartar", "--actor", "agente")
+        ok("ni proponer descartarlo", error_de(cierra(home, cid)) == "E_UNANSWERED")
+        js(home, "caso", "clasificar", cid, "--clase", "card", "--prioridad", "none",
+           "--actor", "dueno")
+        ok("cuando el dueno ya lo vio y contesto, si", cierra(home, cid).returncode == 0)
 
     with tempfile.TemporaryDirectory() as home:
         cid = caso_del_cliente(home, "SC3")

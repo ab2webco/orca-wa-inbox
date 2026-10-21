@@ -3839,7 +3839,8 @@ def cmd_caso_mover(con, a):
         caso_falla("E_STAGE", f"case #{a.id} goes back to trabajo only when the customer answers "
                               f"the project agent's question; the engine moves it, not a command")
     caso_valida(caso, a.etapa, a.motivo)
-    if a.etapa == "cerrado" and a.actor in ACTORES_SIN_CIERRE_MUDO and cierre_mudo(con, caso):
+    if (a.etapa == "cerrado" and a.actor in ACTORES_SIN_CIERRE_MUDO
+            and not getattr(a, "orden_del_dueno", False) and cierre_mudo(con, caso)):
         caso_falla("E_UNANSWERED", f"case #{a.id} has a customer message that got no reply, and "
                                    f"the owner was never asked: never close it in silence. "
                                    f"Propose the reply (`caso propuesta {a.id} --tipo responder "
@@ -3857,8 +3858,6 @@ def cmd_caso_mover(con, a):
 # sin-silencio (U3): quien no puede cerrar en silencio. Las reglas de ingest (jev,
 # automatizacion) cierran lo que no tiene nada que contestar, y el dueno decide lo suyo.
 ACTORES_SIN_CIERRE_MUDO = ("agente", "trabajador")
-# Lo que el dueno ya vio del caso: una pregunta suya o una propuesta que no contesta.
-PROPUESTAS_AL_DUENO = ("escalar ", "descartar ")
 
 
 def caso_con_contenido(con, caso):
@@ -3887,12 +3886,10 @@ def caso_con_contenido(con, caso):
 
 def cierre_mudo(con, caso):
     """Si cerrar el caso ahora lo deja en silencio: es de un cliente, tiene contenido, no le
-    salio ninguna respuesta y el dueno nunca lo vio (ni una pregunta del agente, ni algo que
-    hizo el)."""
-    cid = caso["case_id"]
+    salio ninguna respuesta y el dueno nunca actuo sobre el. Proponerle una pregunta
+    (`escalar`) o descartarlo no basta: el dueno todavia no la vio, y cerrar la callaria."""
     if con.execute("select 1 from caso_evento where case_id=? and (a='respondido' or "
-                   "actor='dueno' or " + " or ".join("detalle like ?" for _ in PROPUESTAS_AL_DUENO)
-                   + ") limit 1", (cid, *(f"{p}%" for p in PROPUESTAS_AL_DUENO))).fetchone():
+                   "actor='dueno') limit 1", (caso["case_id"],)).fetchone():
         return False
     return not caso_pide_como_dueno(con, caso) and caso_con_contenido(con, caso)
 
@@ -6781,8 +6778,11 @@ def paso_del_lote(con, a, case_id, aplicar):
                 salida["resultado"] = "would_change"
                 return salida
             motivo = " ".join(t for t in ((a.motivo or "").strip(), marca) if t)
+            # El lote ya lo pidio el dueno (`lote_del_dueno`, y cerrar espera su si, K14): no
+            # es un cierre en silencio del agente (sin-silencio U3).
             r = cmd_caso_mover(con, argparse.Namespace(id=case_id, etapa=hacia, motivo=motivo,
-                                                       actor=a.actor, json=True))[0]
+                                                       actor=a.actor, json=True,
+                                                       orden_del_dueno=True))[0]
             if r.get("despacho"):
                 salida["despacho"] = r["despacho"]
         elif a.accion == "prioridad":
