@@ -5826,6 +5826,12 @@ def avance_manda(con, fila):
     frena = avance_frena(con, caso)
     if frena:
         avance_marca(con, cid, n, "omitido", frena[0], f"avance {n} omitido: {frena[0]}")
+        if frena[0] == "E_EXCEPTION":
+            caso_toma(con)
+            if avance_rechazado(con, caso_de(con, cid)):
+                con.commit()
+            else:
+                con.rollback()
         return {"estado": "omitido", "motivo": frena[0], "req_id": req}
     estados, vivo = envios_del_almacen([req])
     if estados.get(req) == "enviado":
@@ -5871,6 +5877,21 @@ def avance_sin_salida(con, cid, n):
     except BaseException:
         con.rollback()
         raise
+
+
+def avance_rechazado(con, caso):
+    """sin-silencio (U2): el primer mensaje (o un avance) se rechazo con E_EXCEPTION y al
+    cliente no le llego nada del caso. Visto en vivo: en `model` el cliente quedaba sin nada.
+    El acuse fijo de la linea no afirma nada y sale en su lugar, una vez, con la razon que lo
+    deja pasar las banderas (`auto_omite`). Una credencial no: ese caso es del dueno. True si
+    lo dejo pendiente. Quien llama tiene la base tomada y hace el commit."""
+    cid = caso["case_id"]
+    if "credential" in _lista_json(caso.get("excepciones")) or caso_ya_escribio(con, caso, {}):
+        return False
+    auto_registra(con, cid, "acuse")
+    return con.execute("update respuesta_auto set razon=? where case_id=? and tipo='acuse' and "
+                       "estado='pendiente' and razon is null",
+                       (RAZON_AVANCE_RECHAZADO, cid)).rowcount > 0
 
 
 def avance_intenta(con, fila):
@@ -5978,6 +5999,8 @@ def cmd_caso_avance(con, a):
         return [dict(caso_fila(con, caso_de(con, cid)), avance=dict(envio, n=ya["n"]))]
     frena = avance_frena(con, caso)
     if frena:
+        if frena[0] == "E_EXCEPTION" and avance_rechazado(con, caso):
+            con.commit()
         caso_falla(*frena)
     ajustes = merged_settings(con, linea_del_caso(caso))
     tope = primer_numero(ajustes, "updates_max")
@@ -7120,9 +7143,11 @@ def tick_auto_cierra(con, fila, estado, razon, detalle, **campos):
         raise
 
 
-def auto_omite(con, caso, scope, ajustes, tipo):
+def auto_omite(con, caso, scope, ajustes, tipo, respaldo_de_avance=False):
     """La razon por la que NO se manda, o None si se manda. Se mira de nuevo al mandar:
-    entre el ingest y el tick el dueno pudo cambiar el chat, o el caso pudo marcarse."""
+    entre el ingest y el tick el dueno pudo cambiar el chat, o el caso pudo marcarse.
+    `respaldo_de_avance`: el acuse que reemplaza un primer mensaje que no salio (U2); solo
+    lo frena una credencial, no las demas banderas."""
     if caso["etapa"] == "cerrado" and tipo == "acuse":
         return "caso-cerrado"
     if (scope.get(caso["chat_jid"]) or {}).get("mode") != "responder":
@@ -7134,7 +7159,10 @@ def auto_omite(con, caso, scope, ajustes, tipo):
     # esa conversacion); el saludo sigue como siempre.
     if tipo == "acuse" and caso_pide_como_dueno(con, caso):
         return RAZON_DUENO
-    if _lista_json(caso.get("excepciones")):
+    excepciones = _lista_json(caso.get("excepciones"))
+    if respaldo_de_avance:
+        return "excepcion" if "credential" in excepciones else None
+    if excepciones:
         return "excepcion"
     try:
         resumen = json.loads(caso.get("jev") or "{}")
@@ -7152,6 +7180,11 @@ RAZON_YA_SALIO = "ya-salio-un-mensaje"
 # El acuse que sale porque el primer mensaje del agente y su reescritura se retuvieron
 # (menos-ruido M4): un respaldo tambien en `model`.
 RAZON_AVANCE_RETENIDO = "primer-mensaje-retenido"
+# El acuse que sale porque el primer mensaje del agente se rechazo con E_EXCEPTION
+# (sin-silencio U2). Los dos son el respaldo de un primer mensaje que no salio: el acuse no
+# afirma nada, asi que las banderas de Jev no lo frenan; una credencial, el dueno y el modo si.
+RAZON_AVANCE_RECHAZADO = "primer-mensaje-rechazado"
+RAZONES_RESPALDO_AVANCE = (RAZON_AVANCE_RETENIDO, RAZON_AVANCE_RECHAZADO)
 
 # Decision c del dueno (2026-10-05): el acuse no cae en medio de una conversacion. No sale en
 # el caso del dueno (`auto_omite`), y ninguno sale si la linea escribio en ese chat en los
@@ -7293,7 +7326,7 @@ Manda los acuses y saludos pendientes, antes que cualquier propuesta: son lo que
     for fila in filas:
         caso = casos[fila["case_id"]]
         modo = primer_modo(scope.get(caso["chat_jid"]), ajustes)[0]
-        tras_retenido = fila["tipo"] == "acuse" and fila.get("razon") == RAZON_AVANCE_RETENIDO
+        tras_retenido = fila["tipo"] == "acuse" and fila.get("razon") in RAZONES_RESPALDO_AVANCE
         if (fila["tipo"] == "acuse" and modo == "model_with_ack_fallback"
                 or tras_retenido) != respaldo:
             continue
@@ -7315,7 +7348,7 @@ Manda los acuses y saludos pendientes, antes que cualquier propuesta: son lo que
                 continue
             if espera == "temprano":
                 continue
-        razon = auto_omite(con, caso, scope, ajustes, fila["tipo"])
+        razon = auto_omite(con, caso, scope, ajustes, fila["tipo"], respaldo_de_avance=tras_retenido)
         if razon:
             tick_auto_cierra(con, fila, "omitido", razon, f"{fila['tipo']} omitido: {razon}")
             continue

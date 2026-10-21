@@ -20221,6 +20221,63 @@ if NODE:
         os.environ.update(antes)
 
 
+# ── sin-silencio U2: el primer mensaje rechazado cae al acuse (WAINBOX-62) ──────────────
+# Visto en vivo: el primer mensaje del agente se rechazo con E_EXCEPTION y, en `model`, al
+# cliente no le llego nada. El acuse fijo no afirma nada: sale en su lugar, una vez.
+print("\nsin-silencio U2: el primer mensaje rechazado cae al acuse")
+
+
+def modelo_con(home, stanza, texto):
+    """Un chat `responder` cuyo primer mensaje es del agente, con un caso de ese texto."""
+    pon_llave(home)
+    llegan(home, A, [msg(PERSONA, stanza, texto, 5)])
+    js(home, "agent", "Agente De Ejemplo")
+    js(home, "set", PERSONA, "--provider", "ninguno", "--mode", "responder")
+    js(home, "set", PERSONA, "--first-reply", "model")
+    ingiere(home)
+    return caso_de_stanza(home, stanza)["case_id"]
+
+
+if NODE:
+    falso = JevFalso(jev_y_borradores)
+    antes = dict(os.environ)
+    os.environ["WA_INBOX_JEV_ENDPOINT"] = falso.url
+    try:
+        with tempfile.TemporaryDirectory() as home:
+            cid = modelo_con(home, "RA1", "cuanto cuesta el plan anual")
+            sidecar = SidecarFalso(home)
+            try:
+                p = avance(home, cid, PRIMERO)
+                ok("el primer mensaje con una bandera de riesgo se sigue rechazando",
+                   error_de(p) == "E_EXCEPTION", f"{error_de(p)} {p.stderr[-200:]}")
+                ok("pero deja el acuse fijo pendiente en su lugar",
+                   (auto_de(home, cid) or {}).get("estado") == "pendiente", f"{auto_de(home, cid)}")
+                tick(home)
+                ok("el tick lo manda aunque el caso tenga la bandera: el acuse no afirma nada",
+                   entregas(sidecar, "acuse") == [f"caso-{cid}-acuse"]
+                   and (auto_de(home, cid) or {}).get("estado") == "enviado",
+                   f"{sidecar.entregados} {auto_de(home, cid)}")
+                f = seguimiento_de(home, cid) or {}
+                ok("y lo que se le prometio lo debemos nosotros: 30 min para la respuesta",
+                   f.get("espera") == "nosotros" and f.get("estado") == "pendiente", f"{f}")
+                p = avance(home, cid, SEGUNDO)
+                tick(home)
+                ok("un segundo rechazo no manda otro acuse",
+                   entregas(sidecar, "acuse") == [f"caso-{cid}-acuse"], f"{sidecar.entregados}")
+            finally:
+                sidecar.cerrar()
+
+        with tempfile.TemporaryDirectory() as home:
+            cid = modelo_con(home, "RA2", "@duenio la clave es Hunter2xx")
+            p = avance(home, cid, PRIMERO)
+            ok("con una credencial no hay acuse de respaldo: el caso es del dueno",
+               auto_de(home, cid) is None, f"{error_de(p)} {auto_de(home, cid)}")
+    finally:
+        falso.cerrar()
+        os.environ.clear()
+        os.environ.update(antes)
+
+
 # ── estado-flota (WAINBOX-55): la flota de Orca en `estado` ────────────────────────────
 # `estado` en el directo de aprobacion suma, por cada proyecto aceptado, los miembros de
 # `orca game fleet` de esa carpeta. Opcional: sin CLI, sin `game`, con un plazo vencido o
