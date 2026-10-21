@@ -58,3 +58,11 @@ the answer a few hours ago (61).
 
 `scripts/check-calidad` (new, in `npm run check`), then the full `npm run check` without
 shots; reduced shots of the activity panel only.
+
+## Close (2026-10-21)
+
+- check-casos 2563/2564: the one miss is `T8 sin otra cuenta usable` (fake Orca CLI did not
+  answer in 15 s under machine load); the T8 section alone reran 302/302.
+- panels.test.mjs fails 1-4 different `config.html` checks per run under load (load avg 15+);
+  origin/main fails the same way (1777/1778 on another check). `activity.html` checks pass.
+- All other suites green; reduced shots `tablero-detalle` es 1440/390 light/dark looked at.
