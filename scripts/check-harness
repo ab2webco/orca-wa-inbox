@@ -50,6 +50,11 @@ REGLAS = [
     ("nunca nombres internos", r"no internal names"),
     ("nunca silencio ni relleno", r"never silence"),
     ("lee lo que ya se envio antes de escribir", r"replies already sent"),
+    # WAINBOX-61: lo ya verificado y fresco se contesta; solo lo nuevo se despacha.
+    ("lo ya verificado y fresco se contesta, no se despacha",
+     r"already verified and still fresh[^.]*reply with it"),
+    ("lee la memoria del proyecto antes de despachar", r"project's memory"),
+    ("solo lo nuevo se despacha, con --nuevo", r"only what is new[^.]*--nuevo"),
 ]
 
 # Los archivos que el plugin GENERA en la carpeta del orquestador y que no salen de

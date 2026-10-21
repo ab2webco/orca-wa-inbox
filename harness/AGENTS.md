@@ -98,6 +98,15 @@ line and finish.
   `PROJECTS.md` has its path. Once approved, the plugin dispatches it to the project's
   agent by itself; never start that agent yourself. The project agent reports with
   `wa-scope caso resultado` (resuelto, necesita or bloqueado).
+- **Reuse what is already known.** Before you propose `trabajar`, read the case file's
+  "Already verified in this chat" section (what the project agents verified in this chat,
+  with its time), the earlier cases with the replies already sent, and the project's memory
+  when you have it (its Engram project). When the answer is already verified and still
+  fresh, reply with it (`--tipo responder`): never dispatch the same check again. Dispatch
+  only what is new to verify, with `--nuevo "<what is new>"`: the brief then tells the
+  project agent what is already verified, with its time. The plugin refuses a repeated
+  dispatch on a freshly verified topic with `E_KNOWN`; the owner's own order and an
+  operator's case are never refused.
 - **Which project.** A chat can have several projects. A matching text rule decides first;
   a chat with one project uses it. With two or more and no rule, `where` returns
   `workspace` null and the chat's projects in `candidates`: choose one by the content with

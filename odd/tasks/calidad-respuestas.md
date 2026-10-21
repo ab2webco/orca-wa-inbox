@@ -44,8 +44,8 @@ the answer a few hours ago (61).
 - [x] Q2 Wired to proposals and wa-send, with levels and exemptions. RED: 5 FALLA (frenos_de_regla returned [] [], aprobar by rule signed, unmapped codes asked the owner), then `revision_piso()` took no `internos`. GREEN: 57/57.
 - [x] Q3 Board strings. RED: 5 FALLA (no MOTIVO_KEY entry). GREEN: 69/69 with es/en/pt strings and the event codes.
 - [x] Q4 Harness standard and plugin texts sample. RED: check-harness 14 missing phrases (7 rules x AGENTS.md and the skill). GREEN: check-harness 119 checks; check-calidad 74/74 with the plugin's ack, greeting and closing texts clean.
-- [ ] K1 Already verified, with time, in the case file and the brief.
-- [ ] K2 Refuse a repeated dispatch; `--nuevo`.
+- [x] K1 Already verified, with time, in the case file and the brief. RED: check-calidad K1 (no section). GREEN: 89/89.
+- [x] K2 Refuse a repeated dispatch; `--nuevo`. RED: no E_KNOWN, `--nuevo` unrecognized; check-harness 6 missing phrases. GREEN: check-calidad 89/89 (fresh refuses, stale/other topic/necesita dispatch, owner exempt), check-harness 125.
 
 ## Acceptance
 

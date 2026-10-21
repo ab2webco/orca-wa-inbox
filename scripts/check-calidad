@@ -21,6 +21,7 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+import time
 
 RAIZ = pathlib.Path(__file__).resolve().parent.parent
 BIN = RAIZ / "bin"
@@ -297,6 +298,143 @@ with tempfile.TemporaryDirectory() as home:
         }
         for nombre, texto in muestra.items():
             ok(f"{nombre} pasa limpio", calidad(texto) == [], f"{calidad(texto)}: {texto!r}")
+    finally:
+        os.environ.clear()
+        os.environ.update(antes)
+
+# ── K. Lo que el equipo ya verifico no se vuelve a despachar (WAINBOX-61) ─────────────
+def hace(horas):
+    return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(time.time() - horas * 3600))
+
+
+VERIFICADO = "El reporte de cierre fallaba por el total del pie; corregido en el commit abc1234"
+
+
+def caso_verificado(home, titulo, horas, estado="resuelto"):
+    """Un caso anterior del chat cuyo agente del proyecto reporto `estado` hace `horas`."""
+    cid = js(home, "caso", "crear", "--chat", CHAT, "--titulo", titulo,
+             "--actor", "agente")[0]["case_id"]
+    con = db_de(home)
+    informes = [{"estado": estado, "resumen": VERIFICADO, "at": hace(horas),
+                 "respuesta": "Hola Ana, ya quedó el reporte. ¿Nos confirma si lo ve bien?"}]
+    con.execute("insert into caso_despacho (case_id, evento_id, proyecto, estado, instrucciones, "
+                "resultado, informes, created_at, updated_at) values (?,?,?,?,?,?,?,?,?)",
+                (cid, 1, "Alfa Demo", "reportado", "> el reporte de cierre sale en blanco",
+                 estado, json.dumps(informes), hace(horas), hace(horas)))
+    con.commit()
+    con.close()
+    return cid
+
+
+def caso_nuevo(home, titulo):
+    cid = js(home, "caso", "crear", "--chat", CHAT, "--titulo", titulo,
+             "--actor", "agente")[0]["case_id"]
+    js(home, "caso", "clasificar", str(cid), "--clase", "card", "--prioridad", "medium",
+       "--actor", "agente")
+    return cid
+
+
+def trabajar(home, cid, *extra):
+    return falla(home, "caso", "propuesta", str(cid), "--tipo", "trabajar", "--instrucciones",
+                 "> el reporte de cierre sigue saliendo en blanco", "--actor", "agente", *extra)
+
+
+print("\nK2: un tema verificado y fresco se contesta, no se despacha otra vez")
+with tempfile.TemporaryDirectory() as home:
+    js(home, "set", CHAT, "--provider", "ninguno", "--mode", "responder")
+    caso_verificado(home, "El reporte de cierre sale en blanco", 2)
+    cid = caso_nuevo(home, "Reporte de cierre en blanco otra vez")
+    codigo, salida = trabajar(home, cid)
+    ok("el trabajar se niega con E_KNOWN", codigo == 2 and "E_KNOWN" in salida, salida[-300:])
+    ok("y dice lo verificado, con su hora, y que se conteste",
+       VERIFICADO[:30] in salida and hace(2)[:13] in salida and "responder" in salida,
+       salida[-400:])
+    ok("el caso no paso a decision con un trabajar",
+       db_de(home).execute("select propuesta from caso where case_id=?", (cid,)).fetchone()[0]
+       is None)
+    r = js(home, "caso", "propuesta", str(cid), "--tipo", "responder", "--respuesta",
+           "Hola Ana, ya quedó corregido. ¿Nos confirma si el reporte sale bien?",
+           "--actor", "agente")[0]
+    ok("la respuesta con lo ya verificado si se propone", r["etapa"] == "decision", f"{r}")
+    otro = caso_nuevo(home, "Reporte de cierre en blanco, ahora en pesos")
+    codigo, salida = trabajar(home, otro, "--nuevo", "si tambien falla con moneda pesos")
+    ok("con --nuevo despacha solo lo nuevo", codigo == 0, salida[-300:])
+    instr = json.loads(db_de(home).execute("select propuesta from caso where case_id=?",
+                                           (otro,)).fetchone()[0])["instrucciones"]
+    ok("y las instrucciones dicen que es lo nuevo",
+       "si tambien falla con moneda pesos" in instr and "New to verify" in instr, instr[:200])
+
+with tempfile.TemporaryDirectory() as home:
+    js(home, "set", CHAT, "--provider", "ninguno", "--mode", "responder")
+    caso_verificado(home, "El reporte de cierre sale en blanco", 30)
+    cid = caso_nuevo(home, "Reporte de cierre en blanco otra vez")
+    codigo, salida = trabajar(home, cid)
+    ok("lo verificado hace mas de un dia ya no frena: despacha", codigo == 0, salida[-300:])
+
+with tempfile.TemporaryDirectory() as home:
+    js(home, "set", CHAT, "--provider", "ninguno", "--mode", "responder")
+    caso_verificado(home, "El reporte de cierre sale en blanco", 2)
+    cid = caso_nuevo(home, "No llegan los correos de las facturas")
+    codigo, salida = falla(home, "caso", "propuesta", str(cid), "--tipo", "trabajar",
+                           "--instrucciones", "> no me llegan los correos de las facturas",
+                           "--actor", "agente")
+    ok("otro tema despacha aunque haya algo fresco", codigo == 0, salida[-300:])
+
+with tempfile.TemporaryDirectory() as home:
+    js(home, "set", CHAT, "--provider", "ninguno", "--mode", "responder")
+    caso_verificado(home, "El reporte de cierre sale en blanco", 2, estado="necesita")
+    cid = caso_nuevo(home, "Reporte de cierre en blanco otra vez")
+    codigo, salida = trabajar(home, cid)
+    ok("un reporte que no resolvio (necesita) no cuenta como verificado", codigo == 0,
+       salida[-300:])
+
+with tempfile.TemporaryDirectory() as home:
+    antes = dict(os.environ)
+    try:
+        js(home, "set", CHAT, "--provider", "ninguno", "--mode", "responder")
+        caso_verificado(home, "El reporte de cierre sale en blanco", 2)
+        cid = caso_nuevo(home, "Reporte de cierre en blanco otra vez")
+        ws = carga("wa_scope_dueno", WA_SCOPE, home)
+        ws.caso_del_dueno = lambda con, caso: True
+        con = ws.db()
+        import argparse
+        r = ws.cmd_caso_propuesta(con, argparse.Namespace(
+            id=cid, tipo="trabajar", respuesta=None, repo=None, evidencia=None, espera=None,
+            chat=None, nuevo=None, actor="agente",
+            instrucciones="> el reporte de cierre sigue saliendo en blanco"))[0]
+        ok("la orden del dueno no se niega: su orden es la decision", r["etapa"] == "decision",
+           f"{r.get('etapa')}")
+        con.close()
+    finally:
+        os.environ.clear()
+        os.environ.update(antes)
+
+print("\nK1: lo ya verificado, con su hora, en el archivo del caso y en el brief")
+with tempfile.TemporaryDirectory() as home:
+    antes = dict(os.environ)
+    try:
+        js(home, "set", CHAT, "--provider", "ninguno", "--mode", "responder")
+        previo = caso_verificado(home, "El reporte de cierre sale en blanco", 2)
+        viejo = caso_verificado(home, "Otro tema de hace dias", 50)
+        cid = caso_nuevo(home, "Reporte de cierre en blanco, ahora en pesos")
+        trabajar(home, cid, "--nuevo", "si tambien falla con moneda pesos")
+        ws = carga("wa_scope_brief", WA_SCOPE, home)
+        con = ws.db()
+        caso = ws.caso_de(con, cid)
+        archivo = ws.archivo_de_caso(con, caso)
+        ok("el archivo del caso tiene la seccion de lo ya verificado",
+           "## Already verified in this chat" in archivo, archivo[-600:])
+        ok("con el caso, la hora y lo que se verifico",
+           f"#{previo}" in archivo and hace(2)[:13] in archivo and VERIFICADO in archivo)
+        ok("lo de hace mas de un dia no esta como verificado",
+           f"#{viejo} " not in archivo.split("## Already verified in this chat")[1].split("##")[0])
+        ok("y recuerda como se lee una respuesta", "How a reply reads" in archivo)
+        brief = ws.brief_de_despacho(con, caso, {"name": "Alfa Demo", "path": "/tmp/alfa"},
+                                     json.loads(caso["propuesta"])["instrucciones"])
+        ok("el brief del despacho dice lo ya verificado, con su hora, para no repetirlo",
+           "## Already verified" in brief and hace(2)[:13] in brief and VERIFICADO in brief
+           and "do not repeat" in brief.lower(), brief[-800:])
+        con.close()
     finally:
         os.environ.clear()
         os.environ.update(antes)

@@ -307,6 +307,16 @@ or a document with your own tools only when the case needs it. Never paste its c
 
 `wa-scope caso propuesta <id> --tipo trabajar --instrucciones "<brief>" --actor agente`.
 
+**Reuse what is already known.** Before you propose `trabajar`, read the case file's
+"Already verified in this chat" section (what the project agents verified in this chat,
+with its time), the earlier cases with the replies already sent, and the project's memory
+when you have it (its Engram project). When the answer is already verified and still
+fresh, reply with it (`--tipo responder`): never dispatch the same check again. Dispatch
+only what is new to verify, with `--nuevo "<what is new>"`: the brief then tells the
+project agent what is already verified, with its time. The plugin refuses a repeated
+dispatch on a freshly verified topic with `E_KNOWN`; the owner's own order and an
+operator's case are never refused.
+
 1. The customer's messages **VERBATIM**, in a quoted block, in arrival order.
 2. Below it, your reading, marked as interpretation.
 3. **Open questions** for the project agent: "Who is <name>?", "What does '<phrase>'
