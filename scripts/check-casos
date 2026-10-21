@@ -20337,6 +20337,123 @@ if NODE:
            cierra(home, cid).returncode == 0)
 
 
+# ── sin-silencio B1: el trabajo bloqueado es una pregunta al dueno y un borrador (WAINBOX-60) ──
+# Antes el caso quedaba en Bloqueado, el dueno recibia el resumen tecnico en ingles y el
+# cliente nada. Ahora vuelve al agente de casos, que lo convierte en UNA pregunta al dueno,
+# con sus opciones, y un borrador honesto para el cliente sin nombres internos.
+print("\nsin-silencio B1: el trabajo bloqueado es una pregunta al dueno y un borrador")
+
+BLOQUEO = ("Need the owner to decide: move order 1042 to shipped on srv-demo-01 "
+           "(user deploy_demo, ops@demo.example)")
+PREGUNTA_B = "¿Pasamos el pedido a enviado aunque todavía falte la guía?"
+OPCIONES_B = ("Sí, pasarlo a enviado ahora", "No, esperar la guía del cliente")
+BORRADOR_B = ("Hola, revisamos su pedido y estamos esperando una confirmación interna para "
+              "continuar. Le escribimos apenas la tengamos.")
+if NODE and not any(c["jid"] == DUENO_DM for c in CHATS):
+    CHATS.append({"jid": DUENO_DM, "nombre": "Dueno Directo", "grupo": False})
+
+
+def bloqueado_por_proyecto(home, stanza):
+    """Un caso de un cliente cuyo trabajo aprobado reporto `bloqueado`, con el numero de
+    aprobacion elegido (el aviso crudo saldria)."""
+    linea_lista(home)
+    js(home, "config", "ack", "off")
+    js(home, "set", DUENO_DM, "--provider", "ninguno", "--mode", "responder")
+    pon_duenos(home, DUENO_LID)
+    pon_aprobacion(home, DUENO_LID)
+    llegan(home, A, [msg(PERSONA, stanza, "necesito que pasen mi pedido a enviado", 30)])
+    cid, _ = caso_en_trabajo(home, stanza, PERSONA)
+    js(home, "caso", "resultado", cid, "--estado", "bloqueado", "--resumen", BLOQUEO,
+       "--actor", "trabajador")
+    return cid
+
+
+def bloqueo(home, cid, borrador=BORRADOR_B):
+    args = ["caso", "bloqueo", cid, "--pregunta", PREGUNTA_B]
+    for opcion in OPCIONES_B:
+        args += ["--opcion", opcion]
+    return corre(home, *args, "--borrador", borrador, "--actor", "agente")
+
+
+def archivo_del_caso(home, cid):
+    antes_ = dict(os.environ)
+    try:
+        wsb = carga_wa_scope(home)
+        con = wsb.db()
+        return wsb.archivo_de_caso(con, wsb.caso_de(con, int(cid)))
+    finally:
+        os.environ.clear()
+        os.environ.update(antes_)
+
+
+if NODE:
+    with tempfile.TemporaryDirectory() as home:
+        cid = bloqueado_por_proyecto(home, "BQ1")
+        sidecar = SidecarFalso(home)
+        try:
+            ok("el bloqueo del agente del proyecto deja el caso en bloqueado, para el agente de casos",
+               fila_de(home, int(cid))["etapa"] == "bloqueado" and int(cid) in para_el_agente(home),
+               f"{fila_de(home, int(cid))['etapa']} {para_el_agente(home)}")
+            tick(home)
+            ok("y el dueno no recibe el aviso crudo del bloqueo",
+               cuenta(home, "select count(*) from aviso where tipo='bloqueo'") == 0
+               and not any("se bloqueo" in a["body"] for a in al_dueno(home)), f"{al_dueno(home)}")
+            archivo = archivo_del_caso(home, cid)
+            ok("el archivo del caso le dice al agente que hacer, con el motivo del bloqueo",
+               "caso bloqueo" in archivo and "--opcion" in archivo and "--borrador" in archivo
+               and "srv-demo-01" in archivo, archivo[-1500:])
+            for interno in ("srv-demo-01", "deploy_demo", "ops@demo.example", "10.0.0.7"):
+                p = bloqueo(home, cid, f"Hola, el pedido sigue en {interno}, le avisamos.")
+                ok(f"un borrador con un nombre interno ({interno}) no se acepta",
+                   error_de(p) == "E_INTERNAL" and fila_de(home, int(cid))["etapa"] == "bloqueado",
+                   f"{error_de(p)}")
+            p = bloqueo(home, cid)
+            ver = js(home, "caso", "ver", cid)[0]
+            ok("la pregunta y el borrador llevan el caso a decision, como una pregunta al dueno",
+               p.returncode == 0 and ver["etapa"] == "decision"
+               and ver["propuesta"]["tipo"] == "escalar"
+               and ver["propuesta"]["instrucciones"] == PREGUNTA_B
+               and ver["propuesta"]["borrador"] == BORRADOR_B
+               and all(o in ver["propuesta"]["opciones"] for o in OPCIONES_B),
+               f"{p.stderr[-300:]} {ver['etapa']} {ver.get('propuesta')}")
+            ok("y ya no espera al agente", int(cid) not in para_el_agente(home))
+            tick(home)
+            aviso = next((a["body"] for a in al_dueno(home) if "le pregunta" in a["body"]), "")
+            ok("al dueno le llega la pregunta en palabras simples, con las opciones numeradas",
+               PREGUNTA_B in aviso and f"1. {OPCIONES_B[0]}" in aviso
+               and f"2. {OPCIONES_B[1]}" in aviso, aviso)
+            ok("con el borrador para el cliente y como contestar",
+               BORRADOR_B in aviso and f"{cid} 1" in aviso and f"{cid} enviar" in aviso, aviso)
+            ok("y sin el resumen tecnico", "srv-demo-01" not in aviso and "deploy_demo" not in aviso,
+               aviso)
+            ok("al cliente no le salio nada todavia", not any(
+                e["req_id"].startswith(f"caso-{cid}-") for e in envios(home)
+                if e["estado"] == "enviado"), f"{envios(home)}")
+            p = bloqueo(home, cid)
+            ok("un caso que ya no esta bloqueado no recibe otra pregunta", error_de(p) == "E_STAGE",
+               f"{error_de(p)}")
+        finally:
+            sidecar.cerrar()
+
+    with tempfile.TemporaryDirectory() as home:
+        cid = bloqueado_por_proyecto(home, "BQ2")
+        sidecar = SidecarFalso(home)
+        try:
+            con = db_de(home)
+            con.execute("update caso_evento set at=datetime('now', 'localtime', '-20 minutes') "
+                        "where case_id=? and a='bloqueado'", (int(cid),))
+            con.commit()
+            con.close()
+            tick(home)
+            ok("si el agente de casos no lo convierte en 15 minutos, el dueno recibe el aviso del "
+               "bloqueo igual", cuenta(home, "select count(*) from aviso where tipo='bloqueo'") == 1,
+               f"{al_dueno(home)}")
+            tick(home)
+            ok("una sola vez", cuenta(home, "select count(*) from aviso where tipo='bloqueo'") == 1)
+        finally:
+            sidecar.cerrar()
+
+
 # ── estado-flota (WAINBOX-55): la flota de Orca en `estado` ────────────────────────────
 # `estado` en el directo de aprobacion suma, por cada proyecto aceptado, los miembros de
 # `orca game fleet` de esa carpeta. Opcional: sin CLI, sin `game`, con un plazo vencido o

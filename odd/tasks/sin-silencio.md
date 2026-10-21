@@ -47,7 +47,7 @@ Out of scope: panel changes (the case shows in the Decision column as it is toda
 - [x] U1 Urgency is never a pleasantry. RED: `sin-silencio U1` 0/7, then 7/8 (Jev criterion). GREEN: 8/8; U1 plus the Jev sections 179/179.
 - [x] U2 A refused first message falls back to the ack. RED: `sin-silencio U2` 2/6 (no ack left, nothing sent, no follow-up). GREEN: 6/6; with the first-message, ack, avisos-retenidos and menos-ruido sections 165/165.
 - [x] U3 No silent close of a customer case with content. RED: `sin-silencio U3` 3/7 (agent and worker closed it). GREEN: 7/7; check-harness 105, check-voseo green.
-- [ ] B1 A blocked result becomes an owner question and a customer draft
+- [x] B1 A blocked result becomes an owner question and a customer draft. RED: `sin-silencio B1` 4/16 (no `caso bloqueo`, raw notice, no agent instructions). GREEN: 16/16; all sin-silencio sections 37/37.
 - [ ] B2 The owner's answer re-dispatches or sends
 
 ## Acceptance criteria

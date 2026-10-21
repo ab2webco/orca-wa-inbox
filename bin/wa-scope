@@ -158,9 +158,11 @@ FIRMANTES_CASO = ("dueno", "regla")
 # E_OWNER: lo que ya decidio el dueno (el proyecto del caso) no lo cambia el agente.
 ERRORES_CASO = ("E_ARGS", "E_NOT_FOUND", "E_STAGE", "E_NOT_APPROVED", "E_VERSION",
                 "E_EXCEPTION", "E_REVISION", "E_BUSY", "E_OWNER", "E_NOT_OWNER",
-                "E_NEEDS_OWNER_YES", "E_UNANSWERED")
+                "E_NEEDS_OWNER_YES", "E_UNANSWERED", "E_INTERNAL")
 # E_UNANSWERED: el agente (o el trabajador) cierra un caso de un cliente con contenido sin que
 # le haya salido una respuesta ni se le haya preguntado al dueno (sin-silencio, U3).
+# E_INTERNAL: el borrador para el cliente de un bloqueo nombra algo interno: un servidor, una
+# cuenta, una ruta o un proyecto (sin-silencio, B1).
 # E_NOT_OWNER: `caso aprobar --actor dueno` o `caso lote --actor dueno` sin la llave del
 # plugin (approve-solo-dueno). La firma del dueno la lanza el worker con el clic del tablero;
 # un agente no la tiene.
@@ -3761,8 +3763,11 @@ def caso_mover(con, caso, hacia, actor, detalle="", seguimiento=True, **campos):
         # pestanas de sus agentes que ya terminaron: la pide para el tick siguiente, sin
         # llamar a Orca aca (cierra-pestanas, T5).
         con.execute("delete from settings where key='limpieza_at'")
-    if hacia == "bloqueado" and caso["etapa"] != "bloqueado":
-        # Un caso bloqueado se le dice al dueno por WhatsApp, si eligio un numero (T14).
+    if (hacia == "bloqueado" and caso["etapa"] != "bloqueado"
+            and not (detalle or "").startswith(PREFIJO_BLOQUEO_AGENTE)):
+        # Un caso bloqueado se le dice al dueno por WhatsApp, si eligio un numero (T14). El
+        # que bloqueo el agente del proyecto le llega como una pregunta (`caso bloqueo`), o
+        # como este aviso si el agente de casos no la hizo a tiempo (`tick_bloqueos`).
         aviso_de_bloqueo(con, caso, detalle)
 
 
@@ -5676,7 +5681,9 @@ def cmd_caso_resultado(con, a):
         if caso["etapa"] == "bloqueado" and caso["resumen"] == resumen:
             return [caso_fila(con, caso)]
         caso_valida(caso, "bloqueado", motivo)
-        caso_mover(con, caso, "bloqueado", a.actor, motivo, resumen=resumen)
+        # sin-silencio (B1): el bloqueo vuelve al agente de casos, que lo convierte en una
+        # pregunta al dueno y un borrador para el cliente (`caso bloqueo`).
+        caso_mover(con, caso, "bloqueado", a.actor, motivo, resumen=resumen, necesita_agente=1)
         resultado_al_despacho(con, a.id, estado, resumen)
         con.commit()
         return [dict(caso_fila(con, caso_de(con, a.id)), envio=None)]
@@ -5716,6 +5723,144 @@ def cmd_caso_resultado(con, a):
     # chat, el piso fijo, Jev) la deja para el dueno igual que alla.
     envio = envia_resultado(con, a.id)
     return [dict(caso_fila(con, caso_de(con, a.id)), envio=envio)]
+
+
+# ── El bloqueo del agente del proyecto: una pregunta al dueno y un borrador (sin-silencio B1) ──
+# Lo que el agente del proyecto reporta `bloqueado` (necesita que el dueno decida algo, o no
+# puede seguir) vuelve al agente de casos. Antes el caso quedaba en Bloqueado, el dueno recibia
+# el resumen tecnico en ingles y el cliente nada. `caso bloqueo` lo convierte en UNA pregunta al
+# dueno, en palabras simples y con sus opciones, y en un borrador honesto para el cliente: el
+# caso pasa a decision como un `escalar`, y la respuesta del dueno lo mueve (B2).
+OPCIONES_BLOQUEO = (2, 4)
+LARGO_OPCION = 200
+# Cuanto espera el aviso crudo del bloqueo a que el agente de casos haga la pregunta.
+BLOQUEO_SIN_PREGUNTA_S = 15 * 60
+# Lo que nunca va en el borrador para el cliente, se lea donde se lea: una cuenta (un correo),
+# una IP, una ruta, un host de la red interna.
+INTERNO_FIJO = (re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+"),
+                re.compile(r"\b\d{1,3}(?:\.\d{1,3}){3}\b"),
+                re.compile(r"(?<![\w/])/(?:[\w.-]+/)+[\w.-]*"),
+                re.compile(r"\b[\w-]+\.(?:local|internal|lan|intranet|localdomain)\b", re.I))
+# Un nombre tecnico en lo que reporto el trabajo: con un digito o un `-_.@/:`, sin ser un
+# numero ni una fecha. Lo que el resumen nombra asi es interno.
+TOKEN_TECNICO = re.compile(r"[A-Za-z0-9][\w.\-/@:]*\w")
+NUMERO_O_FECHA = re.compile(r"^[\d.,:/-]+$")
+LARGO_TOKEN_TECNICO = 4
+
+
+def bloqueo_del_proyecto(con, caso):
+    """El evento con que el agente del proyecto bloqueo el caso, si es el ultimo que lo llevo
+    a bloqueado, o None."""
+    e = con.execute("select id, detalle, at from caso_evento where case_id=? and a='bloqueado' "
+                    "and (de is null or de <> 'bloqueado') order by id desc limit 1",
+                    (caso["case_id"],)).fetchone()
+    return dict(e) if e and (e["detalle"] or "").startswith(PREFIJO_BLOQUEO_AGENTE) else None
+
+
+def trabajo_del_bloqueo(con, caso):
+    """Las instrucciones del trabajo que se bloqueo: la propuesta aprobada, o las del ultimo
+    despacho."""
+    try:
+        propuesta = json.loads(caso.get("propuesta") or "null")
+    except (TypeError, ValueError):
+        propuesta = None
+    if isinstance(propuesta, dict) and propuesta.get("tipo") == "trabajar":
+        return str(propuesta.get("instrucciones") or "")
+    f = con.execute("select instrucciones from caso_despacho where case_id=? and instrucciones "
+                    "is not null order by id desc limit 1", (caso["case_id"],)).fetchone()
+    return f["instrucciones"] if f else ""
+
+
+def tokens_tecnicos(texto):
+    return {t for t in TOKEN_TECNICO.findall(texto or "")
+            if len(t) >= LARGO_TOKEN_TECNICO and not NUMERO_O_FECHA.match(t)
+            and re.search(r"[\d_.@/:-]", t)}
+
+
+def nombres_internos_en(con, caso, texto):
+    """Lo interno que nombra `texto` (el borrador para el cliente), ordenado: lo que nunca va
+    (INTERNO_FIJO), los nombres tecnicos de lo que reporto y se pidio el trabajo, y los ids y
+    las carpetas de los proyectos de la linea."""
+    hallados = {m.group(0) for r in INTERNO_FIJO for m in r.finditer(texto)}
+    candidatos = tokens_tecnicos(caso.get("resumen")) | tokens_tecnicos(trabajo_del_bloqueo(con, caso))
+    for proyecto in proyectos_del_dueno(con, linea_del_caso(caso)):
+        candidatos |= {str(proyecto.get("id") or ""), os.path.basename(str(proyecto.get("path") or ""))}
+    for c in candidatos:
+        if len(c) >= LARGO_TOKEN_TECNICO and re.search(
+                rf"(?<![\w.-]){re.escape(c)}(?![\w-])", texto, re.I):
+            hallados.add(c)
+    return sorted(hallados)
+
+
+def cmd_caso_bloqueo(con, a):
+    """El agente de casos convierte el bloqueo del agente del proyecto en la decision del
+    dueno: la pregunta, sus opciones y el borrador para el cliente."""
+    caso_toma(con)
+    caso = caso_de(con, a.id)
+    if caso["etapa"] != "bloqueado" or not bloqueo_del_proyecto(con, caso):
+        caso_falla("E_STAGE", f"case #{a.id} is in {caso['etapa']}: `caso bloqueo` turns a block "
+                              f"the project agent reported into the owner's decision")
+    pregunta = texto_caso(" ".join((a.pregunta or "").split()))[:LARGO_PREGUNTA]
+    opciones = [texto_caso(" ".join(o.split()))[:LARGO_OPCION] for o in (a.opcion or [])
+                if o.strip()]
+    borrador = texto_caso((a.borrador or "").strip())
+    if not pregunta or not borrador:
+        caso_falla("E_ARGS", "a block needs --pregunta (the owner's decision) and --borrador "
+                             "(what the customer reads)")
+    if not OPCIONES_BLOQUEO[0] <= len(opciones) <= OPCIONES_BLOQUEO[1]:
+        caso_falla("E_ARGS", f"a block needs {OPCIONES_BLOQUEO[0]} to {OPCIONES_BLOQUEO[1]} "
+                             f"--opcion: what the owner can choose and what each one means")
+    internos = nombres_internos_en(con, caso, borrador)
+    if internos:
+        caso_falla("E_INTERNAL", f"the customer draft names something internal "
+                                 f"({', '.join(internos)}): say what we know and what we are "
+                                 f"waiting for, in the customer's words, with no server, account, "
+                                 f"path or project")
+    propuesta = {"tipo": "escalar", "instrucciones": pregunta, "borrador": borrador,
+                 "opciones": "\n".join(f"{i}. {o}" for i, o in enumerate(opciones, 1))}
+    trabajo = trabajo_del_bloqueo(con, caso)
+    if trabajo:
+        propuesta["trabajo"] = trabajo
+    texto, version = propuesta_canonica(propuesta)
+    caso_valida(caso, "decision")
+    caso_mover(con, caso, "decision", a.actor, f"escalar {version}", propuesta=texto,
+               propuesta_version=version, propuesta_aprobada=None, necesita_agente=0)
+    con.commit()
+    return [caso_fila(con, caso_de(con, a.id))]
+
+
+def seccion_de_bloqueo(con, caso):
+    """La seccion del archivo del caso sobre el bloqueo del agente del proyecto, o []."""
+    if caso["etapa"] != "bloqueado" or not caso.get("necesita_agente") \
+            or not bloqueo_del_proyecto(con, caso):
+        return []
+    cid = caso["case_id"]
+    return ["", "## The project agent is blocked",
+            f"- What it reported (internal, never for the customer): {caso.get('resumen') or '-'}",
+            "Turn it into ONE decision for the owner and an honest update for the customer:",
+            f"{ruta_wa_scope()} caso bloqueo {cid} --pregunta \"<the decision>\" --opcion "
+            "\"<option 1>\" --opcion \"<option 2>\" --borrador \"<for the customer>\" --actor agente",
+            "- The question and its options are for the owner: in Spanish, in plain words, "
+            "with no technical terms. Each option says what happens if he picks it.",
+            "- The draft is for the customer, in the chat's tone: what we know and what we are "
+            "waiting for, with no date or time promised, and never an internal name (no "
+            "server, host, account, path, project or tool). The plugin rejects one with "
+            "E_INTERNAL.",
+            "- The owner answers with an option number (the work goes back to the project "
+            "with his decision) or `enviar` (the draft goes to the customer)."]
+
+
+def tick_bloqueos(con, resumen):
+    """El bloqueo del agente del proyecto que el agente de casos no convirtio en una pregunta
+    en BLOQUEO_SIN_PREGUNTA_S: el dueno recibe el aviso del bloqueo igual, una vez."""
+    for fila in con.execute("select * from caso where account=? and etapa='bloqueado' and "
+                            "necesita_agente=1", (cuenta_activa(),)).fetchall():
+        caso = dict(fila)
+        evento = bloqueo_del_proyecto(con, caso)
+        if not evento or edad_de(evento["at"]) < BLOQUEO_SIN_PREGUNTA_S:
+            continue
+        aviso_de_bloqueo(con, caso, evento["detalle"], evento["id"])
+        con.commit()
 
 
 def envia_resultado(con, case_id):
@@ -11526,6 +11671,10 @@ TEXTOS_AVISO = {
            "bloqueado": "Caso {n} · {chat} se bloqueo: {x}",
            "escala": "Caso {n} · {chat}: el agente le pregunta: {x}",
            "escala_como": "Contestele con {n} y su respuesta, o no {n} para cerrar.",
+           "borrador_cliente": "Borrador para el cliente: {x}",
+           "bloqueo_como": "Conteste {n} 1 para seguir el trabajo con la opcion 1 (o con el "
+                           "numero de otra), {n} enviar para mandarle el borrador al cliente, o "
+                           "{n} y su respuesta.",
            "escala_contestada": "Caso {n}: su respuesta va al agente, que sigue con el caso.",
            "aprobado_sale": "Caso {n} aprobado: la respuesta salio.",
            "aprobado_destino": "Caso {n} aprobado: la respuesta salio a {chat}.",
@@ -11583,6 +11732,10 @@ TEXTOS_AVISO = {
            "bloqueado": "Case {n} · {chat} got blocked: {x}",
            "escala": "Case {n} · {chat}: the agent asks you: {x}",
            "escala_como": "Answer with {n} and your answer, or no {n} to close.",
+           "borrador_cliente": "Draft for the client: {x}",
+           "bloqueo_como": "Answer {n} 1 to go on with the work with option 1 (or with the "
+                           "number of another), {n} enviar to send the draft to the client, or "
+                           "{n} and your answer.",
            "escala_contestada": "Case {n}: your answer goes to the agent, which continues the case.",
            "aprobado_sale": "Case {n} approved: the reply went out.",
            "aprobado_destino": "Case {n} approved: the reply went out to {chat}.",
@@ -11906,6 +12059,13 @@ def texto_de_escalado(con, caso):
     chat = nombre_del_chat(con, caso["chat_jid"])
     if lleva_credencial(con, caso, None) or wa_reglas.secreto(pregunta):
         return tx["escala"].format(n=n, chat=chat, x=tx["motivo_oculto"])
+    if propuesta.get("opciones") and propuesta.get("borrador"):
+        # La decision de un bloqueo (sin-silencio B1): las opciones numeradas y el borrador.
+        return "\n".join([tx["escala"].format(n=n, chat=chat, x=recorta(pregunta, LARGO_PROPUESTA)),
+                          str(propuesta["opciones"]),
+                          tx["borrador_cliente"].format(x=recorta(str(propuesta["borrador"]),
+                                                                  LARGO_PROPUESTA)),
+                          tx["bloqueo_como"].format(n=n)])
     return "\n".join([tx["escala"].format(n=n, chat=chat, x=recorta(pregunta, LARGO_PROPUESTA)),
                       tx["escala_como"].format(n=n)])
 
@@ -11960,13 +12120,15 @@ def aviso_encola(con, req_id, tipo, texto, case_id=None, version=None, stanza=No
     return cur.rowcount == 1
 
 
-def aviso_de_bloqueo(con, caso, motivo):
+def aviso_de_bloqueo(con, caso, motivo, evento=None):
     """Un caso que va a bloqueado: una linea al numero de aprobacion, una vez por evento.
-    Lo llama `caso_mover`, dentro de su transaccion. Sin numero elegido, nada."""
+    Lo llama `caso_mover`, dentro de su transaccion, o `tick_bloqueos` con el evento del
+    bloqueo. Sin numero elegido, nada."""
     if not numero_aprobacion() or caso.get("account") != cuenta_activa():
         return
-    evento = con.execute("select max(id) from caso_evento where case_id=?",
-                         (caso["case_id"],)).fetchone()[0]
+    if evento is None:
+        evento = con.execute("select max(id) from caso_evento where case_id=?",
+                             (caso["case_id"],)).fetchone()[0]
     tx = aviso_textos()
     motivo = tx["motivo_oculto"] if wa_reglas.secreto(motivo or "") \
         else recorta(motivo, LARGO_PROPUESTA)
@@ -13684,6 +13846,14 @@ def cmd_tick(con, a):
                 con.rollback()
             resumen["errores"] += 1
             print(f"wa-scope: project questions skipped: {exc}", file=sys.stderr)
+        # El bloqueo que el agente de casos no convirtio en pregunta a tiempo (sin-silencio B1).
+        try:
+            tick_bloqueos(con, resumen)
+        except sqlite3.Error as exc:
+            if con.in_transaction:
+                con.rollback()
+            resumen["errores"] += 1
+            print(f"wa-scope: blocked cases skipped: {exc}", file=sys.stderr)
         # La revision de cada seguimiento (seguimiento-casos): antes de los avisos, para que el
         # del dueno salga en esta misma vuelta.
         try:
@@ -15491,7 +15661,8 @@ def archivo_de_caso(con, caso):
     """El archivo del caso para el agente de casos, en ingles."""
     cid = caso["case_id"]
     cola = (seccion_de_linea(caso) + seccion_de_rezago(con, caso)
-            + seccion_de_pregunta(con, caso) + historia_del_caso(con, caso)
+            + seccion_de_pregunta(con, caso) + seccion_de_bloqueo(con, caso)
+            + historia_del_caso(con, caso)
             + instrucciones_primer_mensaje(con, caso, "agente")) + [
         "", "## The whole record, if you need it",
         f"{ruta_wa_scope()} caso ver {cid} --json",
@@ -16477,7 +16648,8 @@ def casos_para_agente(con):
     modos = {jid: e.get("mode") for jid, e in merged_scope(con).items()}
     for r in con.execute(
             "select case_id, chat_jid, etapa, propuesta, jev, necesita_agente, excepciones "
-            "from caso where account=? and etapa in ('recibido','clasificado') "
+            "from caso where account=? and (etapa in ('recibido','clasificado') or "
+            "(etapa='bloqueado' and necesita_agente=1)) "
             # Lo que el dueno pospuso espera hasta su hora (casos-cli, K10).
             "and (pospuesto_hasta is null or pospuesto_hasta <= ?) "
             "order by updated_at, case_id", (cuenta_activa(), ahora_caso())):
@@ -17343,6 +17515,20 @@ def main():
                    help="two or more of the chat's project ids, separated by commas")
     c.add_argument("--texto", required=True, help="the question, as the reader will read it")
     c.set_defaults(fn=cmd_caso_pregunta_proyecto)
+
+    c = muta("bloqueo", help="a block the project agent reported (`caso resultado --estado "
+                             "bloqueado`) becomes the owner's decision: one question in plain "
+                             "Spanish with its options, and an honest draft for the customer. "
+                             "Moves bloqueado -> decision as an escalar; the owner answers with an "
+                             "option number (the work goes on) or enviar (the draft is sent). "
+                             "Refusals: E_ARGS, E_STAGE, E_INTERNAL (the draft names a server, "
+                             "account, path or project)")
+    c.add_argument("id", type=int)
+    c.add_argument("--pregunta", required=True, help="the owner's decision, in plain Spanish")
+    c.add_argument("--opcion", action="append", help="one option and what it means; 2 to 4")
+    c.add_argument("--borrador", required=True, help="what the customer reads: what we know and "
+                                                     "what we are waiting for")
+    c.set_defaults(fn=cmd_caso_bloqueo)
 
     c = muta("clasificar", help="kind and priority; moves recibido -> clasificado (decision and "
                                 "bloqueado go back to clasificado); in trabajo, listo and "
