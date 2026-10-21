@@ -22,20 +22,20 @@ withdraws it. Today such a draft creates no notice at all.
   `borrador` (`aviso-d-<req_id>`, code in `version`), then sends what is pending.
   A secret-shaped value or a credential: the notice has no text and says "board only".
 - `lee_respuesta` reads `si|yes|no <CODE>` (letter first, so never a case number).
-  `atiende_respuesta` resolves the code before any case lookup; a quoted notice of another
-  type with a bare `si` never falls through to a case notice.
+  `atiende_respuesta` resolves the code before any case lookup; a bare `si`/`no` that
+  quotes a draft notice answers that draft and never falls through to a case notice.
 - `si <code>` re-checks the stored body: a secret or a credential is refused (board only).
 - Kept: owner-chat sends skip Jev; the secret floor always holds; no agent gets the key.
-- Out of scope: answering a draft notice that left through another line (`aviso-relevo`
-  stays case-only); bare `si` for draft notices.
+- Out of scope: `aviso-relevo` stays case-only (a draft notice is answered on the line it
+  left through, since `--approve` works on any line); an unquoted bare `si` for drafts.
 
 ## Tasks
 
-- [ ] B1 Tests (RED): session held -> one notice with the full text and a code; `si
+- [x] B1 Tests (RED): session held -> one notice with the full text and a code; `si
   <code>` from the owner sends it and logs the WhatsApp approval; `no <code>` withdraws it;
   a non-owner and a self-sent `si <code>` do nothing; a case-agent terminal and the plugin
   marker get no notice; secret -> no text and refused; parser keeps `si 18`.
-- [ ] B2 `wa-send` asks for the notice; `wa-scope draft-notice`, the `borrador` aviso and
+- [x] B2 `wa-send` asks for the notice; `wa-scope draft-notice`, the `borrador` aviso and
   its texts (es/en); the reply path; the plugin marker in the plugin's own sends (GREEN).
 - [ ] B3 `npm run check` without shots green; PR opened.
 

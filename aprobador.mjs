@@ -29,6 +29,10 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 export const VARIABLE_APROBADOR = 'WA_INBOX_APPROVER'
+// La marca de los envios del propio plugin (WAINBOX-59), la misma que
+// `wa_settings.VARIABLE_ENVIO_PLUGIN`: con ella `wa-send` no pide el aviso de un borrador de
+// sesion, porque lo que el plugin retiene ya tiene su camino. Solo quita un aviso.
+export const VARIABLE_ENVIO_PLUGIN = 'WA_INBOX_PLUGIN_SEND'
 const LLAVE_RE = /^[0-9a-f]{64}$/
 
 /** La misma carpeta que `scope_db()` de `bin/wa_settings.py`. */

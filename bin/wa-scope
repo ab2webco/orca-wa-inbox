@@ -54,6 +54,7 @@ from wa_settings import (  # noqa: E402
     tableros_de_lineas, podar_lineas_idas, quitar_copia_de_la_principal,
     plugin_store_targets, settings_from_plugin, user_data_roots, valida_ajuste)
 from wa_settings import jev_en_linea, linea_de_avisos  # noqa: E402
+from wa_settings import VARIABLE_ENVIO_PLUGIN  # noqa: E402
 import wa_store  # noqa: E402  (solo lectura: de capture.db se lee la linea activa)
 import wa_jev  # noqa: E402  (el cliente de Jev: falla cerrado, nunca habilita)
 import wa_reglas  # noqa: E402  (el piso fijo de excepciones: corre siempre, con o sin Jev)
@@ -680,10 +681,11 @@ create table if not exists aviso (
   req_id    text primary key,     -- aviso-<caso>-<version> | aviso-b-<caso>-<evento> | aviso-r-<hash>
   -- aprobacion (tambien su recordatorio, aviso-rec-<caso>-<version>) | bloqueo | respuesta |
   -- agente (W2) | sla (aviso-sla-<caso>) | worker | worker-ok (aviso-worker[-ok]-<latido>,
-  -- `version`)
+  -- `version`) | borrador (aviso-d-<req_id del envio>: lo que retuvo una sesion, WAINBOX-59)
   tipo      text not null,
   case_id   integer,
-  version   text,                 -- la propuesta_version que el aviso pide aprobar
+  version   text,                 -- la propuesta_version que el aviso pide aprobar; en un
+                                  -- `borrador`, el codigo con que el dueno lo contesta
   account   text not null,        -- la linea del caso: su tick lo encola, lo vence y lo manda
   chat_jid  text not null,        -- el directo del numero de aprobacion
   -- La linea por la que sale de verdad (linea-viva V6): la del caso si alli esta el chat del
@@ -11258,7 +11260,7 @@ def tick_envia(caso, texto, req, evidencia=None, pregunta=None):
     args += ["--send", f"--timeout={PLAZO_ENVIO_TICK_S}", "--json", "--",
              destino_de_propuesta(caso) or caso["chat_jid"], texto]
     try:
-        p = subprocess.run(args, capture_output=True, text=True,
+        p = subprocess.run(args, capture_output=True, text=True, env=env_del_plugin(),
                            timeout=PLAZO_ENVIO_TICK_S + 30)
     except (OSError, subprocess.SubprocessError) as exc:
         return "fallo", str(exc)[:200]
@@ -11364,6 +11366,13 @@ TOPE_ESTADO = 15
 ETAPAS_ESTADO = ("recibido", "clasificado", "decision", "trabajo", "listo", "respondido",
                  "bloqueado")
 SI_NO = re.compile(r"^(si|sí|yes|ok|dale|no)(?:\s+#?(\d+))?$", re.I)
+# La respuesta al aviso de un borrador de sesion (WAINBOX-59): `si <codigo>` o `no <codigo>`.
+# El codigo empieza con una letra, asi que nunca se lee como el numero de un caso, y no lleva
+# vocales: una palabra de pasada ("si dale", "no gracias") no es un codigo.
+LETRAS_CODIGO = "BCDFGHJKLMNPQRSTVWXZ"
+SIGNOS_CODIGO = LETRAS_CODIGO + "23456789"
+SI_NO_BORRADOR = re.compile(r"^(si|sí|yes|no)\s+([b-df-hj-np-tv-xz][b-df-hj-np-tv-xz2-9]{3})$",
+                            re.I)
 SOLO_CON_NUMERO = ("ok", "dale")
 CORRIGE = re.compile(r"^#?(\d+)\s+(.+)$", re.S)
 ESTADO = re.compile(r"^(estado|status)$", re.I)
@@ -11382,6 +11391,7 @@ MOTIVOS_AVISO = {
            "commitment": "compromete una fecha", "jev": "Jev lo freno",
            "jev-unavailable": "Jev no contesto", "secret": "lleva un secreto",
            "borrador": "el chat pide su visto antes de enviar",
+           "draft": "la sesion lo dejo como borrador",
            "promises_a_date": "promete una fecha",
            "states_status_not_verified": "afirma un estado sin verificarlo",
            "contains_credential": "lleva una credencial", "delete": "borra algo",
@@ -11398,6 +11408,7 @@ MOTIVOS_AVISO = {
            "commitment": "it commits to a date", "jev": "Jev held it",
            "jev-unavailable": "Jev did not answer", "secret": "it carries a secret",
            "borrador": "the chat asks for your OK before sending",
+           "draft": "the session left it as a draft",
            "promises_a_date": "it promises a date",
            "states_status_not_verified": "it states a status it did not verify",
            "contains_credential": "it carries a credential", "delete": "it deletes something",
@@ -11459,6 +11470,17 @@ TEXTOS_AVISO = {
                            "finished": "terminado"},
            "desde": "desde {x}",
            "recuerda": "Recordatorio: el caso {n} sigue esperando su decision.",
+           "borrador": "Mensaje retenido para {chat}",
+           "borrador_texto": "Texto:\n{x}",
+           "borrador_como": "Responda si {c} para enviarlo tal cual, o no {c} para retirarlo.",
+           "borrador_oculto": "Lleva una credencial: reviselo en el tablero, no por aqui.",
+           "borrador_sale": "Enviado a {chat}: el mensaje salio.",
+           "borrador_linea": "Aprobado: el mensaje para {chat} sale cuando la linea vuelva.",
+           "borrador_falla": "El mensaje para {chat} no salio ({x}): mirelo en el tablero.",
+           "borrador_retirado": "Retirado: el mensaje para {chat} ya no sale.",
+           "borrador_decidido": "Ese mensaje ya se habia decidido, asi que no se hizo nada.",
+           "borrador_credencial": "El mensaje para {chat} lleva una credencial: apruebelo en "
+                                  "el tablero, no por aqui.",
            "meta": "Caso {n} · {chat}: el cliente espera respuesta hace {min} min (la meta es "
                    "{meta} min). Pide: {x}",
            "seguimiento": "Caso {n} · {chat}: al cliente se le prometio una respuesta hace "
@@ -11515,6 +11537,17 @@ TEXTOS_AVISO = {
                            "working": "working", "idle": "idle", "finished": "finished"},
            "desde": "since {x}",
            "recuerda": "Reminder: case {n} is still waiting for your decision.",
+           "borrador": "Message held for {chat}",
+           "borrador_texto": "Text:\n{x}",
+           "borrador_como": "Answer yes {c} to send it as is, or no {c} to withdraw it.",
+           "borrador_oculto": "It carries a credential: review it on the board, not here.",
+           "borrador_sale": "Sent to {chat}: the message went out.",
+           "borrador_linea": "Approved: the message for {chat} goes out when the line is back.",
+           "borrador_falla": "The message for {chat} did not go out ({x}): check the board.",
+           "borrador_retirado": "Withdrawn: the message for {chat} will not go out.",
+           "borrador_decidido": "That message was already settled, so nothing was done.",
+           "borrador_credencial": "The message for {chat} carries a credential: approve it on "
+                                  "the board, not here.",
            "meta": "Case {n} · {chat}: the client has waited {min} min for a reply (the target "
                    "is {meta} min). Asks: {x}",
            "seguimiento": "Case {n} · {chat}: the client was promised a reply {min} min ago "
@@ -11541,6 +11574,10 @@ def lee_respuesta(texto):
     pelado = t.rstrip(".!¡ ")
     if ESTADO.match(pelado):
         return {"accion": "estado", "caso": None, "texto": ""}
+    m = SI_NO_BORRADOR.match(pelado)
+    if m:
+        return {"accion": "no" if m.group(1).lower() == "no" else "si", "caso": None,
+                "texto": "", "palabra": m.group(1).lower(), "borrador": m.group(2).upper()}
     m = SI_NO.match(pelado)
     # `ok` y `dale` se escriben de pasada: solos no aprueban, necesitan el numero. Solo si,
     # yes y no valen sin el (el unico aviso pendiente).
@@ -12124,6 +12161,9 @@ def atiende_respuesta(con, m, relevado=None):
     r = lee_respuesta(m.get("text"))
     if r is None:
         return False
+    if r.get("borrador"):
+        # El borrador de una sesion (WAINBOX-59): su codigo, nunca un caso.
+        return relevado is None and atiende_borrador(con, m, r)
     stanza = m["stanza_id"]
     req = "aviso-r-" + hashlib.sha256(stanza.encode()).hexdigest()[:16]
     tx = aviso_textos()
@@ -12144,6 +12184,11 @@ def atiende_respuesta(con, m, relevado=None):
         con.commit()
         return True
     elif r["caso"] is None:
+        # Un `si` o un `no` que cita el aviso de un borrador contesta ESE borrador: nunca cae
+        # al aviso de un caso que este vivo (WAINBOX-59).
+        citado = aviso_citado(con, m, TIPO_AVISO_BORRADOR)
+        if citado is not None:
+            return atiende_borrador(con, m, r, citado)
         # El aviso que cita es el que contesta, aunque haya varios vivos (linea-viva-2 W6); y
         # si ya no vale lo dice, nunca contesta otro. Sin cita de un aviso, el unico vigente.
         aviso = aviso_citado(con, m)
@@ -12217,9 +12262,9 @@ def atiende_respuesta(con, m, relevado=None):
     return True
 
 
-def aviso_citado(con, m):
-    """El aviso de aprobacion que el mensaje cita (linea-viva-2 W6), vigente o no, o None si
-    no cita uno. Lo citado es el id que WhatsApp le dio al aviso al salir (`envio.stanza_id`,
+def aviso_citado(con, m, tipo="aprobacion"):
+    """El aviso de aprobacion (o del `tipo` dado) que el mensaje cita (linea-viva-2 W6),
+    vigente o no, o None si no cita uno. Lo citado es el id que WhatsApp le dio al aviso al salir (`envio.stanza_id`,
     en la linea por la que salio, que es donde llega la respuesta) y el `req_id` del envio es
     el del aviso. Solo los de este numero de aprobacion que esta linea contesta."""
     cita = m.get("cita_id")
@@ -12238,9 +12283,9 @@ def aviso_citado(con, m):
         fuente.close()
     if fila is None:
         return None
-    return con.execute("select * from aviso where req_id=? and tipo='aprobacion' and "
+    return con.execute("select * from aviso where req_id=? and tipo=? and "
                        "(account=? or sale_por=?) and chat_jid=?",
-                       (fila["req_id"], cuenta_activa(), cuenta_activa(),
+                       (fila["req_id"], tipo, cuenta_activa(), cuenta_activa(),
                         m.get("chat_jid"))).fetchone()
 
 
@@ -12320,6 +12365,227 @@ def cmd_aviso_relevo(con, a):
     if not atiende_respuesta(con, m, relevado=aviso):
         niega("the message is not an answer to that notice")
     return [{"handled": True, "case_id": aviso["case_id"]}]
+
+
+# ── El borrador que retuvo una sesion (WAINBOX-59) ────────────────────────────────────
+# El dueno dicta o aprueba una respuesta en una sesion de Claude y pide que se envie; el piso o
+# Jev la retienen igual. `wa-send` pide entonces `draft-notice`, que le escribe al numero de
+# aprobacion con el texto ENTERO y un codigo corto, y `si <codigo>` la manda por el camino del
+# aprobador (`--approve --by whatsapp-reply`, la llave solo en ese hijo). `no <codigo>` la
+# retira. Lo que retiene un agente que lanzo el plugin, o un envio del propio plugin, no lleva
+# este aviso: lo suyo tiene su camino (el aviso del caso, el tablero). Un secreto o una
+# credencial no viajan nunca, y el codigo no los manda.
+TIPO_AVISO_BORRADOR = "borrador"
+PREFIJO_AVISO_BORRADOR = "aviso-d-"
+RETIRO_WHATSAPP = "withdrawn by the owner on WhatsApp"
+
+
+def env_del_plugin(llave=False):
+    """El env de un `wa-send` del plugin: con su marca (WAINBOX-59), para que lo que retenga
+    no pida el aviso de un borrador de sesion, y con la llave del aprobador SOLO si `llave`
+    (approve-solo-dueno)."""
+    env = dict(os.environ, **{VARIABLE_ENVIO_PLUGIN: "1"})
+    env.pop(VARIABLE_APROBADOR, None)
+    if llave:
+        env[VARIABLE_APROBADOR] = llave_aprobador() or ""
+    return env
+
+
+def lanzado_por_el_plugin(con):
+    """Por que este proceso no es una sesion: `plugin` (un envio del propio plugin, con su
+    marca) o `agent` (corre en la terminal de un agente que lanzo el plugin: el de casos o el
+    de un proyecto, por su handle o su pestana). None es una sesion. Si la base no se lee,
+    None: lo peor que hace un error es un aviso de mas, nunca un envio."""
+    if os.environ.get(VARIABLE_ENVIO_PLUGIN):
+        return "plugin"
+    handle = (os.environ.get("ORCA_TERMINAL_HANDLE") or "").strip()
+    tab = (os.environ.get("ORCA_TAB_ID") or "").strip()
+    for tabla in ("agente_corrida", "caso_despacho"):
+        try:
+            if con.execute(f"select 1 from {tabla} where (?<>'' and terminal=?) or "
+                           f"(?<>'' and tab=?) limit 1", (handle, handle, tab, tab)).fetchone():
+                return "agent"
+        except sqlite3.Error:
+            continue
+    return None
+
+
+def envio_de(req):
+    """La fila de la bandeja de salida con ese id, como dict, o None."""
+    try:
+        fuente = wa_store.abrir()
+    except wa_store.SinFuente:
+        return None
+    try:
+        fila = fuente.execute("select req_id, account, chat_jid, chat_name, body, estado from "
+                              "envio where req_id=?", (req,)).fetchone()
+    except sqlite3.Error:
+        fila = None
+    finally:
+        fuente.close()
+    return dict(fila) if fila else None
+
+
+def lleva_secreto(texto):
+    """Si el texto lleva un valor con forma de secreto o nombra una credencial: no va en el
+    aviso y no se aprueba por WhatsApp."""
+    return wa_reglas.secreto(texto) or "credential" in wa_reglas.excepciones(texto,
+                                                                             wa_reglas.SALIDA)
+
+
+def motivos_del_borrador(con, fila):
+    """Por que espera el borrador, en los codigos de `MOTIVOS_AVISO`: lo que `wa-send` anoto
+    al retenerlo ("held by rule: money; jev: ..."), o el modo del chat, o que la sesion lo dejo
+    como borrador."""
+    nota = con.execute("select detail from agent_action where action='draft' and chat_jid=? "
+                       "and detail like ? order by id desc limit 1",
+                       (fila["chat_jid"], f"% · {fila['req_id']} · %")).fetchone()
+    detalle = nota["detail"] if nota else ""
+    if detalle.startswith("held by "):
+        motivos = []
+        for parte in detalle[len("held by "):].split(" · ")[0].split("; "):
+            motivos += [c.strip() for c in parte.partition(": ")[2].split(",") if c.strip()]
+        if motivos:
+            return motivos
+    modo = (merged_scope(con).get(fila["chat_jid"]) or {}).get("mode")
+    return ["borrador" if modo == "borrador" else "draft"]
+
+
+def codigo_de_borrador(con):
+    """Un codigo que ningun aviso de borrador uso: una letra y tres signos sin vocales."""
+    import secrets
+    while True:
+        codigo = secrets.choice(LETRAS_CODIGO) + "".join(secrets.choice(SIGNOS_CODIGO)
+                                                         for _ in range(3))
+        if not con.execute("select 1 from aviso where tipo=? and version=?",
+                           (TIPO_AVISO_BORRADOR, codigo)).fetchone():
+            return codigo
+
+
+def texto_de_borrador(con, fila, codigo):
+    """El aviso: para quien es, por que espera, el texto entero y como contestarlo. Con un
+    secreto o una credencial, ni el texto ni el codigo: solo el tablero."""
+    tx = aviso_textos()
+    cuerpo = fila["body"] or ""
+    lineas = [tx["borrador"].format(chat=recorta(nombre_del_chat(con, fila["chat_jid"]),
+                                                 LARGO_PIDE)),
+              tx["espera"].format(x=motivos_en_palabras(motivos_del_borrador(con, fila)))]
+    if lleva_secreto(cuerpo):
+        return "\n".join(lineas + [tx["borrador_oculto"]])
+    return "\n".join(lineas + [tx["borrador_texto"].format(x=cuerpo),
+                               tx["borrador_como"].format(c=codigo)])
+
+
+def cmd_aviso_borrador(con, a):
+    """`draft-notice` (interno, WAINBOX-59): el aviso del borrador `--req` que dejo una
+    sesion, al numero de aprobacion, y sale ya. Nada viene de quien llama salvo el id: el
+    borrador se lee de la bandeja, tiene que seguir esperando y ser de esta linea, y quien
+    corre esto no puede ser un agente que lanzo el plugin ni el plugin mismo. Una vez por
+    borrador."""
+    salida = {"ok": True, "queued": False, "state": None, "reason": None}
+    req = str(a.req or "").strip()
+    fila = envio_de(req) if req else None
+    aviso_id = PREFIJO_AVISO_BORRADOR + req
+    previo = con.execute("select estado from aviso where req_id=?", (aviso_id,)).fetchone()
+    salida["reason"] = (lanzado_por_el_plugin(con)
+                        or (None if numero_aprobacion() else "no-number")
+                        or (None if fila and fila["estado"] == "borrador" else "no-draft")
+                        or (None if fila["account"] == cuenta_activa() else "other-line")
+                        or ("duplicate" if previo else None))
+    if salida["reason"]:
+        salida["state"] = previo["estado"] if previo and salida["reason"] == "duplicate" \
+            else None
+        return [salida]
+    codigo = codigo_de_borrador(con)
+    salida["queued"] = aviso_encola(con, aviso_id, TIPO_AVISO_BORRADOR,
+                                    texto_de_borrador(con, fila, codigo), version=codigo)
+    con.commit()
+    envia_avisos(con)
+    estado = con.execute("select estado from aviso where req_id=?", (aviso_id,)).fetchone()
+    salida["state"] = estado["estado"] if estado else None
+    return [salida]
+
+
+def wa_send_del_plugin(args, llave=False):
+    """`wa-send` con la marca del plugin: (salida, codigo). La salida es None si no corrio."""
+    try:
+        p = subprocess.run([WA_SEND, *args], capture_output=True, text=True,
+                           env=env_del_plugin(llave), timeout=PLAZO_ENVIO_TICK_S + 30)
+    except (OSError, subprocess.SubprocessError):
+        return None, "fallo"
+    primera = next((l.strip() for l in (p.stderr or "").splitlines() if l.strip()), "")
+    codigo = primera[len("wa-send: "):].split()[0] if primera.startswith("wa-send: ") \
+        else ("fallo" if p.returncode else "")
+    return p.returncode, codigo
+
+
+def aplica_borrador(con, aviso, accion, tx):
+    """`si` o `no` sobre el borrador del aviso: (confirmacion, estado final del aviso). El
+    estado es None si el borrador sigue esperando (la linea no estaba): se puede contestar
+    otra vez. `si` vuelve a mirar el texto guardado, no lo que se aviso."""
+    req = aviso["req_id"][len(PREFIJO_AVISO_BORRADOR):]
+    fila = envio_de(req)
+    if fila is None or fila["estado"] != "borrador":
+        return tx["borrador_decidido"], "contestado"
+    chat = recorta(nombre_del_chat(con, fila["chat_jid"]), LARGO_PIDE)
+    if accion == "no":
+        _, codigo = wa_send_del_plugin(["--cancel", req, "--reason", RETIRO_WHATSAPP, "--json"])
+        if (envio_de(req) or {}).get("estado") == "cancelado":
+            return tx["borrador_retirado"].format(chat=chat), "contestado"
+        return tx["borrador_falla"].format(chat=chat, x=codigo or "fallo"), None
+    if lleva_secreto(fila["body"] or ""):
+        return tx["borrador_credencial"].format(chat=chat), "contestado"
+    _, codigo = wa_send_del_plugin(["--approve", req, "--by", "whatsapp-reply",
+                                    f"--timeout={PLAZO_ENVIO_TICK_S}", "--json"], llave=True)
+    estado = (envio_de(req) or {}).get("estado")
+    if estado == "enviado":
+        return tx["borrador_sale"].format(chat=chat), "contestado"
+    if estado in ("pendiente", "enviando"):
+        return tx["borrador_linea"].format(chat=chat), "contestado"
+    return (tx["borrador_falla"].format(chat=chat, x=codigo or "fallo"),
+            None if estado == "borrador" else "contestado")
+
+
+def atiende_borrador(con, m, r, aviso=None):
+    """`si <codigo>` o `no <codigo>` del dueno (o un `si` que cita el aviso): lo aplica y deja
+    la confirmacion para el tick. Devuelve si era la respuesta a un aviso de borrador; si el
+    codigo no es de ninguno, sigue siendo una orden suya. Lo llama `atiende_respuesta`, que
+    ya vio que el mensaje es del dueno en el directo de aprobacion. Como alla: primero se
+    toma el mensaje, despues el aviso, y decide solo quien lo toma."""
+    if aviso is None:
+        aviso = con.execute("select * from aviso where tipo=? and version=? and (account=? or "
+                            "sale_por=?) and chat_jid=? order by at desc, rowid desc limit 1",
+                            (TIPO_AVISO_BORRADOR, r["borrador"], cuenta_activa(),
+                             cuenta_activa(), m.get("chat_jid"))).fetchone()
+        if aviso is None:
+            return False
+    stanza = m["stanza_id"]
+    req = "aviso-r-" + hashlib.sha256(stanza.encode()).hexdigest()[:16]
+    tomada = aviso_encola(con, req, "respuesta", "", stanza=stanza, estado="preparando")
+    con.commit()
+    if not tomada:
+        return True
+    tx = aviso_textos()
+    texto, final, tomo = tx["borrador_decidido"], None, False
+    try:
+        cur = con.execute("update aviso set estado='contestando', updated_at=? where req_id=? "
+                          "and estado='enviado'", (ahora_caso(), aviso["req_id"]))
+        con.commit()
+        tomo = cur.rowcount == 1
+        if tomo:
+            texto = tx["borrador_falla"].format(chat="-", x="fallo")
+            texto, final = aplica_borrador(con, aviso, r["accion"], tx)
+    finally:
+        if con.in_transaction:
+            con.rollback()
+        if tomo:
+            con.execute("update aviso set estado=?, updated_at=? where req_id=? and "
+                        "estado='contestando'", (final or "enviado", ahora_caso(),
+                                                 aviso["req_id"]))
+        con.execute("update aviso set texto=?, estado='pendiente', updated_at=? where req_id=?",
+                    (texto, ahora_caso(), req))
+        con.commit()
+    return True
 
 
 def aplica_respuesta(con, aviso, r, tx):
@@ -12408,9 +12674,9 @@ def entrega_del_dueno(con, caso, tx):
         return entrega_a_otro_chat(con, caso, texto, tx)
     linea = linea_de_envio(caso)
     args = [WA_SEND, f"--id={req}"] + ([f"--line={linea}"] if linea else [])
-    con_llave = dict(os.environ, **{VARIABLE_APROBADOR: llave_aprobador() or ""})
+    con_llave = env_del_plugin(llave=True)
     pasos = ((args + [f"--timeout={PLAZO_ENVIO_TICK_S}", "--json", "--", destino or caso["chat_jid"],
-                      texto], None),
+                      texto], env_del_plugin()),
              ([WA_SEND, "--approve", req, "--by", "whatsapp-reply",
                f"--timeout={PLAZO_ENVIO_TICK_S}", "--json"], con_llave))
     for paso, env in pasos:
@@ -16998,6 +17264,13 @@ def main():
     s.add_argument("--aviso", required=True, help="the notice id (aviso-...)")
     s.add_argument("--stanza", required=True, help="the owner's message id")
     s.set_defaults(fn=cmd_aviso_relevo)
+
+    s = add("draft-notice", help="internal: wa-send runs this when it holds a draft written "
+                                 "from a session: one notice to the approval number with the "
+                                 "full text and the code the owner answers. Reads the draft "
+                                 "itself; a plugin-launched agent gets none. One JSON line")
+    s.add_argument("--req", required=True, help="the draft's request id (wa-send --id)")
+    s.set_defaults(fn=cmd_aviso_borrador)
 
     s = add("orca-aviso", help="an agent in another Orca project is waiting (the worker "
                                "runs this): one fixed-text notice to the approval number, if "

@@ -21,6 +21,7 @@ import { dirname, join } from 'node:path'
 import { HARNESS_KEY } from './harness.mjs'
 import { llaveValida } from './jev-espejo.mjs'
 import { crearAccionesCaso } from './acciones.mjs'
+import { VARIABLE_ENVIO_PLUGIN } from './aprobador.mjs'
 import {
   automatizacionesDelManifiesto, CUENTAS_ACCION, crearAjustadorRitmo, crearEncendedor,
   crearLanzadorTriage, crearListaCuentas
@@ -985,7 +986,8 @@ export function crearAvisoDueno ({ correr, herramienta, anotar = async () => {} 
       try {
         const { stdout, code } = await correr(await herramienta('wa-send'),
           [dueno.chat, texto, '--line', linea, '--send', '--raw', '--json', '--id', `${id}-${i}`],
-          { timeoutMs: AVISO_PLAZO_MS })
+          // La marca del plugin (WAINBOX-59): un aviso retenido no pide otro aviso.
+          { timeoutMs: AVISO_PLAZO_MS, env: { [VARIABLE_ENVIO_PLUGIN]: '1' } })
         if (jsonDe(stdout)?.estado === 'enviado') return { ok: true, code: 'enviado' }
         // Retenido para aprobacion (sale con 3): ya esta en la fila del dueno, otra linea
         // solo dejaria otro retenido.
@@ -3211,9 +3213,9 @@ export default function activate(orca) {
   // que proyecto se le deja actuar- y asi no se suma un sondeo al host cada 3 s: el worker
   // muere a los 64 llamados sin confirmar. `orca` corre sin la valla, como el resto de lo
   // que no es del plugin.
-  const correrOrca = (cmd, args, { timeoutMs = 15000 } = {}) => {
+  const correrOrca = (cmd, args, { timeoutMs = 15000, env = null } = {}) => {
     const m = mandoSinValla(cmd, args)
-    return run(m.cmd, m.args, { timeoutMs })
+    return run(m.cmd, m.args, { timeoutMs, env })
   }
   const catalogo = crearCatalogo({
     orca, leer: (key) => leer(orca, key), guardar: (key, value) => guardar(orca, key, value),

@@ -9739,7 +9739,7 @@ if NODE:
 
 
 # ── Lo que una sesion deja retenido avisa al dueno (WAINBOX-59) ──────────────────────
-# El dueno dicta o aprueba una respuesta en una sesion de Claude y dice "mandala": el piso
+# El dueno dicta o aprueba una respuesta en una sesion de Claude y pide que se envie: el piso
 # o Jev la retienen igual, y antes no le llegaba ningun aviso (solo el tablero). Ahora el
 # plugin le escribe al numero de aprobacion con el texto entero y un codigo corto, y `si
 # <codigo>` la manda por el camino del aprobador (`--approve --by whatsapp-reply`). Un
@@ -9901,7 +9901,7 @@ if NODE:
                    and aviso_de_borrador(home, req) == []
                    and cuenta(home, "select count(*) from aviso where req_id=?",
                               f"aviso-d-{req}") == 0, f"{p.returncode} {p.stderr[-200:]}")
-                ok(f"{req}: y no le dice que conteste por WhatsApp",
+                ok(f"{req}: y no le dice que al dueno le llego un aviso",
                    "WhatsApp notice" not in p.stderr, p.stderr[-300:])
             r = corre(home, "draft-notice", "--req=agente-1",
                       extra={"ORCA_TERMINAL_HANDLE": "term_caso_demo"})
@@ -9936,7 +9936,8 @@ if NODE:
                p.returncode == 0 and estado_envio(home, "sesion-5") == "enviado"
                and aviso_de_borrador(home, "sesion-5") == [], f"{p.stderr[-200:]}")
 
-            # Citar el aviso de un borrador con un `si` a secas nunca aprueba el aviso de un caso.
+            # Un `si` a secas que cita el aviso de un borrador contesta ESE borrador: nunca cae
+            # al aviso de un caso que este vivo.
             llegan(home, A, [msg(PERSONA, "B59-7", PEDIDO, 30)])
             dinero, _ = propuesta_lista(home, "B59-7", texto="Listo, el arreglo cuesta $50.")
             tick(home)
@@ -9947,9 +9948,10 @@ if NODE:
                                  cita_id="STANZA-aviso-d-sesion-6")])
             ingiere(home)
             ver = js(home, "caso", "ver", dinero)[0]
-            ok("un `si` que cita el aviso de un borrador no aprueba el caso",
+            ok("un `si` que cita el aviso de un borrador manda ese borrador, no el caso",
                not ver["aprobada"] and ver["etapa"] == "decision"
-               and estado_envio(home, "sesion-6") == "borrador", f"{ver['eventos'][-2:]}")
+               and estado_envio(home, "sesion-6") == "enviado",
+               f"{estado_envio(home, 'sesion-6')} {ver['eventos'][-2:]}")
         finally:
             sidecar.cerrar()
 
