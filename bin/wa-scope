@@ -158,7 +158,9 @@ FIRMANTES_CASO = ("dueno", "regla")
 # E_OWNER: lo que ya decidio el dueno (el proyecto del caso) no lo cambia el agente.
 ERRORES_CASO = ("E_ARGS", "E_NOT_FOUND", "E_STAGE", "E_NOT_APPROVED", "E_VERSION",
                 "E_EXCEPTION", "E_REVISION", "E_BUSY", "E_OWNER", "E_NOT_OWNER",
-                "E_NEEDS_OWNER_YES")
+                "E_NEEDS_OWNER_YES", "E_UNANSWERED")
+# E_UNANSWERED: el agente (o el trabajador) cierra un caso de un cliente con contenido sin que
+# le haya salido una respuesta ni se le haya preguntado al dueno (sin-silencio, U3).
 # E_NOT_OWNER: `caso aprobar --actor dueno` o `caso lote --actor dueno` sin la llave del
 # plugin (approve-solo-dueno). La firma del dueno la lanza el worker con el clic del tablero;
 # un agente no la tiene.
@@ -3832,11 +3834,62 @@ def cmd_caso_mover(con, a):
         caso_falla("E_STAGE", f"case #{a.id} goes back to trabajo only when the customer answers "
                               f"the project agent's question; the engine moves it, not a command")
     caso_valida(caso, a.etapa, a.motivo)
+    if a.etapa == "cerrado" and a.actor in ACTORES_SIN_CIERRE_MUDO and cierre_mudo(con, caso):
+        caso_falla("E_UNANSWERED", f"case #{a.id} has a customer message that got no reply, and "
+                                   f"the owner was never asked: never close it in silence. "
+                                   f"Propose the reply (`caso propuesta {a.id} --tipo responder "
+                                   f"--respuesta`), or, if you think it needs none, ask the owner "
+                                   f"with the reply you would send (`caso propuesta {a.id} --tipo "
+                                   f"escalar --instrucciones \"<why no reply> Proposed reply: "
+                                   f"<text>\"`). A duplicate goes with `caso unir`.")
     caso_mover(con, caso, a.etapa, a.actor, (a.motivo or "").strip())
     con.commit()
     fila = caso_fila(con, caso_de(con, a.id))
     despacho = despacho_que_se_detiene(con, a.id) if a.etapa in ETAPAS_CON_MOTIVO else None
     return [dict(fila, despacho=despacho) if despacho else fila]
+
+
+# sin-silencio (U3): quien no puede cerrar en silencio. Las reglas de ingest (jev,
+# automatizacion) cierran lo que no tiene nada que contestar, y el dueno decide lo suyo.
+ACTORES_SIN_CIERRE_MUDO = ("agente", "trabajador")
+# Lo que el dueno ya vio del caso: una pregunta suya o una propuesta que no contesta.
+PROPUESTAS_AL_DUENO = ("escalar ", "descartar ")
+
+
+def caso_con_contenido(con, caso):
+    """Si el caso tiene un mensaje de quien escribio con algo que leer: texto, o un adjunto
+    que no es un sticker. Sin almacen no se sabe, y no frena."""
+    stanzas = [r["stanza_id"] for r in con.execute(
+        "select stanza_id from caso_mensaje where account=? and case_id=?",
+        (caso["account"], caso["case_id"]))]
+    if not stanzas:
+        return False
+    try:
+        fuente = wa_store.abrir()
+    except wa_store.SinFuente:
+        return False
+    try:
+        return bool(fuente.execute(
+            f"select 1 from mensaje where account=? and from_me=0 and revocado=0 and "
+            f"stanza_id in ({','.join('?' * len(stanzas))}) and (trim(body) <> '' or "
+            f"(media_type is not null and lower(media_type) <> 'sticker')) limit 1",
+            (caso["account"], *stanzas)).fetchone())
+    except sqlite3.Error:
+        return False
+    finally:
+        fuente.close()
+
+
+def cierre_mudo(con, caso):
+    """Si cerrar el caso ahora lo deja en silencio: es de un cliente, tiene contenido, no le
+    salio ninguna respuesta y el dueno nunca lo vio (ni una pregunta del agente, ni algo que
+    hizo el)."""
+    cid = caso["case_id"]
+    if con.execute("select 1 from caso_evento where case_id=? and (a='respondido' or "
+                   "actor='dueno' or " + " or ".join("detalle like ?" for _ in PROPUESTAS_AL_DUENO)
+                   + ") limit 1", (cid, *(f"{p}%" for p in PROPUESTAS_AL_DUENO))).fetchone():
+        return False
+    return not caso_pide_como_dueno(con, caso) and caso_con_contenido(con, caso)
 
 
 def despacho_que_se_detiene(con, case_id):

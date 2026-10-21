@@ -20278,6 +20278,65 @@ if NODE:
         os.environ.update(antes)
 
 
+# ── sin-silencio U3: un caso con contenido no se cierra en silencio (WAINBOX-62) ─────────
+# El agente decidia no contestar y cerraba: el cliente nunca supo nada y el dueno tampoco.
+# Sin una respuesta o una pregunta al dueno, cerrar se rechaza con E_UNANSWERED.
+print("\nsin-silencio U3: un caso con contenido no se cierra en silencio")
+
+
+def caso_del_cliente(home, stanza, texto="necesito ayuda con mi factura", **extra):
+    llegan(home, A, [msg(PERSONA, stanza, texto, 5, **extra)])
+    js(home, "set", PERSONA, "--provider", "ninguno", "--mode", "responder")
+    cid = str(js(home, "caso", "crear", "--chat", PERSONA, "--stanza", stanza,
+                 "--actor", "agente")[0]["case_id"])
+    js(home, "caso", "clasificar", cid, "--clase", "card", "--prioridad", "none",
+       "--actor", "agente")
+    return cid
+
+
+def cierra(home, cid, actor="agente"):
+    return corre(home, "caso", "mover", cid, "cerrado", "--motivo", "no requiere respuesta",
+                 "--actor", actor)
+
+
+if NODE:
+    with tempfile.TemporaryDirectory() as home:
+        cid = caso_del_cliente(home, "SC1")
+        p = cierra(home, cid)
+        ok("el agente no cierra un caso del cliente con contenido que nadie contesto",
+           error_de(p) == "E_UNANSWERED" and fila_de(home, int(cid))["etapa"] == "clasificado",
+           f"{error_de(p)} {fila_de(home, int(cid))['etapa']}")
+        detalle = (json.loads(p.stderr.strip().splitlines()[-1]).get("detail") or ""
+                   if p.stderr.strip() else "")
+        ok("y le dice que hacer: proponer la respuesta, o preguntarle al dueno con la que propone",
+           "--tipo responder" in detalle and "--tipo escalar" in detalle, detalle)
+        ok("un trabajador tampoco", error_de(cierra(home, cid, "trabajador")) == "E_UNANSWERED")
+        ok("el dueno si", cierra(home, cid, "dueno").returncode == 0
+           and fila_de(home, int(cid))["etapa"] == "cerrado")
+
+    with tempfile.TemporaryDirectory() as home:
+        cid = caso_del_cliente(home, "SC2")
+        js(home, "caso", "propuesta", cid, "--tipo", "escalar", "--instrucciones",
+           "No veo nada que contestar. Propongo: Gracias por escribirnos.", "--actor", "agente")
+        ok("con una pregunta al dueno ya puede cerrarse", cierra(home, cid).returncode == 0)
+
+    with tempfile.TemporaryDirectory() as home:
+        cid = caso_del_cliente(home, "SC3")
+        con = db_de(home)
+        con.execute("update caso set etapa='respondido' where case_id=?", (int(cid),))
+        con.execute("insert into caso_evento (case_id, de, a, actor, detalle, at) values "
+                    "(?, 'listo', 'respondido', 'automatizacion', 'enviado', datetime('now'))",
+                    (int(cid),))
+        con.commit()
+        con.close()
+        ok("con una respuesta que salio, tambien", cierra(home, cid).returncode == 0)
+
+    with tempfile.TemporaryDirectory() as home:
+        cid = caso_del_cliente(home, "SC4", "", media="sticker")
+        ok("un caso sin contenido (un sticker suelto) se cierra como siempre",
+           cierra(home, cid).returncode == 0)
+
+
 # ── estado-flota (WAINBOX-55): la flota de Orca en `estado` ────────────────────────────
 # `estado` en el directo de aprobacion suma, por cada proyecto aceptado, los miembros de
 # `orca game fleet` de esa carpeta. Opcional: sin CLI, sin `game`, con un plazo vencido o
