@@ -525,6 +525,90 @@ def valor_de_credencial(texto):
     return False
 
 
+# ── The quality of what goes out (WAINBOX-63) ────────────────────────────────────────
+# The line speaks for the business: a reply must read like an expert of the support team
+# wrote it. These are the checks a pattern can make without a model. Unlike `excepciones`
+# they are never stored on a case: each text is judged as it is, so a rewrite clears them.
+# They go back to whoever wrote the reply (the chat's `quality` level), never to the owner
+# by default.
+CALIDAD = ("stray_quotes", "internal_marker", "internal_name", "too_long",
+           "several_addressees")
+# One WhatsApp message read at a glance: an answer, its next step, nothing else.
+LARGO_MAXIMO_RESPUESTA = 700
+# Comillas de apertura y cierre: un texto que abre o cierra con una es una cita pegada, no
+# una respuesta ("Hola Ana..." entre comillas). Las «» y las de dentro, pareadas, son de
+# la redaccion ("el boton "Guardar"").
+COMILLAS = "\"'“”‘’"
+NOTA_INTERNA = re.compile(
+    r"(?:^|[\s(\[*_-])(?:no verificado|verificado|not verified|unverified|verified|"
+    r"nao verificado|nota interna|internal note|nota para el dueno|"
+    r"note to self)\s*:", re.MULTILINE)
+# Lo que es del equipo y nunca del cliente: las herramientas y el numero de un caso.
+INTERNO_FIJO = re.compile(
+    r"(?<![\w-])(?:wa-scope|wa-send|wa-read|wa-transcribe|jev)(?![\w-])|"
+    r"\b(?:caso|case|ticket)\s*#\s*\d+")
+# Lo mas corto que se busca como nombre del registro: "ab" es parte de demasiadas palabras.
+NOMBRE_INTERNO_MIN = 4
+# A quien le habla: un saludo con nombre o una mencion. "Hola de nuevo" no nombra a nadie.
+SALUDO_CON_NOMBRE = re.compile(
+    r"\b(?:hola|buenos dias|buenas tardes|buenas noches|buen dia|hi|hello|hey|dear|"
+    r"estimad[oa]|ola|oi|bom dia|boa tarde|boa noite|prezad[oa])\s+"
+    r"(?!de\b|otra\b|again\b|a todos\b|todos\b|everyone\b|all\b)([a-z][a-z]+)")
+MENCION = re.compile(r"(?<![\w@])@([\w.+-]+)")
+
+
+def _quedan_sueltas(texto):
+    """Si `texto` abre o cierra con una comilla, o deja una sin pareja."""
+    limpio = texto.strip()
+    if limpio[:1] in COMILLAS or limpio[-1:] in COMILLAS:
+        return True
+    if limpio.count('"') % 2:
+        return True
+    return limpio.count("“") != limpio.count("”")
+
+
+def _nombra_internos(t, internos):
+    """Si el texto normalizado `t` nombra algo del equipo: una herramienta, el numero de un
+    caso o un nombre del registro (`internos`: servidores, cuentas, proyectos)."""
+    if INTERNO_FIJO.search(t):
+        return True
+    for nombre in internos or ():
+        n = normaliza(str(nombre or "")).strip()
+        if len(n) < NOMBRE_INTERNO_MIN:
+            continue
+        if re.search(r"(?<![\w-])" + re.escape(n) + r"(?![\w-])", t):
+            return True
+    return False
+
+
+def _destinatarios(t):
+    """Los nombres a los que el texto le habla: los de un saludo y los mencionados."""
+    return ({m.group(1) for m in SALUDO_CON_NOMBRE.finditer(t)}
+            | {m.group(1) for m in MENCION.finditer(t)})
+
+
+def calidad(texto, internos=()):
+    """The quality codes `texto` raises (a reply about to go out, without its signature), in
+    `CALIDAD` order. `internos` are the registry names a customer must never read: servers,
+    line accounts, project ids and folders. Never returns the matched text."""
+    original = texto or ""
+    if not original.strip():
+        return []
+    t = normaliza(original)
+    halladas = set()
+    if _quedan_sueltas(original):
+        halladas.add("stray_quotes")
+    if NOTA_INTERNA.search(t):
+        halladas.add("internal_marker")
+    if _nombra_internos(t, internos):
+        halladas.add("internal_name")
+    if len(original.strip()) > LARGO_MAXIMO_RESPUESTA:
+        halladas.add("too_long")
+    if len(_destinatarios(t)) > 1:
+        halladas.add("several_addressees")
+    return [c for c in CALIDAD if c in halladas]
+
+
 # ── The levels of each chat (T22.3) ──────────────────────────────────────────────────
 # Per chat, each rule has one of three levels: ask the owner, let the agent revise the
 # reply, or allow it. Defaults: money, credential and commitment ask; the quality of the

@@ -1,0 +1,134 @@
+#!/usr/bin/env python3
+"""La calidad de lo que sale y lo que el equipo ya sabe (odd/tasks/calidad-respuestas.md).
+
+WAINBOX-63: el bot es la cara del negocio en WhatsApp. Lo que escribe tiene que leerse como
+lo escribiria una persona experta del equipo de soporte: sin comillas sueltas ni notas
+internas ("Verificado:"), sin nombres de servidores o cuentas, corto y a una sola persona.
+El piso fijo lo comprueba sin modelo, y cada regla tiene aca su prueba.
+
+WAINBOX-61: el mismo tema volvia a despachar el mismo `trabajar` de solo lectura tres veces en
+un dia. Lo verificado y fresco se contesta; solo lo nuevo se despacha.
+
+Todo corre con datos de mentira y un HOME propio, como scripts/check-casos.
+"""
+import importlib.machinery
+import importlib.util
+import json
+import os
+import pathlib
+import sqlite3
+import subprocess
+import sys
+import tempfile
+
+RAIZ = pathlib.Path(__file__).resolve().parent.parent
+BIN = RAIZ / "bin"
+WA_SCOPE = BIN / "wa-scope"
+SIN_ORCA = "/nonexistent/orca-no-existe"
+
+sys.dont_write_bytecode = True
+sys.path.insert(0, str(BIN))
+import wa_reglas  # noqa: E402
+
+fallos = []
+pruebas = 0
+
+
+def ok(nombre, condicion, detalle=""):
+    global pruebas
+    pruebas += 1
+    if condicion:
+        print(f"  ok    {nombre}")
+        return True
+    fallos.append(f"{nombre}{f' — {detalle}' if detalle else ''}")
+    print(f"  FALLA {nombre}{f' — {detalle}' if detalle else ''}")
+    return False
+
+
+def calidad(texto, internos=()):
+    return wa_reglas.calidad(texto, internos)
+
+
+# ── Q1. El guardia de calidad, una regla a la vez ─────────────────────────────────────
+print("\nQ1: el guardia de calidad de lo que sale")
+BUENA = ("Hola Ana, ya revisamos el acceso y está funcionando. ¿Puede intentar de nuevo y "
+         "nos confirma si entra?")
+ok("una respuesta buena pasa limpia", calidad(BUENA) == [], f"{calidad(BUENA)}")
+ok("los codigos son los del modulo, en su orden",
+   wa_reglas.CALIDAD == ("stray_quotes", "internal_marker", "internal_name", "too_long",
+                         "several_addressees"))
+
+print("\n  comillas sueltas")
+for texto, esperado in (
+        ('"Hola Ana, ya quedó listo."', True),
+        ("“Hola Ana, ya quedó listo.”", True),
+        ('Hola Ana, ya quedó listo."', True),
+        ("Hola Ana, ya quedó listo.”", True),
+        ("'Hola Ana, ya quedó listo.'", True),
+        ('Hola Ana, use el botón "Guardar y quedó listo.', True),
+        ('Hola Ana, use el botón "Guardar" y queda listo.', False),
+        ("Hola Ana, use el botón «Guardar» y queda listo.", False),
+        ("Hola Ana, ya quedó listo. ¿Nos confirma?", False)):
+    ok(f"{texto[:44]!r} {'tiene' if esperado else 'no tiene'} comillas sueltas",
+       ("stray_quotes" in calidad(texto)) == esperado, f"{calidad(texto)}")
+
+print("\n  marcas de notas internas")
+for texto, esperado in (
+        ("Verificado: el sitio responde. Hola Ana, ya quedó.", True),
+        ("Hola Ana, ya quedó.\nNo verificado: el correo de respaldo.", True),
+        ("Hola Ana. Verified: login works.", True),
+        ("Hola Ana. Not verified: backups.", True),
+        ("Hola Ana. Unverified: backups.", True),
+        ("Hola Ana. Nota interna: revisar mañana.", True),
+        ("Hola Ana. Internal note: check tomorrow.", True),
+        ("Hola Ana, ya está verificado y funciona.", False),
+        ("Hola Ana, lo verificamos y funciona.", False)):
+    ok(f"{texto[:44]!r} {'lleva' if esperado else 'no lleva'} una marca interna",
+       ("internal_marker" in calidad(texto)) == esperado, f"{calidad(texto)}")
+
+print("\n  nombres internos")
+INTERNOS = ("srv-alfa-01", "Cuenta Bot Demo", "alfa-demo-repo", "ab")
+for texto, esperado in (
+        ("Hola Ana, ya reiniciamos srv-alfa-01 y responde.", True),
+        ("Hola Ana, ya reiniciamos SRV-ALFA-01 y responde.", True),
+        ("Hola Ana, desde cuenta bot demo le escribimos.", True),
+        ("Hola Ana, el cambio quedó en alfa-demo-repo.", True),
+        ("Hola Ana, lo revisó Jev y está bien.", True),
+        ("Hola Ana, lo mandamos con wa-send.", True),
+        ("Hola Ana, su caso #12 ya avanzó.", True),
+        ("Hola Ana, your case #12 moved on.", True),
+        ("Hola Ana, ya reiniciamos srv-alfa-012 y responde.", False),
+        ("Hola Ana, la absoluta mayoría ya entra.", False),
+        ("Hola Ana, ya quedó el servidor.", False)):
+    ok(f"{texto[:44]!r} {'nombra' if esperado else 'no nombra'} algo interno",
+       ("internal_name" in calidad(texto, INTERNOS)) == esperado,
+       f"{calidad(texto, INTERNOS)}")
+
+print("\n  largo")
+tope = wa_reglas.LARGO_MAXIMO_RESPUESTA
+base = "Hola Ana, ya quedó. "
+justo = (base * (tope // len(base) + 1))[:tope]
+ok(f"el tope es de un mensaje de WhatsApp que se lee de una vez ({tope})",
+   400 <= tope <= 800, f"{tope}")
+ok("justo en el tope pasa", "too_long" not in calidad(justo))
+ok("un caracter mas es largo", "too_long" in calidad(justo + "x"))
+
+print("\n  un solo destinatario")
+for texto, esperado in (
+        ("Hola Ana, ya quedó.\n\nHola Luis, lo suyo lo revisamos hoy.", True),
+        ("@Ana ya quedó. @Luis lo suyo lo revisamos hoy.", True),
+        ("@573000000001 ya quedó. @573000000002 lo suyo va hoy.", True),
+        ("Buenos días Ana, ya quedó. Buenas tardes Luis, lo suyo va hoy.", True),
+        ("Hola Ana, ya quedó. Hola de nuevo, ¿nos confirma?", False),
+        ("Hola Ana y Luis, ya quedó para los dos.", False),
+        ("@Ana ya quedó, @Ana confirme por favor.", False),
+        ("Hola Ana, ya quedó.", False)):
+    ok(f"{texto[:44]!r} {'le habla a varios' if esperado else 'le habla a uno'}",
+       ("several_addressees" in calidad(texto)) == esperado, f"{calidad(texto)}")
+
+ok("un texto vacio no tiene nada", calidad("") == [] and calidad(None) == [])
+
+
+print(f"\n{pruebas - len(fallos)}/{pruebas} en verde")
+if fallos:
+    sys.exit(1)
