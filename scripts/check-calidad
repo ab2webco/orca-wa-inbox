@@ -69,6 +69,8 @@ for texto, esperado in (
         ("'Hola Ana, ya quedó listo.'", True),
         ('Hola Ana, use el botón "Guardar y quedó listo.', True),
         ('Hola Ana, use el botón "Guardar" y queda listo.', False),
+        ('Hola Ana, para terminar haga clic en "Guardar"', False),
+        ('"Guardar" es el botón que necesita, Ana.', False),
         ("Hola Ana, use el botón «Guardar» y queda listo.", False),
         ("Hola Ana, ya quedó listo. ¿Nos confirma?", False)):
     ok(f"{texto[:44]!r} {'tiene' if esperado else 'no tiene'} comillas sueltas",
@@ -123,6 +125,8 @@ for texto, esperado in (
         ("Buenos días Ana, ya quedó. Buenas tardes Luis, lo suyo va hoy.", True),
         ("Hola Ana, ya quedó. Hola de nuevo, ¿nos confirma?", False),
         ("Hola Ana y Luis, ya quedó para los dos.", False),
+        ("Hola buenos días Ana, ya quedó.", False),
+        ("Hola buenas tardes Ana, ya quedó.", False),
         ("@Ana ya quedó, @Ana confirme por favor.", False),
         ("Hola Ana, ya quedó.", False)):
     ok(f"{texto[:44]!r} {'le habla a varios' if esperado else 'le habla a uno'}",
@@ -233,6 +237,16 @@ try:
         con = ws.db()
         ok("con calidad en permitir, no frena",
            ws.frenos_de_regla(con, ws.caso_de(con, larga)) == ([], []))
+        con.execute("insert or replace into wa_account (id, label) values (?,?)",
+                    ("local", "Soporte"))
+        con.execute("update chat_scope set target='tienda' where chat_jid=?", (CHAT,))
+        con.commit()
+        nombres = wa_reglas.nombres_internos(con, CUENTA)
+        ok("solo cuentan los nombres con forma de identificador: local, Soporte o tienda no",
+           not {"local", "Soporte", "tienda"} & set(nombres), f"{nombres}")
+        ok("y una respuesta con esas palabras pasa",
+           "internal_name" not in calidad("Hola Ana, a la hora local de su tienda, soporte "
+                                          "ya lo dejó listo.", nombres))
         ok("los nombres del registro: la carpeta y el id del proyecto, nunca su nombre",
            {"srv-alfa-01", "alfa-demo"} <= set(wa_reglas.nombres_internos(con, CUENTA))
            and "Alfa Demo" not in wa_reglas.nombres_internos(con, CUENTA),

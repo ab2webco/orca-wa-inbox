@@ -536,9 +536,9 @@ CALIDAD = ("stray_quotes", "internal_marker", "internal_name", "too_long",
            "several_addressees")
 # One WhatsApp message read at a glance: an answer, its next step, nothing else.
 LARGO_MAXIMO_RESPUESTA = 700
-# Comillas de apertura y cierre: un texto que abre o cierra con una es una cita pegada, no
-# una respuesta ("Hola Ana..." entre comillas). Las «» y las de dentro, pareadas, son de
-# la redaccion ("el boton "Guardar"").
+# Comillas: un texto entero entre comillas es una cita pegada, no una respuesta ("Hola
+# Ana..." entre comillas), y una sin pareja quedo suelta. Las «» y las pareadas son de la
+# redaccion ("el boton "Guardar"").
 COMILLAS = "\"'“”‘’"
 NOTA_INTERNA = re.compile(
     r"(?:^|[\s(\[*_-])(?:no verificado|verificado|not verified|unverified|verified|"
@@ -550,18 +550,25 @@ INTERNO_FIJO = re.compile(
     r"\b(?:caso|case|ticket)\s*#\s*\d+")
 # Lo mas corto que se busca como nombre del registro: "ab" es parte de demasiadas palabras.
 NOMBRE_INTERNO_MIN = 4
+# Solo un nombre con forma de identificador es interno: con una cifra o un - _ . : @ /
+# ("srv-alfa-01", "alfa-demo", "web:123", un correo). "local", "Soporte" o "tienda" son
+# palabras que una respuesta dice sin nombrar nada del equipo.
+FORMA_DE_IDENTIFICADOR = re.compile(r"[\d\-_.:@/]")
 # A quien le habla: un saludo con nombre o una mencion. "Hola de nuevo" no nombra a nadie.
 SALUDO_CON_NOMBRE = re.compile(
     r"\b(?:hola|buenos dias|buenas tardes|buenas noches|buen dia|hi|hello|hey|dear|"
     r"estimad[oa]|ola|oi|bom dia|boa tarde|boa noite|prezad[oa])\s+"
-    r"(?!de\b|otra\b|again\b|a todos\b|todos\b|everyone\b|all\b)([a-z][a-z]+)")
+    r"(?!de\b|otra\b|again\b|a todos\b|todos\b|everyone\b|all\b|buen[oa]s?\b|bom\b|boa\b|"
+    r"good\b)([a-z][a-z]+)")
 MENCION = re.compile(r"(?<![\w@])@([\w.+-]+)")
 
 
 def _quedan_sueltas(texto):
-    """Si `texto` abre o cierra con una comilla, o deja una sin pareja."""
+    """Si `texto` va entero entre comillas, o deja una sin pareja. Una comilla al principio
+    o al final que cierra su pareja ("haga clic en "Guardar"") es de la redaccion."""
     limpio = texto.strip()
-    if limpio[:1] in COMILLAS or limpio[-1:] in COMILLAS:
+    if len(limpio) > 1 and limpio[0] in COMILLAS and limpio[-1] in COMILLAS \
+            and not any(c in COMILLAS for c in limpio[1:-1]):
         return True
     if limpio.count('"') % 2:
         return True
@@ -591,9 +598,9 @@ def _destinatarios(t):
 def nombres_internos(con, cuenta):
     """The registry names of a line that a customer must never read, from the plugin's own
     database (`con`, scope.db): the line's accounts, the folders and ids of its projects,
-    the board targets of its chats and the Claude accounts its agents ran with. A project's
-    NAME is not one: it is how the customer knows their own product. A table that is not
-    there gives nothing."""
+    the board targets of its chats and the Claude accounts its agents ran with, only when
+    shaped like an identifier (`FORMA_DE_IDENTIFICADOR`). A project's NAME is not one: it
+    is how the customer knows their own product. A table that is not there gives nothing."""
     consultas = (
         ("select id, label from wa_account", ()),
         ("select id, path from project where account=?", (cuenta,)),
@@ -611,7 +618,7 @@ def nombres_internos(con, cuenta):
                 valor = str(valor or "").strip()
                 if "/" in valor:
                     valor = valor.rstrip("/").rsplit("/", 1)[-1]
-                if len(valor) >= NOMBRE_INTERNO_MIN:
+                if len(valor) >= NOMBRE_INTERNO_MIN and FORMA_DE_IDENTIFICADOR.search(valor):
                     nombres.add(valor)
     return sorted(nombres)
 
