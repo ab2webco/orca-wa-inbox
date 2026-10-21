@@ -10805,6 +10805,26 @@ if NODE:
                                   if f"caso {esc} cambio" in a["body"].lower()]
             ok("el dueno lee que el caso cambio desde el aviso", bool(respuesta_al_dueno),
                f"{al_dueno(home)[-2:]}")
+
+            # Citar la primera parte de un aviso largo contesta ese aviso: sale el texto largo,
+            # entero y en un solo mensaje al cliente.
+            llegan(home, A, [msg(PERSONA, "TL3", PEDIDO, 15)])
+            otro, _ = escalar_con_texto(home, "TL3", largo)
+            tick(home)
+            primera = avisos_del_caso(home, otro)[0]
+            con = sqlite3.connect(pathlib.Path(home) / ".wa-inbox" / "capture.db")
+            cita = con.execute("select stanza_id from envio where req_id=?",
+                               (primera["req_id"],)).fetchone()[0]
+            con.close()
+            antes = len(al_cliente(home))
+            llegan(home, A, [msg(DUENO_DM, "TL4", "si", 1, de=DUENO_LID, cita_id=cita)])
+            ingiere(home)
+            tick(home)
+            salio = al_cliente(home)[antes:]
+            ok("citar una parte del aviso lo contesta: sale el texto largo, byte por byte",
+               primera["req_id"].endswith("-p1") and len(salio) == 1
+               and sin_firma(salio[0]["body"]) == largo,
+               f"{primera['req_id']} {[len(x['body']) for x in salio]}")
         finally:
             sidecar.cerrar()
             os.environ.clear()

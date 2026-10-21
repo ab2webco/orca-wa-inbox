@@ -31,7 +31,7 @@ approval is bound to the version the notice showed.
 - [x] E1 Tests (RED): board and WhatsApp approval send `respuesta` byte for byte with both
   live shapes; old shape sends nothing; long text arrives whole in parts; a stale version
   is refused with the `cambio` message; card fields and actions.
-- [ ] E2 wa-scope: approval paths, card, notice and split sending (GREEN).
+- [x] E2 wa-scope: approval paths, card, notice and split sending (GREEN).
 - [ ] E3 Board: `acciones.mjs` enviar and `activity.html` card and actions (GREEN).
 - [ ] E4 Harness: the three-field contract for `escalar`.
 - [ ] E5 `npm run check` without shots, reduced shots of the board, PR.
