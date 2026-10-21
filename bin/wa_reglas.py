@@ -30,6 +30,7 @@ Spanish, English and Portuguese; accents and case do not matter. Python stdlib o
 import json
 import os
 import re
+import sqlite3
 import sys
 import unicodedata
 
@@ -587,6 +588,34 @@ def _destinatarios(t):
             | {m.group(1) for m in MENCION.finditer(t)})
 
 
+def nombres_internos(con, cuenta):
+    """The registry names of a line that a customer must never read, from the plugin's own
+    database (`con`, scope.db): the line's accounts, the folders and ids of its projects,
+    the board targets of its chats and the Claude accounts its agents ran with. A project's
+    NAME is not one: it is how the customer knows their own product. A table that is not
+    there gives nothing."""
+    consultas = (
+        ("select id, label from wa_account", ()),
+        ("select id, path from project where account=?", (cuenta,)),
+        ("select target from chat_scope where account=?", (cuenta,)),
+        ("select d.cuenta_etiqueta from caso_despacho d join caso c on c.case_id=d.case_id "
+         "where c.account=?", (cuenta,)))
+    nombres = set()
+    for sql, params in consultas:
+        try:
+            filas = con.execute(sql, params).fetchall()
+        except sqlite3.Error:
+            continue
+        for fila in filas:
+            for valor in fila:
+                valor = str(valor or "").strip()
+                if "/" in valor:
+                    valor = valor.rstrip("/").rsplit("/", 1)[-1]
+                if len(valor) >= NOMBRE_INTERNO_MIN:
+                    nombres.add(valor)
+    return sorted(nombres)
+
+
 def calidad(texto, internos=()):
     """The quality codes `texto` raises (a reply about to go out, without its signature), in
     `CALIDAD` order. `internos` are the registry names a customer must never read: servers,
@@ -626,7 +655,8 @@ NIVELES_DEFECTO = {"money": PREGUNTAR, "credential": PREGUNTAR, "commitment": PR
 REGLA_DE_MOTIVO = {("rule", "money"): "money", ("rule", "credential"): "credential",
                    ("rule", "commitment"): "commitment",
                    ("jev", "promises_a_date"): "commitment",
-                   ("jev", "states_status_not_verified"): "quality"}
+                   ("jev", "states_status_not_verified"): "quality",
+                   **{("rule", c): "quality" for c in CALIDAD}}
 SECRETO = "secret"
 
 

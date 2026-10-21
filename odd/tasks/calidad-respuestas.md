@@ -41,8 +41,8 @@ the answer a few hours ago (61).
 ## Checklist
 
 - [x] Q1 Guard function, one test per rule. RED: check-calidad `AttributeError: module 'wa_reglas' has no attribute 'calidad'`. GREEN: 43/43.
-- [ ] Q2 Wired to proposals and wa-send, with levels and exemptions.
-- [ ] Q3 Board strings.
+- [x] Q2 Wired to proposals and wa-send, with levels and exemptions. RED: 5 FALLA (frenos_de_regla returned [] [], aprobar by rule signed, unmapped codes asked the owner), then `revision_piso()` took no `internos`. GREEN: 57/57.
+- [x] Q3 Board strings. RED: 5 FALLA (no MOTIVO_KEY entry). GREEN: 69/69 with es/en/pt strings and the event codes.
 - [ ] Q4 Harness standard and plugin texts sample.
 - [ ] K1 Already verified, with time, in the case file and the brief.
 - [ ] K2 Refuse a repeated dispatch; `--nuevo`.

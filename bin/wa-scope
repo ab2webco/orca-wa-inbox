@@ -5339,6 +5339,14 @@ def frenos_de_regla(con, caso):
             al_dueno.append(e)
         elif nivel == wa_reglas.AGENTE:
             al_agente.append(e)
+    # La calidad de lo que sale (WAINBOX-63), juzgada ahora y nunca pegada al caso: al
+    # reescribirla, deja de frenar. Con el nivel `quality` del chat que la lee.
+    internos = wa_reglas.nombres_internos(con, leyente.get("account") or caso["account"])
+    for c in wa_reglas.calidad(respuesta, internos):
+        if niv["quality"] == wa_reglas.PREGUNTAR:
+            al_dueno.append(c)
+        elif niv["quality"] == wa_reglas.AGENTE:
+            al_agente.append(c)
     if scope.get("mode") == "borrador":
         al_dueno.append("borrador")
     # La pregunta "A o B?" es del dueno (un cliente con auto, o el chat en owner): lo que se

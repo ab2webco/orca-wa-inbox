@@ -16,6 +16,7 @@ import importlib.util
 import json
 import os
 import pathlib
+import re
 import sqlite3
 import subprocess
 import sys
@@ -127,6 +128,158 @@ for texto, esperado in (
        ("several_addressees" in calidad(texto)) == esperado, f"{calidad(texto)}")
 
 ok("un texto vacio no tiene nada", calidad("") == [] and calidad(None) == [])
+ok("cada codigo es del nivel calidad del chat: vuelve al agente, no al dueno",
+   all(wa_reglas.nivel_de_motivo("rule", c, wa_reglas.niveles(None)) == wa_reglas.AGENTE
+       for c in wa_reglas.CALIDAD))
+
+
+# ── Q2. El guardia en cada camino de salida ───────────────────────────────────────────
+CHAT = "120363000000000001@g.us"
+CUENTA = "local"
+LARGA = "Hola Ana, ya quedó listo. " * 40
+
+
+def entorno(home):
+    return dict(os.environ, HOME=str(home), XDG_CONFIG_HOME=str(pathlib.Path(home) / ".config"),
+                APPDATA=str(pathlib.Path(home) / "AppData" / "Roaming"),
+                ORCA_CLI_COMMAND=SIN_ORCA)
+
+
+def js(home, *args):
+    p = subprocess.run([str(WA_SCOPE), *args, "--json"], capture_output=True, text=True,
+                       env=entorno(home), timeout=120)
+    if p.returncode != 0:
+        raise AssertionError(f"wa-scope {' '.join(args)} salio {p.returncode}: "
+                             f"{p.stderr.strip() or p.stdout.strip()}")
+    return json.loads(p.stdout or "[]")
+
+
+def falla(home, *args):
+    """(codigo de salida, el error) de un comando que se espera que falle."""
+    p = subprocess.run([str(WA_SCOPE), *args, "--json"], capture_output=True, text=True,
+                       env=entorno(home), timeout=120)
+    return p.returncode, (p.stderr + p.stdout)
+
+
+def db_de(home):
+    con = sqlite3.connect(pathlib.Path(home) / ".wa-inbox" / "scope.db")
+    con.row_factory = sqlite3.Row
+    return con
+
+
+def carga(nombre, ruta, home):
+    os.environ.update(HOME=str(home), XDG_CONFIG_HOME=str(pathlib.Path(home) / ".config"),
+                      APPDATA=str(pathlib.Path(home) / "AppData" / "Roaming"))
+    cargador = importlib.machinery.SourceFileLoader(nombre, str(ruta))
+    spec = importlib.util.spec_from_loader(nombre, cargador)
+    modulo = importlib.util.module_from_spec(spec)
+    cargador.exec_module(modulo)
+    return modulo
+
+
+def caso_con_respuesta(home, respuesta, chat=CHAT):
+    """Un caso clasificado del chat con su propuesta `responder`; su id."""
+    cid = js(home, "caso", "crear", "--chat", chat, "--titulo", "Acceso al panel",
+             "--actor", "agente")[0]["case_id"]
+    js(home, "caso", "clasificar", str(cid), "--clase", "card", "--prioridad", "medium",
+       "--actor", "agente")
+    js(home, "caso", "propuesta", str(cid), "--tipo", "responder", "--respuesta", respuesta,
+       "--actor", "agente")
+    return cid
+
+
+def con_proyecto(home, ident, ruta):
+    con = db_de(home)
+    con.execute("insert into project (account, id, name, path) values (?,?,?,?)",
+                (CUENTA, ident, "Alfa Demo", ruta))
+    con.commit()
+    con.close()
+
+
+print("\nQ2: la propuesta pasa por el guardia, con el nivel calidad del chat")
+antes = dict(os.environ)
+try:
+    with tempfile.TemporaryDirectory() as home:
+        js(home, "set", CHAT, "--provider", "ninguno", "--mode", "responder")
+        con_proyecto(home, "alfa-demo", "/srv/proyectos/srv-alfa-01")
+        ws = carga("wa_scope_calidad", WA_SCOPE, home)
+        con = ws.db()
+        larga = caso_con_respuesta(home, LARGA)
+        al_dueno, al_agente = ws.frenos_de_regla(con, ws.caso_de(con, larga))
+        ok("una respuesta larga vuelve al agente (calidad en agente, el defecto)",
+           "too_long" in al_agente and "too_long" not in al_dueno, f"{al_dueno} {al_agente}")
+        interna = caso_con_respuesta(home, "Hola Ana, ya reiniciamos srv-alfa-01 y responde.")
+        _, al_agente = ws.frenos_de_regla(con, ws.caso_de(con, interna))
+        ok("el nombre de una carpeta del registro vuelve al agente",
+           "internal_name" in al_agente, f"{al_agente}")
+        buena = caso_con_respuesta(home, BUENA)
+        ok("una respuesta buena no frena", ws.frenos_de_regla(con, ws.caso_de(con, buena))
+           == ([], []), f"{ws.frenos_de_regla(con, ws.caso_de(con, buena))}")
+        p = falla(home, "caso", "aprobar", str(larga), "--version",
+                  ws.caso_de(con, larga)["propuesta_version"], "--actor", "regla")
+        ok("la regla del dueno no la firma: E_REVISION con el codigo",
+           p[0] != 0 and "E_REVISION" in p[1] and "too_long" in p[1], p[1][-300:])
+        ok("y no queda pegado al caso como excepcion",
+           "too_long" not in (ws.caso_de(con, larga)["excepciones"] or ""))
+        con.close()
+        js(home, "set", CHAT, "--approval", "quality=ask")
+        con = ws.db()
+        al_dueno, al_agente = ws.frenos_de_regla(con, ws.caso_de(con, larga))
+        ok("con calidad en preguntar, va al dueno", "too_long" in al_dueno and not al_agente,
+           f"{al_dueno} {al_agente}")
+        con.close()
+        js(home, "set", CHAT, "--approval", "quality=allow")
+        con = ws.db()
+        ok("con calidad en permitir, no frena",
+           ws.frenos_de_regla(con, ws.caso_de(con, larga)) == ([], []))
+        ok("los nombres del registro: la carpeta y el id del proyecto, nunca su nombre",
+           {"srv-alfa-01", "alfa-demo"} <= set(wa_reglas.nombres_internos(con, CUENTA))
+           and "Alfa Demo" not in wa_reglas.nombres_internos(con, CUENTA),
+           f"{wa_reglas.nombres_internos(con, CUENTA)}")
+        con.close()
+
+    print("\nQ2: wa-send frena lo que sale con el mismo guardia")
+    with tempfile.TemporaryDirectory() as home:
+        envio = carga("wa_send_calidad", BIN / "wa-send", home)
+        niv = wa_reglas.niveles(None)
+        piso = envio.revision_piso(LARGA, niv, ())
+        ok("una respuesta larga frena", "too_long" in piso, f"{piso}")
+        ok("y vuelve a quien la escribio, no al dueno", envio.para_el_agente(piso, None, niv))
+        piso = envio.revision_piso("Hola Ana, quedó en srv-alfa-01.", niv, ("srv-alfa-01",))
+        ok("un nombre del registro frena", "internal_name" in piso, f"{piso}")
+        permitir = dict(niv, quality=wa_reglas.PERMITIR)
+        ok("con calidad en permitir, no frena", envio.revision_piso(LARGA, permitir, ()) == [])
+        ok("una respuesta buena no frena", envio.revision_piso(BUENA, niv, ()) == [])
+finally:
+    os.environ.clear()
+    os.environ.update(antes)
+
+
+# ── Q3. El tablero dice cada codigo en palabras ───────────────────────────────────────
+print("\nQ3: el tablero dice cada motivo de calidad, en sus tres idiomas")
+with tempfile.TemporaryDirectory() as home:
+    antes = dict(os.environ)
+    try:
+        ws = carga("wa_scope_eventos", WA_SCOPE, home)
+        ok("la revision que pidio la regla llega al tablero con sus codigos",
+           ws.que_del_evento(f"{ws.REVISION_REGLA} too_long, internal_name · abc")
+           == ("revision", ["too_long", "internal_name"]))
+        ok("y un envio frenado por calidad tambien",
+           ws.que_del_evento("envio frenado: Held this reply to 'X' (rule: stray_quotes): it "
+                             "was written and is waiting for you")
+           == ("held", ["stray_quotes"]))
+    finally:
+        os.environ.clear()
+        os.environ.update(antes)
+panel = (RAIZ / "activity.html").read_text(encoding="utf-8")
+claves = re.search(r"var MOTIVO_KEY = \{(.*?)\}", panel, re.S)
+mapa = dict(re.findall(r"(\w+): '(\w+)'", claves.group(1))) if claves else {}
+for codigo in wa_reglas.CALIDAD:
+    clave = mapa.get(codigo)
+    ok(f"{codigo} tiene su frase", bool(clave), f"{sorted(mapa)[:5]}")
+    if clave:
+        ok(f"  y {clave} esta en es, en y pt", panel.count(f'"{clave}":') == 3,
+           f"{panel.count(f'{chr(34)}{clave}{chr(34)}:')}")
 
 
 print(f"\n{pruebas - len(fallos)}/{pruebas} en verde")
