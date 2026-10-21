@@ -37,7 +37,10 @@ withdraws it. Today such a draft creates no notice at all.
   marker get no notice; secret -> no text and refused; parser keeps `si 18`.
 - [x] B2 `wa-send` asks for the notice; `wa-scope draft-notice`, the `borrador` aviso and
   its texts (es/en); the reply path; the plugin marker in the plugin's own sends (GREEN).
-- [ ] B3 `npm run check` without shots green; PR opened.
+- [ ] B3 `npm run check` without shots green; PR opened. PR opened. Green: panels, voseo,
+  datos-reales, prompts, resolver, harness, clis, closing, worker.test (728/728) and the
+  new check-casos section (42/42). The full chain was killed by the system for low memory
+  once check-casos started; the lead runs it serially before merging.
 
 ## Acceptance
 
