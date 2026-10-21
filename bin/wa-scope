@@ -11672,6 +11672,7 @@ TEXTOS_AVISO = {
            "escala": "Caso {n} · {chat}: el agente le pregunta: {x}",
            "escala_como": "Contestele con {n} y su respuesta, o no {n} para cerrar.",
            "borrador_cliente": "Borrador para el cliente: {x}",
+           "bloqueo_sigue": "Caso {n}: el trabajo sigue con su decision.",
            "bloqueo_como": "Conteste {n} 1 para seguir el trabajo con la opcion 1 (o con el "
                            "numero de otra), {n} enviar para mandarle el borrador al cliente, o "
                            "{n} y su respuesta.",
@@ -11733,6 +11734,7 @@ TEXTOS_AVISO = {
            "escala": "Case {n} · {chat}: the agent asks you: {x}",
            "escala_como": "Answer with {n} and your answer, or no {n} to close.",
            "borrador_cliente": "Draft for the client: {x}",
+           "bloqueo_sigue": "Case {n}: the work goes on with your decision.",
            "bloqueo_como": "Answer {n} 1 to go on with the work with option 1 (or with the "
                            "number of another), {n} enviar to send the draft to the client, or "
                            "{n} and your answer.",
@@ -12597,6 +12599,11 @@ def aplica_respuesta(con, aviso, r, tx):
     pregunta = es_pregunta_del_agente(con, aviso)
     if pregunta and (r["accion"] == "si" or (r["accion"] == "no" and r["caso"] is None)):
         r = {**r, "accion": "corregir", "texto": r.get("palabra") or r["accion"]}
+    if pregunta and r["accion"] == "corregir":
+        # La decision de un bloqueo (sin-silencio B2): una opcion o `enviar` mueve el caso.
+        hecho = aplica_decision_de_bloqueo(con, aviso, r["texto"], tx)
+        if hecho:
+            return hecho
     if r["accion"] == "si":
         # El aviso de un caso con credencial manda al tablero: por aca no se aprueba.
         caso = caso_de(con, n)
@@ -12634,6 +12641,65 @@ def aplica_respuesta(con, aviso, r, tx):
     con.commit()
     aviso_contestado(con, aviso)
     return tx["escala_contestada" if pregunta else "corregido"].format(n=n)
+
+
+# Lo que el dueno contesta para mandarle al cliente el borrador de un bloqueo (B2).
+ENVIAR_BORRADOR = ("enviar", "envialo", "enviarlo", "envia", "manda", "mandalo", "mandar",
+                   "send", "send it")
+DECISION_DEL_DUENO = "The owner's decision on the block you reported: "
+
+
+def decision_de_bloqueo(caso, texto):
+    """Lo que dice la respuesta del dueno a la pregunta de un bloqueo: ("trabajo", opcion),
+    ("enviar", None), o None si no es ninguna de las dos (va al agente)."""
+    try:
+        propuesta = json.loads(caso.get("propuesta") or "null")
+    except (TypeError, ValueError):
+        return None
+    if not (isinstance(propuesta, dict) and propuesta.get("tipo") == "escalar"
+            and propuesta.get("opciones") and propuesta.get("borrador")):
+        return None
+    t = wa_reglas.normaliza(texto or "").strip(" .!¡")
+    opciones = [re.sub(r"^\d+\.\s*", "", o).strip()
+                for o in str(propuesta["opciones"]).splitlines() if o.strip()]
+    if t.isdigit() and 1 <= int(t) <= len(opciones) and propuesta.get("trabajo"):
+        return ("trabajo", opciones[int(t) - 1])
+    if t in ENVIAR_BORRADOR:
+        return ("enviar", None)
+    return None
+
+
+def aplica_decision_de_bloqueo(con, aviso, texto, tx):
+    """La respuesta del dueno a la pregunta de un bloqueo: la opcion vuelve a despachar el
+    trabajo con su decision, `enviar` le manda el borrador al cliente. Los dos firmados por el
+    dueno, por los caminos de siempre (`cmd_caso_aprobar`, `entrega_del_dueno`). Devuelve la
+    confirmacion, o None si la respuesta es otra cosa."""
+    n = aviso["case_id"]
+    caso_toma(con)
+    caso = caso_de(con, n)
+    decision = (decision_de_bloqueo(caso, texto)
+                if caso["etapa"] == "decision" and caso["propuesta_version"] == aviso["version"]
+                else None)
+    if decision is None:
+        con.rollback()
+        return None
+    propuesta = json.loads(caso["propuesta"])
+    if decision[0] == "trabajo":
+        nueva = {"tipo": "trabajar",
+                 "instrucciones": f"{propuesta['trabajo']}\n\n{DECISION_DEL_DUENO}{decision[1]}"}
+    else:
+        # Lo que dice el borrador lo seguimos debiendo nosotros (seguimiento-casos).
+        nueva = {"tipo": "responder", "respuesta": propuesta["borrador"], "espera": "nosotros"}
+    texto_nueva, version = propuesta_canonica(nueva)
+    caso_tocar(con, caso, "dueno", f"{nueva['tipo']} {version}", propuesta=texto_nueva,
+               propuesta_version=version, propuesta_aprobada=None)
+    con.commit()
+    cmd_caso_aprobar(con, argparse.Namespace(id=n, version=version, actor="dueno",
+                                             via=POR_WHATSAPP))
+    aviso_contestado(con, aviso)
+    if decision[0] == "trabajo":
+        return tx["bloqueo_sigue"].format(n=n)
+    return entrega_del_dueno(con, caso_de(con, n), tx)
 
 
 def es_pregunta_del_agente(con, aviso):

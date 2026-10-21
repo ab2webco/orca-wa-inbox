@@ -20454,6 +20454,89 @@ if NODE:
             sidecar.cerrar()
 
 
+# ── sin-silencio B2: la respuesta del dueno mueve el caso bloqueado (WAINBOX-60) ──────────
+# El numero de una opcion vuelve a despachar el trabajo con esa decision; `enviar` le manda
+# el borrador al cliente. Cualquier otra cosa va al agente, como la respuesta a un `escalar`.
+print("\nsin-silencio B2: la respuesta del dueno mueve el caso bloqueado")
+
+
+def pregunta_hecha(home, stanza):
+    """Un caso bloqueado por el proyecto, con su pregunta ya avisada al dueno."""
+    cid = bloqueado_por_proyecto(home, stanza)
+    js(home, "caso", "bloqueo", cid, "--pregunta", PREGUNTA_B, "--opcion", OPCIONES_B[0],
+       "--opcion", OPCIONES_B[1], "--borrador", BORRADOR_B, "--actor", "agente")
+    return cid
+
+
+def contesta(home, stanza, texto):
+    llegan(home, A, [msg(DUENO_DM, stanza, texto, 0, de=DUENO_LID, nombre="Dueno Real")])
+    ingiere(home)
+
+
+def por_despachar(home):
+    antes_ = dict(os.environ)
+    try:
+        wsd = carga_wa_scope(home)
+        return [c["case_id"] for c, *_ in wsd.casos_por_despachar(wsd.db())]
+    finally:
+        os.environ.clear()
+        os.environ.update(antes_)
+
+
+if NODE:
+    with tempfile.TemporaryDirectory() as home:
+        cid = pregunta_hecha(home, "BD1")
+        sidecar = SidecarFalso(home)
+        try:
+            tick(home)
+            contesta(home, "BR1", f"{cid} 1")
+            ver = js(home, "caso", "ver", cid)[0]
+            instrucciones = (ver.get("propuesta") or {}).get("instrucciones") or ""
+            ok("el numero de una opcion vuelve a mandar el trabajo, firmado por el dueno",
+               ver["etapa"] == "trabajo" and ver["propuesta"]["tipo"] == "trabajar"
+               and ver["aprobada"] and "Corregir el login" in instrucciones
+               and OPCIONES_B[0] in instrucciones, f"{ver['etapa']} {ver.get('propuesta')}")
+            ok("y el tick lo despacha al agente del proyecto", int(cid) in por_despachar(home),
+               f"{por_despachar(home)}")
+            tick(home)
+            ok("el dueno recibe la confirmacion", any(
+                f"Caso {cid}" in a["body"] and "sigue con su decision" in a["body"]
+                for a in al_dueno(home)[-2:]),
+               f"{al_dueno(home)[-2:]}")
+        finally:
+            sidecar.cerrar()
+
+    with tempfile.TemporaryDirectory() as home:
+        cid = pregunta_hecha(home, "BD2")
+        sidecar = SidecarFalso(home)
+        try:
+            tick(home)
+            contesta(home, "BR2", f"{cid} enviar")
+            ver = js(home, "caso", "ver", cid)[0]
+            req = f"caso-{cid}-{ver['propuesta_version'][:12]}"
+            ok("`enviar` le manda el borrador al cliente", ver["etapa"] == "respondido"
+               and req in sidecar.entregados and BORRADOR_B in (cuerpo_de(home, req) or ""),
+               f"{ver['etapa']} {sidecar.entregados} {cuerpo_de(home, req)!r}")
+            f = seguimiento_de(home, int(cid)) or {}
+            ok("y la respuesta la seguimos debiendo nosotros: rige el plazo de 30 min",
+               f.get("espera") == "nosotros" and f.get("estado") == "pendiente", f"{f}")
+        finally:
+            sidecar.cerrar()
+
+    with tempfile.TemporaryDirectory() as home:
+        cid = pregunta_hecha(home, "BD3")
+        sidecar = SidecarFalso(home)
+        try:
+            tick(home)
+            contesta(home, "BR3", f"{cid} 7")
+            ver = js(home, "caso", "ver", cid)[0]
+            ok("una opcion que no existe, o cualquier otra respuesta, vuelve al agente",
+               ver["etapa"] == "clasificado" and necesita_agente(home, cid) == 1,
+               f"{ver['etapa']} {ver['eventos'][-2:]}")
+        finally:
+            sidecar.cerrar()
+
+
 # ── estado-flota (WAINBOX-55): la flota de Orca en `estado` ────────────────────────────
 # `estado` en el directo de aprobacion suma, por cada proyecto aceptado, los miembros de
 # `orca game fleet` de esa carpeta. Opcional: sin CLI, sin `game`, con un plazo vencido o

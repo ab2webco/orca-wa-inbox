@@ -48,7 +48,7 @@ Out of scope: panel changes (the case shows in the Decision column as it is toda
 - [x] U2 A refused first message falls back to the ack. RED: `sin-silencio U2` 2/6 (no ack left, nothing sent, no follow-up). GREEN: 6/6; with the first-message, ack, avisos-retenidos and menos-ruido sections 165/165.
 - [x] U3 No silent close of a customer case with content. RED: `sin-silencio U3` 3/7 (agent and worker closed it). GREEN: 7/7; check-harness 105, check-voseo green.
 - [x] B1 A blocked result becomes an owner question and a customer draft. RED: `sin-silencio B1` 4/16 (no `caso bloqueo`, raw notice, no agent instructions). GREEN: 16/16; all sin-silencio sections 37/37.
-- [ ] B2 The owner's answer re-dispatches or sends
+- [x] B2 The owner's answer re-dispatches or sends. RED: `sin-silencio B2` 2/6 (the answer went to the agent). GREEN: 6/6; B1 and B2 22/22.
 
 ## Acceptance criteria
 
