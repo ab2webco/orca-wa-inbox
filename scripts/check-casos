@@ -11063,6 +11063,102 @@ if NODE:
             os.environ.update(env_antes)
 
 
+# ── El aviso de un `responder` retenido muestra el texto entero (WAINBOX-66) ────────────
+# Caso vivo: el aviso de una respuesta retenida por una regla cortaba el texto propuesto a
+# los 300 caracteres, y el dueno aprobaba algo que no habia podido leer entero. Ahora sale
+# entero, en partes si no cabe, y el `si` sigue atado a la version que el aviso mostro.
+print("\naviso-responder-entero: el aviso de una respuesta retenida no la recorta")
+if NODE:
+    if not any(c["jid"] == DUENO_DM for c in CHATS):
+        CHATS.append({"jid": DUENO_DM, "nombre": "Dueno Directo", "grupo": False})
+    with tempfile.TemporaryDirectory() as home:
+        env_antes = dict(os.environ)
+        linea_lista(home)
+        js(home, "config", "ack", "off")
+        js(home, "set", DUENO_DM, "--provider", "ninguno", "--mode", "responder")
+        pon_duenos(home, DUENO_LID)
+        pon_aprobacion(home, DUENO_LID)
+        sidecar = SidecarFalso(home)
+        try:
+            # Mas de 300 caracteres y menos que un mensaje: cabe en un aviso, entero. El
+            # monto la retiene (regla de dinero).
+            medio = ("Hola, el arreglo del modulo de reportes de ejemplo cuesta $50. "
+                     + "Incluye revisar la consulta de ventas, el filtro por fecha y la "
+                       "exportacion en el formato que pidieron. " * 4
+                     + "Fin del mensaje propuesto.").strip()
+            llegan(home, A, [msg(PERSONA, "RE1", PEDIDO, 30)])
+            uno, _ = propuesta_lista(home, "RE1", texto=medio)
+            tick(home)
+            avisos = avisos_del_caso(home, uno)
+            cuerpo = "\n".join(a["body"] for a in avisos)
+            ok("una respuesta retenida de mas de 300 caracteres llega entera en un aviso",
+               len(medio) > 300 and len(avisos) == 1 and medio in cuerpo, cuerpo)
+            ok("sin puntos suspensivos de recorte", "…" not in cuerpo, cuerpo)
+
+            # Mas larga que un mensaje: en partes, entera, con la pregunta al final.
+            parrafo = ("Le cuento el detalle del arreglo de ejemplo, que cuesta $50: la consulta "
+                       "de ventas ya filtra por fecha, el total coincide con el cierre y la "
+                       "exportacion queda en el formato que pidieron. ")
+            largo = "\n\n".join(f"{k + 1}. {parrafo * 4}".strip() for k in range(18))
+            llegan(home, A, [msg(PERSONA, "RE2", PEDIDO, 20)])
+            dos, _ = propuesta_lista(home, "RE2", texto=largo)
+            tick(home)
+            partes = avisos_del_caso(home, dos)
+            todo = "\n".join(p["body"] for p in partes)
+            ok("una respuesta retenida larga sale en varias partes, cada una dentro del limite",
+               len(partes) >= 2 and all(len(p["body"]) <= 4096 for p in partes)
+               and all(p["estado"] == "enviado" for p in partes),
+               f"{[(p['req_id'], len(p['body'])) for p in partes]}")
+            ok("y entre todas llevan la respuesta completa, sin cortes",
+               all(linea in todo for linea in largo.split("\n") if linea) and "…" not in todo,
+               "falta una linea")
+            ok("como contestar va una vez, en la ultima parte",
+               todo.count(f"si {dos}") == 1 and f"si {dos}" in partes[-1]["body"],
+               f"{[p['body'][-120:] for p in partes]}")
+            tick(home)
+            ok("otro tick no repite ninguna parte", len(avisos_del_caso(home, dos)) == len(partes))
+
+            # Citar la primera parte aprueba la version que el aviso mostro: sale entera.
+            primera = partes[0]
+            con = sqlite3.connect(pathlib.Path(home) / ".wa-inbox" / "capture.db")
+            cita = con.execute("select stanza_id from envio where req_id=?",
+                               (primera["req_id"],)).fetchone()[0]
+            con.close()
+            antes = len(al_cliente(home))
+            llegan(home, A, [msg(DUENO_DM, "RE3", "si", 1, de=DUENO_LID, cita_id=cita)])
+            ingiere(home)
+            tick(home)
+            salio = al_cliente(home)[antes:]
+            ok("citar una parte aprueba: al cliente sale la respuesta larga, byte por byte",
+               primera["req_id"].endswith("-p1") and len(salio) == 1
+               and sin_firma(salio[0]["body"]) == largo,
+               f"{primera['req_id']} {[len(x['body']) for x in salio]}")
+
+            # El texto cambia despues del aviso: aprobar lo que el dueno vio se niega.
+            con = sqlite3.connect(pathlib.Path(home) / ".wa-inbox" / "capture.db")
+            cita = con.execute("select stanza_id from envio where req_id=?",
+                               (avisos[-1]["req_id"],)).fetchone()[0]
+            con.close()
+            js(home, "caso", "propuesta", uno, "--tipo", "responder", "--respuesta",
+               "Hola, el arreglo cuesta $70.", "--actor", "agente")
+            antes = len(al_cliente(home))
+            llegan(home, A, [msg(DUENO_DM, "RE4", "si", 1, de=DUENO_LID, cita_id=cita)])
+            ingiere(home)
+            tick(home)
+            ver = js(home, "caso", "ver", uno)[0]
+            ok("aprobar la version vieja (citando su aviso) no aprueba la nueva",
+               not ver["aprobada"] and ver["etapa"] == "decision", f"{ver['etapa']}")
+            ok("y no sale nada al cliente", len(al_cliente(home)) == antes,
+               f"{al_cliente(home)[antes:]}")
+            ok("el dueno lee que el caso cambio desde el aviso",
+               any(f"caso {uno} cambio" in a["body"].lower() for a in al_dueno(home)),
+               f"{al_dueno(home)[-2:]}")
+        finally:
+            sidecar.cerrar()
+            os.environ.clear()
+            os.environ.update(env_antes)
+
+
 print("\nescalar-texto-cliente: la tarjeta separa el texto del cliente de la pregunta")
 with tempfile.TemporaryDirectory() as home:
     linea_lista(home)

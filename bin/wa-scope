@@ -12113,11 +12113,14 @@ def texto_de_aviso(con, caso, motivos):
         # Por otra linea (la orden del dueno, ordenes-del-dueno): el aviso dice cual.
         lineas.append(tx["destino_linea"].format(x=nombre, l=etiqueta_de_linea(linea)) if linea
                       else tx["destino"].format(x=nombre))
-    if cuerpo:
-        lineas.append(tx["trabajo" if tipo == "trabajar" else "respuesta"]
-                      .format(x=recorta(cuerpo, LARGO_PROPUESTA)))
-    lineas.append(tx["como"].format(n=n))
-    return "\n".join(lineas)
+    if not cuerpo:
+        lineas.append(tx["como"].format(n=n))
+        return "\n".join(lineas)
+    # El texto ENTERO (WAINBOX-66): el dueno aprueba lo que leyo. Si no cabe en un mensaje,
+    # va en partes como el del `escalar`, y como contestar en la ultima.
+    return partes_de_aviso("\n".join(lineas),
+                           tx["trabajo" if tipo == "trabajar" else "respuesta"].format(x=cuerpo),
+                           tx["como"].format(n=n), tx["parte"], n)
 
 
 def escala_al_dueno(caso):
