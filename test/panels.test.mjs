@@ -124,11 +124,72 @@ async function montar (archivo, storage = {}, idioma = null, gancho = null) {
     else entregar()
   })
 
-  await new Promise((r) => setTimeout(r, 60))
+  montados.push({ window, asentar: asentador(window, enviados) })
+  await espera()
   return { window, doc: window.document, storage, enviados }
 }
 
-const espera = () => new Promise((r) => setTimeout(r, 60))
+// Los paneles abiertos, cada uno con su forma de esperar a que se asiente.
+let montados = []
+
+/** Abre una seccion: cierra los paneles de la anterior y escribe el titulo. Ninguno se
+ *  cerraba, y con `pretendToBeVisual` cada config.html sigue sondeando cada 12 s: al final
+ *  del archivo cientos de paneles viejos se peleaban el mismo bucle de eventos con el caso
+ *  que corria, y fallaba uno distinto en cada corrida. */
+function titulo (texto) {
+  for (const { window } of montados) window.close()
+  montados = []
+  console.log(`\n${texto}`)
+}
+
+/** Espera a que el panel deje de conversar con el host: ningun pedido nuevo en dos
+ *  vueltas seguidas de la cola de mensajes. Un tiempo fijo no sirve: el arranque encadena
+ *  lecturas (`probar` -> `reload` -> pintar) y bajo carga 60 ms no alcanzaban, y el caso
+ *  fallaba mirando un panel a medio pintar. postMessage entrega en orden, asi que cuando
+ *  llega la senal propia ya llegaron las respuestas de antes y corrio lo que encadenan;
+ *  lo que esas pidieron llega en la vuelta siguiente, y por eso hacen falta dos quietas.
+ *  Lo que el panel deja para un timer (el sondeo, una demora a proposito) no entra: eso
+ *  se espera por su condicion, con `hastaPanel`. */
+function asentador (window, enviados) {
+  let visto = -1
+  const vuelta = () => new Promise((resolve) => {
+    const id = Math.random().toString(36).slice(2)
+    const oir = (event) => {
+      if (event.data?.type !== 'arnes-calma' || event.data.id !== id) return
+      window.removeEventListener('message', oir)
+      resolve()
+    }
+    window.addEventListener('message', oir)
+    window.postMessage({ type: 'arnes-calma', id }, '*')
+  })
+  return async () => {
+    // Un panel que no pidio nada desde la ultima vez ya esta quieto.
+    if (enviados.length === visto) return
+    const fin = Date.now() + 10000
+    let quietas = 0
+    while (quietas < 2 && Date.now() < fin) {
+      const antes = enviados.length
+      await vuelta()
+      quietas = enviados.length === antes ? quietas + 1 : 0
+    }
+    visto = enviados.length
+  }
+}
+
+/** Lo minimo de antes (60 ms, para lo que el panel deja a un timer corto) y despues,
+ *  que cada panel montado se asiente. */
+const espera = async () => {
+  await new Promise((r) => setTimeout(r, 60))
+  for (const { asentar } of montados) await asentar()
+}
+
+/** Espera a que se cumpla lo que el caso va a mirar, con un tope. Para lo que el panel deja
+ *  a un timer (el sondeo del veredicto, una demora a proposito), que `espera` no ve. */
+const hastaPanel = async (cond, ms = 6000) => {
+  const fin = Date.now() + ms
+  while (Date.now() < fin) { if (cond()) return true; await new Promise((r) => setTimeout(r, 50)) }
+  return false
+}
 
 /** Un worker que atiende `regla-quitar` como el de verdad: `wa-scope route --remove`
  *  borra la fila de la base y el worker saca la regla del storage del panel; recien
@@ -239,7 +300,7 @@ const PROYECTOS_PRUEBA = [
 ]
 
 // ───────── T17: ajustes rehechos para el modelo nuevo ─────────
-console.log('\nconfig.html — T17: ni un <select> nativo, en ningun panel')
+titulo('config.html — T17: ni un <select> nativo, en ningun panel')
 {
   // En Orca el panel vive en un iframe con sandbox y la lista de un select no se dibuja:
   // el dueno no podia encender Jev porque su select no abria. Se prueba en el archivo Y
@@ -256,7 +317,7 @@ console.log('\nconfig.html — T17: ni un <select> nativo, en ningun panel')
   }
 }
 
-console.log('\nconfig.html — T17: pestanas')
+titulo('config.html — T17: pestanas')
 {
   const { doc } = await montar('config.html', {}, 'es-419')
   await espera()
@@ -314,7 +375,7 @@ console.log('\nconfig.html — T17: pestanas')
     S.es.tabAprobacion === 'Su aprobacion', S.es.tabAprobacion)
 }
 
-console.log('\nconfig.html — T17: la pestana de entrada depende de lo que falta')
+titulo('config.html — T17: la pestana de entrada depende de lo que falta')
 {
   // Sin linea, sin nombre y sin conversaciones: se abre en Estado, que dice que falta.
   const nuevo = await montar('config.html', {}, 'es-419')
@@ -355,7 +416,7 @@ console.log('\nconfig.html — T17: la pestana de entrada depende de lo que falt
     listo.doc.getElementById('tab-proyectos').getAttribute('aria-selected') === 'true')
 }
 
-console.log('\nconfig.html — T17: el autocompletar de conversaciones')
+titulo('config.html — T17: el autocompletar de conversaciones')
 {
   const storage = {
     projects: PROYECTOS_PRUEBA,
@@ -451,7 +512,7 @@ console.log('\nconfig.html — T17: el autocompletar de conversaciones')
     activa()?.dataset.value === '120363000000000001@g.us', input.getAttribute('aria-activedescendant'))
 }
 
-console.log('\nconfig.html — T17: sin conversaciones la lista lo dice')
+titulo('config.html — T17: sin conversaciones la lista lo dice')
 {
   const { doc } = await montar('config.html', {
     syncStatus: { running: true, startedAt: new Date().toISOString(), trigger: 'activate' }
@@ -464,7 +525,7 @@ console.log('\nconfig.html — T17: sin conversaciones la lista lo dice')
     doc.getElementById('chat-list').textContent)
 }
 
-console.log('\nconfig.html — T17: el proyecto se elige con el mismo autocompletar')
+titulo('config.html — T17: el proyecto se elige con el mismo autocompletar')
 {
   const storage = { projects: PROYECTOS_PRUEBA,
     chats: [{ jid: '1@g.us', name: 'Soporte Norte', kind: 'grupo' }] }
@@ -504,7 +565,7 @@ console.log('\nconfig.html — T17: el proyecto se elige con el mismo autocomple
     JSON.stringify(storage.routes))
 }
 
-console.log('\nconfig.html — T17: las reglas viejas de Plane se marcan y se pueden quitar')
+titulo('config.html — T17: las reglas viejas de Plane se marcan y se pueden quitar')
 {
   const storage = { projects: PROYECTOS_PRUEBA, routes: [
     { pattern: 'cobros', provider: 'plane', target: 'FIN' },
@@ -526,7 +587,7 @@ console.log('\nconfig.html — T17: las reglas viejas de Plane se marcan y se pu
     JSON.stringify(storage.routes))
 }
 
-console.log('\nconfig.html — quitar una regla pasa por el worker y no miente')
+titulo('config.html — quitar una regla pasa por el worker y no miente')
 {
   const reglas = () => [{ pattern: 'attus', provider: 'plane', target: 'ATT' },
     { pattern: 'envios', workspace: 'alfa-demo' }]
@@ -615,7 +676,7 @@ console.log('\nconfig.html — quitar una regla pasa por el worker y no miente')
     JSON.stringify(nuevas.filter((k) => !S.es[k] || !S.en[k] || !S.pt[k])))
 }
 
-console.log('\nconfig.html — T17: los modos son botones y escriben lo mismo que el select')
+titulo('config.html — T17: los modos son botones y escriben lo mismo que el select')
 {
   const { doc } = await montar('config.html', {}, 'es-419')
   await espera()
@@ -631,7 +692,7 @@ console.log('\nconfig.html — T17: los modos son botones y escriben lo mismo qu
     doc.getElementById('mode-desc').textContent)
 }
 
-console.log('\nconfig.html — T17: Avanzado, un guardar por tarjeta')
+titulo('config.html — T17: Avanzado, un guardar por tarjeta')
 {
   const { doc, storage, enviados } = await montar('config.html', {}, 'es-419')
   await espera()
@@ -667,7 +728,7 @@ console.log('\nconfig.html — T17: Avanzado, un guardar por tarjeta')
     !doc.getElementById('save-owner'))
 }
 
-console.log('\nconfig.html — T17: Agente, un guardar para nombre, dueno y tono')
+titulo('config.html — T17: Agente, un guardar para nombre, dueno y tono')
 {
   const { doc, storage } = await montar('config.html', {}, 'es-419')
   await espera()
@@ -688,7 +749,7 @@ console.log('\nconfig.html — T17: Agente, un guardar para nombre, dueno y tono
     doc.getElementById('said-agent').classList.contains('bad'))
 }
 
-console.log('\nconfig.html — T17: Jev se enciende con un interruptor')
+titulo('config.html — T17: Jev se enciende con un interruptor')
 {
   const storage = { jevStatus: { at: new Date().toISOString(), enabled: false, keySet: true,
     mirror: 'apagado' } }
@@ -722,7 +783,7 @@ console.log('\nconfig.html — T17: Jev se enciende con un interruptor')
   ok('no hay un boton aparte de guardar el interruptor', !doc.getElementById('jev-save-enabled'))
 }
 
-console.log('\nconfig.html — T17: Su aprobacion explica las excepciones fijas')
+titulo('config.html — T17: Su aprobacion explica las excepciones fijas')
 {
   const { doc } = await montar('config.html', {}, 'es-419')
   await espera()
@@ -736,7 +797,7 @@ console.log('\nconfig.html — T17: Su aprobacion explica las excepciones fijas'
   ok('sin nada que todavia no existe', !/proximamente|pronto|coming soon/i.test(vista), vista)
 }
 
-console.log('\nconfig.html — T22: las reglas como son, por conversacion y con niveles')
+titulo('config.html — T22: las reglas como son, por conversacion y con niveles')
 {
   const { doc } = await montar('config.html', {}, 'es-419')
   await espera()
@@ -749,7 +810,7 @@ console.log('\nconfig.html — T22: las reglas como son, por conversacion y con 
   ok('y lo que no se apaga nunca: un secreto', /secreto/i.test(texto), texto)
 }
 
-console.log('\nconfig.html — T22: los numeros del dueno se eligen de los que escribieron')
+titulo('config.html — T22: los numeros del dueno se eligen de los que escribieron')
 {
   const { doc, storage } = await montar('config.html', {
     chats: [{ jid: '100000000000001@lid', name: 'Ana Duena', kind: 'directo' },
@@ -795,7 +856,7 @@ console.log('\nconfig.html — T22: los numeros del dueno se eligen de los que e
     JSON.stringify([{ id: '100000000000001@lid', name: 'Ana Duena' }]), JSON.stringify(storage.owners))
 }
 
-console.log('\nconfig.html — T14: el numero de aprobacion se elige entre los de confianza')
+titulo('config.html — T14: el numero de aprobacion se elige entre los de confianza')
 {
   const ANA = '100000000000001@lid'
   const BETO = '100000000000002@lid'
@@ -852,7 +913,7 @@ console.log('\nconfig.html — T14: el numero de aprobacion se elige entre los d
     /Off/.test(grupo.textContent), doc.getElementById('owners-card').textContent)
 }
 
-console.log('\nconfig.html — T22: cada conversacion con sus niveles de aprobacion')
+titulo('config.html — T22: cada conversacion con sus niveles de aprobacion')
 {
   const JID = '120363000000000001@g.us'
   const { doc, storage } = await montar('config.html', {
@@ -887,7 +948,7 @@ console.log('\nconfig.html — T22: cada conversacion con sus niveles de aprobac
     valorSeg(doc, 'chat-ap-quality') === 'ask', grupos.map((g) => valorSeg(doc, g)))
 }
 
-console.log('\nconfig.html')
+titulo('config.html')
 {
   const { doc, storage } = await montar('config.html', { projects: PROYECTOS_PRUEBA })
 
@@ -1418,7 +1479,7 @@ console.log('\nconfig.html')
 // la usaba nadie. Lo que se comprueba aca es lo unico que la vuelve un producto: que el
 // boton deje el pedido, que cada estado diga que hacer, y que ninguno se quede sin un
 // boton que lo resuelva — un estado sin salida es el mismo callejon que el spinner.
-console.log('\nconfig.html — las traducciones estan completas')
+titulo('config.html — las traducciones estan completas')
 {
   // Cada texto nuevo en los tres idiomas, comprobado por clave y no de memoria: una
   // traduccion que falta cae al ingles y media pantalla queda en el idioma equivocado.
@@ -1457,7 +1518,7 @@ console.log('\nconfig.html — las traducciones estan completas')
     JSON.stringify(rotos))
 }
 
-console.log('\nactivity.html')
+titulo('activity.html')
 {
   const actividad = {
     syncedAt: new Date().toISOString().slice(0, 16).replace('T', ' '),
@@ -1493,7 +1554,7 @@ console.log('\nactivity.html')
     sinDatos.doc.getElementById('synced').textContent.length > 0)
 }
 
-console.log('\nactivity.html — la corrida dice como le fue')
+titulo('activity.html — la corrida dice como le fue')
 {
   const AHORA = new Date().toISOString().slice(0, 16).replace('T', ' ')
   const base = { syncedAt: AHORA, running: false, pending: [], recent: [],
@@ -1634,7 +1695,7 @@ console.log('\nactivity.html — la corrida dice como le fue')
 // usa Orca, en su idioma. Lo unico que une los dos es un codigo estable, asi que se
 // comprueba que el panel lo traduzca de verdad y que no se cuele ni una palabra en
 // ingles en un panel en espanol.
-console.log('\nel codigo del CLI, dicho en el idioma del panel')
+titulo('el codigo del CLI, dicho en el idioma del panel')
 {
   const salud = {
     ok: false,
@@ -1822,7 +1883,7 @@ console.log('\nel codigo del CLI, dicho en el idioma del panel')
 // una copia del contrato y no el contrato. Aca se corre el CLI de verdad contra un HOME
 // temporal y se montan los paneles contra LO QUE ESCRIBIO, que es lo unico que prueba
 // que siguen hablando el mismo idioma — y que una traduccion no renombro una clave.
-console.log('\nel contrato CLI -> panel')
+titulo('el contrato CLI -> panel')
 {
   const home = mkdtempSync(join(tmpdir(), 'wa-inbox-contrato-'))
   // HOME propio: la base vive en ~/.wa-inbox/scope.db y no hay variable para moverla,
@@ -1982,7 +2043,7 @@ console.log('\nel contrato CLI -> panel')
 // ningun control que escriba varias claves a la vez —el de "de donde lee" se fue con
 // los transportes— pero la mitad que sigue viva es la que importa: un guardado que el
 // host rechazo no puede decir que si.
-console.log('\nconfig.html — un guardado que falla no dice guardado')
+titulo('config.html — un guardado que falla no dice guardado')
 {
   const { doc, storage } = await montar('config.html', {}, 'es-419', (d) => {
     if (d.action === 'storage.set' && d.params.key === 'inboxDays') return { ok: false }
@@ -2001,7 +2062,7 @@ console.log('\nconfig.html — un guardado que falla no dice guardado')
     `inboxDays = ${JSON.stringify(storage.inboxDays)}`)
 }
 
-console.log('\nconfig.html: el sondeo no pisa lo que el usuario acaba de hacer')
+titulo('config.html: el sondeo no pisa lo que el usuario acaba de hacer')
 {
   let demora = 0
   const storage = { inboxDays: '7' }
@@ -2039,7 +2100,7 @@ console.log('\nconfig.html: el sondeo no pisa lo que el usuario acaba de hacer')
     storage.inboxDays === '30', String(storage.inboxDays))
 }
 
-console.log('\nconfig.html: un host que rechaza todo')
+titulo('config.html: un host que rechaza todo')
 {
   const { doc } = await montar('config.html', {}, 'es-419',
     (d) => d.action === 'storage.get'
@@ -2079,7 +2140,7 @@ console.log('\nconfig.html: un host que rechaza todo')
 // aprobacion, que es lo que pasa en CADA actualizacion— el panel se veia igual que uno
 // sano, aceptaba clics y contestaba con 45 s de silencio. "Lento" y "no esta" eran la
 // misma pantalla.
-console.log('\nconfig.html: el latido del worker')
+titulo('config.html: el latido del worker')
 {
   const VIEJO = new Date(Date.now() - 120000).toISOString()
   const casos = [
@@ -2134,7 +2195,7 @@ console.log('\nconfig.html: el latido del worker')
     a3.hidden || !/no esta corriendo/.test(a3.textContent), a3.textContent.slice(0, 120))
 }
 
-console.log('\nconfig.html: el clic contra el cupo del host')
+titulo('config.html: el clic contra el cupo del host')
 {
   // La misma ventana deslizante de plugin-panel-message-budget.ts, no una idea de ella.
   const cupo = () => {
@@ -2170,7 +2231,7 @@ console.log('\nconfig.html: el clic contra el cupo del host')
 // panel, que el espejo del panel no ve—, el pedido se reintenta. Un rechazo del
 // transporte no es una respuesta, y contarselo al usuario es lo que lo hace apretar
 // dos veces.
-console.log('\nconfig.html: un rechazo del host se reintenta, no se reporta')
+titulo('config.html: un rechazo del host se reintenta, no se reporta')
 {
   let rechazadas = 0
   const { doc, storage } = await montar('config.html', {
@@ -2201,7 +2262,7 @@ console.log('\nconfig.html: un rechazo del host se reintenta, no se reporta')
 // pluginKey), asi que el tablero abierto gasta del mismo cupo que Ajustes; una lectura
 // del carril del usuario que sigue rechazada a los 30 s se rinde, y la tarjeta se quedaba
 // con lo de fabrica pintado y su Guardar vivo: un clic escribia owners=[] y todo apagado.
-console.log('\nconfig.html — ajustes sin lectura: lo de fabrica no se presenta como lo guardado')
+titulo('config.html — ajustes sin lectura: lo de fabrica no se presenta como lo guardado')
 {
   const DUENO = '100000000000001@lid'
   const guardado = () => ({
@@ -2288,7 +2349,7 @@ console.log('\nconfig.html — ajustes sin lectura: lo de fabrica no se presenta
 
 // Lo mismo antes de cualquier respuesta: el host todavia no contesto (o la contestacion se
 // perdio) y el dueno ya aprieta Guardar. Nada sale.
-console.log('\nconfig.html — ajustes sin lectura: Guardar antes de la primera respuesta')
+titulo('config.html — ajustes sin lectura: Guardar antes de la primera respuesta')
 {
   const { doc, storage, enviados } = await montar('config.html', {
     owners: [{ id: '100000000000001@lid', name: 'Ana Ejemplo' }],
@@ -2320,7 +2381,7 @@ console.log('\nconfig.html — ajustes sin lectura: Guardar antes de la primera 
 // carril del usuario quedaba adelante, con su `desde` en el futuro, y `drenar` cortaba
 // ahi: todo lo que venia atras -las demas tarjetas de la pestana, y hasta un clic-
 // esperaba su backoff, ronda tras ronda.
-console.log('\nconfig.html — ajustes sin lectura: un rechazo no frena al resto del carril del usuario')
+titulo('config.html — ajustes sin lectura: un rechazo no frena al resto del carril del usuario')
 {
   const { doc } = await montar('config.html', {
     owners: [{ id: '100000000000001@lid', name: 'Ana Ejemplo' }],
@@ -2349,7 +2410,7 @@ console.log('\nconfig.html — ajustes sin lectura: un rechazo no frena al resto
 // desaparezca del todo: un recuadro vacio se lee como un plugin roto, no como uno
 // que esta a punto de mostrar el siguiente. Por eso el vencido queda VISIBLE y
 // APAGADO (`.vencido`, opacity .4), no escondido.
-console.log('\nconfig.html — vinculacion de WhatsApp: los cinco estados')
+titulo('config.html — vinculacion de WhatsApp: los cinco estados')
 {
   const AHORA_MS = Date.now()
   const casos = [
@@ -2426,7 +2487,7 @@ console.log('\nconfig.html — vinculacion de WhatsApp: los cinco estados')
 // Con datos rancios lo unico cierto es que el panel no esta leyendo, y eso ahora tiene
 // estado propio ('stale'). No reusa 'waiting' porque 'waiting' esconde el recuadro, y
 // esconderlo seria volver al recuadro vacio que se arreglo en 4.1.0.
-console.log('\nconfig.html — un rechazo del host no puede dar por vencido el QR')
+titulo('config.html — un rechazo del host no puede dar por vencido el QR')
 {
   const casos = [
     ['es-419', /escanee/i, /no se puede confirmar/i],
@@ -2495,7 +2556,7 @@ console.log('\nconfig.html — un rechazo del host no puede dar por vencido el Q
 // worker seguia vivo y el QR rotaba en storage. La escalada usa el tiempo REAL desde
 // que el panel entro en 'waiting', asi que se avanza el reloj del panel y se le pide
 // que vuelva a mirar (foco), tal como lo hace quien vuelve a la pestana.
-console.log('\nconfig.html — la espera del QR deja de prometer "unos segundos"')
+titulo('config.html — la espera del QR deja de prometer "unos segundos"')
 {
   const casos = [
     ['es-419', /esperando|unos segundos/i, /ya lleva/i, /tarda mas de lo esperado/i],
@@ -2535,7 +2596,7 @@ console.log('\nconfig.html — la espera del QR deja de prometer "unos segundos"
 // la conexion de WhatsApp. El heartbeat se adelanta junto con el reloj para que siga
 // "vivo" a los ojos de `pintarLatido` — sin eso, la sola demora del reloj lo haria ver
 // caido y se estaria probando otra cosa.
-console.log('\nconfig.html — la espera larga dice lo que de verdad sabe, nunca una causa inventada')
+titulo('config.html — la espera larga dice lo que de verdad sabe, nunca una causa inventada')
 {
   const casos = [
     ['es-419', /esta respondiendo/i, /todavia no dijo nada/i,
@@ -2578,7 +2639,7 @@ console.log('\nconfig.html — la espera larga dice lo que de verdad sabe, nunca
 // transitorio como 'waiting' a proposito -se cura solo, tratarlo como 'down' seria
 // alarmar por algo que ya se esta arreglando-, pero eso no es motivo para callar lo
 // que el sidecar ya conto.
-console.log('\nconfig.html — un cierre transitorio que se cura solo ahora se explica, no se calla')
+titulo('config.html — un cierre transitorio que se cura solo ahora se explica, no se calla')
 {
   const casos = [
     ['socket-caido', /reintentando sola/i],
@@ -2600,7 +2661,7 @@ console.log('\nconfig.html — un cierre transitorio que se cura solo ahora se e
 
 // "Me toca refrescar?" tiene que tener una respuesta en la pantalla. Va por el
 // carril de usuario (`read(key, true)`, codigo fuente), no por el del sondeo.
-console.log('\nconfig.html — "Comprobar ahora" hace una lectura de verdad y se apaga en vuelo')
+titulo('config.html — "Comprobar ahora" hace una lectura de verdad y se apaga en vuelo')
 {
   const { doc, enviados } = await montar('config.html', {
     sidecar: { connection: 'connecting', qr: null, exited: false }
@@ -2623,7 +2684,7 @@ console.log('\nconfig.html — "Comprobar ahora" hace una lectura de verdad y se
     doc.getElementById('said-pairing-refresh').textContent)
 }
 
-console.log('\nconfig.html — el QR escala con el ancho de la ventana')
+titulo('config.html — el QR escala con el ancho de la ventana')
 {
   for (const [ancho, esperado] of [[320, 260], [768, 300], [1440, 360]]) {
     const { window, doc } = await montar('config.html', { sidecar: {
@@ -2640,7 +2701,7 @@ console.log('\nconfig.html — el QR escala con el ancho de la ventana')
   }
 }
 
-console.log('\nconfig.html — una lectura rechazada no apaga el QR que ya estaba en pantalla')
+titulo('config.html — una lectura rechazada no apaga el QR que ya estaba en pantalla')
 {
   // Centinela SIN_RESPUESTA: un `storage.get` que el host rechaza no es una clave
   // vacia. Se rechaza la SEGUNDA lectura -la primera es la del montaje, que tiene que
@@ -2667,7 +2728,7 @@ console.log('\nconfig.html — una lectura rechazada no apaga el QR que ya estab
     doc.getElementById('pairing-msg').textContent)
 }
 
-console.log('\nconfig.html — el sondeo de 2 s del QR se detiene al emparejar')
+titulo('config.html — el sondeo de 2 s del QR se detiene al emparejar')
 {
   const { enviados: enviadosVivo } = await montar('config.html', { sidecar: {
     connection: 'connecting',
@@ -2695,7 +2756,7 @@ console.log('\nconfig.html — el sondeo de 2 s del QR se detiene al emparejar')
 // quien lee, un solo motivo. Y ahi estaba el defecto: "no hay userData en este equipo" y
 // "no me dejaron lanzar el resolvedor" se leian igual, y mandaban a buscar una carpeta
 // cuando lo que faltaba era aprobar el plugin.
-console.log('\nconfig.html — cada motivo de arranque del sidecar dice algo distinto')
+titulo('config.html — cada motivo de arranque del sidecar dice algo distinto')
 {
   const codigos = ['sidecar-sin-authdir', 'sidecar-sin-permiso', 'sidecar-authdir-fallo',
     'sidecar-no-arranco', 'sidecar-cayo']
@@ -2727,7 +2788,7 @@ console.log('\nconfig.html — cada motivo de arranque del sidecar dice algo dis
 // El auth state es una credencial viva: quien lo tenga lee y escribe como esa cuenta
 // sin el telefono. Hasta aca el panel sabia enlazar y no sabia soltar — quien escaneaba
 // con el telefono equivocado solo salia borrando un directorio a mano.
-console.log('\nconfig.html — desvincular: confirmacion antes de cortar la sesion')
+titulo('config.html — desvincular: confirmacion antes de cortar la sesion')
 {
   const { doc, storage } = await montar('config.html',
     { sidecar: { connection: 'open', qr: null, exited: false,
@@ -2760,7 +2821,7 @@ console.log('\nconfig.html — desvincular: confirmacion antes de cortar la sesi
     JSON.stringify(storage.sidecarRequest))
 }
 
-console.log('\nconfig.html — el segundo clic si manda el pedido, por el canal del worker')
+titulo('config.html — el segundo clic si manda el pedido, por el canal del worker')
 {
   const { doc, storage } = await montar('config.html',
     { sidecar: { connection: 'open', qr: null, exited: false,
@@ -2782,7 +2843,7 @@ console.log('\nconfig.html — el segundo clic si manda el pedido, por el canal 
     JSON.stringify(pedido))
 }
 
-console.log('\nconfig.html — tras desvincular, la pantalla no sigue diciendo "conectado"')
+titulo('config.html — tras desvincular, la pantalla no sigue diciendo "conectado"')
 {
   // El worker contesta el veredicto y deja la clave `sidecar` limpia, que es lo que
   // hace de verdad cuando relanza: sin sesion y esperando un codigo nuevo.
@@ -2822,7 +2883,7 @@ console.log('\nconfig.html — tras desvincular, la pantalla no sigue diciendo "
     doc.getElementById('said-pairing').textContent)
 }
 
-console.log('\nconfig.html — la sesion cerrada desde el telefono ofrece desvincular')
+titulo('config.html — la sesion cerrada desde el telefono ofrece desvincular')
 {
   // `sesion-cerrada` no reconecta nunca sola (sidecar/src/index.js, `decidirTrasCierre`):
   // las credenciales que quedaron en disco estan muertas y hay que borrarlas. El texto
@@ -2848,7 +2909,7 @@ console.log('\nconfig.html — la sesion cerrada desde el telefono ofrece desvin
 // Medido en la maquina del dueno (2026-10-01): ultimo mensaje el 23, ultimo latido del
 // sidecar el 30, y el panel diciendo "WhatsApp esta conectado". El "conectado" salia de
 // la ultima foto guardada en storage, que no caduca nunca.
-console.log('\nconfig.html — "conectado" solo con latido fresco de la linea')
+titulo('config.html — "conectado" solo con latido fresco de la linea')
 {
   const viejoMs = Date.now() - 10 * 60 * 1000
   const hora = new Date(viejoMs).toTimeString().slice(0, 5)
@@ -2886,7 +2947,7 @@ console.log('\nconfig.html — "conectado" solo con latido fresco de la linea')
 // El storage que quedo en la maquina del dueno: `statusCode: 401` y, encima, el
 // `sidecar-cayo` que escribia el `exit`. El panel preferia `error.code` y ofrecia
 // Reintentar, que repetia el 401. El 401 manda: la accion es desvincular.
-console.log('\nconfig.html — con 401 se ofrece desvincular, no reintentar')
+titulo('config.html — con 401 se ofrece desvincular, no reintentar')
 {
   for (const statusCode of [401, 500]) {
     const { doc } = await montar('config.html', { sidecar: { connection: 'close', qr: null,
@@ -2905,7 +2966,7 @@ console.log('\nconfig.html — con 401 se ofrece desvincular, no reintentar')
 }
 
 // ───────── los cierres que el sidecar ya no reintenta para siempre ─────────
-console.log('\nconfig.html — 440, 403 y 411 se explican, cada uno con su salida')
+titulo('config.html — 440, 403 y 411 se explican, cada uno con su salida')
 {
   const casos = [
     // Otro cliente usa la misma sesion: cerrarlo y reintentar, o desvincular.
@@ -2951,7 +3012,7 @@ const VIEJA = 'pn:573001112233'
 const NUEVA = 'pn:573000000012'
 const SIDECAR_NUEVA = { connection: 'open', qr: null, exited: false, me: '+573000000012',
   cuenta: NUEVA, latido: { ts: Date.now(), conectado: true } }
-console.log('\nconfig.html — T9: el selector y las autorizaciones son de la linea vinculada')
+titulo('config.html — T9: el selector y las autorizaciones son de la linea vinculada')
 {
   const storage = {
     sidecar: SIDECAR_NUEVA,
@@ -2998,7 +3059,7 @@ console.log('\nconfig.html — T9: el selector y las autorizaciones son de la li
     JSON.stringify(storage.scope))
 }
 
-console.log('\nconfig.html — T10: el chat propio se nombra como en WhatsApp y va primero')
+titulo('config.html — T10: el chat propio se nombra como en WhatsApp y va primero')
 {
   const storage = {
     chats: [
@@ -3029,7 +3090,7 @@ console.log('\nconfig.html — T10: el chat propio se nombra como en WhatsApp y 
   ok('en ingles dice "(you)"', /Nueva \(you\)/.test(textosEn[0] || ''), JSON.stringify(textosEn))
 }
 
-console.log('\nconfig.html — T10: una migracion que no borro nada no dice que borro')
+titulo('config.html — T10: una migracion que no borro nada no dice que borro')
 {
   const { doc } = await montar('config.html', { health: { ok: true, optional: [{
     que: 'message store upgrade', code: 'store-migrated', howCode: 'store-migrated-clean',
@@ -3046,7 +3107,7 @@ console.log('\nconfig.html — T10: una migracion que no borro nada no dice que 
     JSON.stringify(nuevas.map((k) => [S.es[k], S.en[k], S.pt && S.pt[k]])))
 }
 
-console.log('\nconfig.html — los estados de falla ofrecen reintentar, no reiniciar Orca')
+titulo('config.html — los estados de falla ofrecen reintentar, no reiniciar Orca')
 {
   for (const code of ['sidecar-no-arranco', 'sidecar-authdir-fallo', 'sidecar-cayo']) {
     const storage = { sidecar: { connection: null, qr: null, exited: true, motivo: code,
@@ -3073,7 +3134,7 @@ console.log('\nconfig.html — los estados de falla ofrecen reintentar, no reini
     `hidden=${sinPermiso.getElementById('pairing-retry').hidden}`)
 }
 
-console.log('\nconfig.html — el reintento llega al worker por el mismo canal')
+titulo('config.html — el reintento llega al worker por el mismo canal')
 {
   const storage = { sidecar: { connection: null, qr: null, exited: true,
     motivo: 'sidecar-no-arranco',
@@ -3104,7 +3165,7 @@ console.log('\nconfig.html — el reintento llega al worker por el mismo canal')
     doc.getElementById('pairing-msg').textContent)
 }
 
-console.log('\nconfig.html — un pedido sin respuesta se dice, no se traga')
+titulo('config.html — un pedido sin respuesta se dice, no se traga')
 {
   // El worker no contesta nunca: el panel no puede quedarse con el boton en "…" para
   // siempre, que es el spinner eterno que este panel viene arreglando desde el principio.
@@ -3119,7 +3180,7 @@ console.log('\nconfig.html — un pedido sin respuesta se dice, no se traga')
     `disabled=${boton.disabled}`)
 }
 
-console.log('\nconfig.html — la palabra "sidecar" no se le muestra a nadie')
+titulo('config.html — la palabra "sidecar" no se le muestra a nadie')
 {
   // `sidecar` es como llamamos al proceso ayudante entre nosotros. Quien instala el
   // plugin no sabe que es, y estas son justo las frases que lee cuando algo salio mal.
@@ -3149,7 +3210,7 @@ const CHATS_REALES = [
   { jid: '573000000002@s.whatsapp.net', name: 'Camila Restrepo', kind: 'directo' }
 ]
 
-console.log('\nconfig.html — buscar una conversacion como la gente la escribe de verdad')
+titulo('config.html — buscar una conversacion como la gente la escribe de verdad')
 {
   const { doc } = await montar('config.html', {
     chats: CHATS_REALES,
@@ -3206,7 +3267,7 @@ const CHATS_CON_TELEFONO = [
 ]
 
 for (const idioma of ['es-419', 'en-US']) {
-  console.log(`\nconfig.html — el telefono de un directo guardado con su LID (${idioma})`)
+  titulo(`config.html — el telefono de un directo guardado con su LID (${idioma})`)
   const { doc } = await montar('config.html', { chats: CHATS_CON_TELEFONO }, idioma)
   await espera()
   const buscar = (texto) => {
@@ -3273,7 +3334,7 @@ const CHATS_GEMELOS = [
 ]
 
 for (const idioma of ['es-419', 'en-US']) {
-  console.log(`\nconfig.html — la misma persona con su telefono y su LID es una sola fila (${idioma})`)
+  titulo(`config.html — la misma persona con su telefono y su LID es una sola fila (${idioma})`)
   {
     const { doc, storage } = await montar('config.html', { chats: CHATS_GEMELOS }, idioma)
     await espera()
@@ -3301,7 +3362,7 @@ for (const idioma of ['es-419', 'en-US']) {
       JSON.stringify(storage.scope))
   }
 
-  console.log(`\nconfig.html — editar la autorizacion que quedo en el jid viejo la pasa al vivo (${idioma})`)
+  titulo(`config.html — editar la autorizacion que quedo en el jid viejo la pasa al vivo (${idioma})`)
   {
     const { doc, storage } = await montar('config.html', {
       chats: CHATS_GEMELOS,
@@ -3331,7 +3392,7 @@ for (const idioma of ['es-419', 'en-US']) {
       doc.getElementById('scope-wrap').textContent)
   }
 
-  console.log(`\nconfig.html — con las dos formas autorizadas no se unen solas (${idioma})`)
+  titulo(`config.html — con las dos formas autorizadas no se unen solas (${idioma})`)
   {
     const { doc, storage } = await montar('config.html', {
       chats: CHATS_GEMELOS,
@@ -3353,7 +3414,7 @@ for (const idioma of ['es-419', 'en-US']) {
       storage.scope?.[LID_VIVO]?.tone === 'Otro', JSON.stringify(storage.scope))
   }
 
-  console.log(`\nconfig.html — una conversacion sin gemela se guarda como siempre (${idioma})`)
+  titulo(`config.html — una conversacion sin gemela se guarda como siempre (${idioma})`)
   {
     const { doc, storage } = await montar('config.html', { chats: CHATS_GEMELOS }, idioma)
     await espera()
@@ -3366,7 +3427,7 @@ for (const idioma of ['es-419', 'en-US']) {
   }
 }
 
-console.log('\nconfig.html — las tres que importan no se pierden entre las 296')
+titulo('config.html — las tres que importan no se pierden entre las 296')
 {
   const { doc } = await montar('config.html', {
     chats: CHATS_REALES,
@@ -3410,7 +3471,7 @@ console.log('\nconfig.html — las tres que importan no se pierden entre las 296
     identidad ? identidad.textContent : '')
 }
 
-console.log('\nconfig.html — quitar una autorizacion pasa por el worker y no miente')
+titulo('config.html — quitar una autorizacion pasa por el worker y no miente')
 {
   // El defecto medido: el panel borraba de SU storage, decia "✓ quitada", y la fila
   // seguia en `scope.db`. Los CLIs leen la mezcla de los dos, asi que la conversacion
@@ -3459,7 +3520,7 @@ console.log('\nconfig.html — quitar una autorizacion pasa por el worker y no m
     doc.getElementById('scope-wrap').textContent)
 }
 
-console.log('\nconfig.html — un quitado que el worker NO pudo hacer no se anuncia como hecho')
+titulo('config.html — un quitado que el worker NO pudo hacer no se anuncia como hecho')
 {
   const storage = {
     chats: CHATS_REALES,
@@ -3495,7 +3556,7 @@ console.log('\nconfig.html — un quitado que el worker NO pudo hacer no se anun
     JSON.stringify(storage.scope))
 }
 
-console.log('\nconfig.html — skills-globales: la pestana Skills instala, actualiza y quita')
+titulo('config.html — skills-globales: la pestana Skills instala, actualiza y quita')
 {
   const pedidos = []
   const archivo = (base) => `${base}/.claude/skills/whatsapp-avisos/SKILL.md`
@@ -3626,7 +3687,7 @@ console.log('\nconfig.html — skills-globales: la pestana Skills instala, actua
     JSON.stringify({ n: claves.length, sinPt }))
 }
 
-console.log('\nconfig.html — T12: el catalogo de proyectos se busca, se acepta y se quita')
+titulo('config.html — T12: el catalogo de proyectos se busca, se acepta y se quita')
 {
   const PROPUESTAS = [{ id: 'gama-demo', name: 'Gama Demo', path: '/srv/ejemplo/gama-demo' }]
   const pedidos = []
@@ -3721,7 +3782,7 @@ console.log('\nconfig.html — T12: el catalogo de proyectos se busca, se acepta
     doc.getElementById('projects-wrap').textContent)
 }
 
-console.log('\nconfig.html — T12: un fallo al buscar se dice, y sin proyectos el selector lo explica')
+titulo('config.html — T12: un fallo al buscar se dice, y sin proyectos el selector lo explica')
 {
   const { doc } = await montar('config.html', {
     projectsStatus: { at: new Date().toISOString(), ok: false, proposals: [],
@@ -3763,7 +3824,7 @@ console.log('\nconfig.html — T12: un fallo al buscar se dice, y sin proyectos 
       sinNuevos.doc.getElementById('projects-status').textContent))
 }
 
-console.log('\nconfig.html — T13: lo de antes se conserva y un proyecto quitado no se pierde al editar')
+titulo('config.html — T13: lo de antes se conserva y un proyecto quitado no se pierde al editar')
 {
   const storage = {
     projects: [PROYECTOS_PRUEBA[0]],
@@ -3823,7 +3884,7 @@ console.log('\nconfig.html — T13: lo de antes se conserva y un proyecto quitad
     JSON.stringify(storage.scope))
 }
 
-console.log('\nconfig.html — T13: los modos se llaman distinto en cada idioma')
+titulo('config.html — T13: los modos se llaman distinto en cada idioma')
 {
   const nombres = async (idioma) => {
     const { doc } = await montar('config.html', {}, idioma)
@@ -3838,7 +3899,7 @@ console.log('\nconfig.html — T13: los modos se llaman distinto en cada idioma'
     /^Pergunto antes/.test(pt.borrador) && /^Automatico/.test(pt.responder), JSON.stringify(pt))
 }
 
-console.log('\nconfig.html — T12/T13: los textos nuevos existen en los tres idiomas')
+titulo('config.html — T12/T13: los textos nuevos existen en los tres idiomas')
 {
   const { window } = await montar('config.html')
   const S = window.STRINGS
@@ -3858,7 +3919,7 @@ console.log('\nconfig.html — T12/T13: los textos nuevos existen en los tres id
     `sin portugues = ${JSON.stringify(sinPt)}`)
 }
 
-console.log('\nconfig.html — las traducciones de desvincular estan en los tres idiomas')
+titulo('config.html — las traducciones de desvincular estan en los tres idiomas')
 {
   const { window } = await montar('config.html')
   const S = window.STRINGS
@@ -3876,7 +3937,7 @@ console.log('\nconfig.html — las traducciones de desvincular estan en los tres
     `sin portugues = ${JSON.stringify(sinPt)}`)
 }
 
-console.log('\nconfig.html — las traducciones de la espera larga y "Comprobar ahora" ' +
+titulo('config.html — las traducciones de la espera larga y "Comprobar ahora" ' +
   'estan en los tres idiomas')
 {
   const { window } = await montar('config.html')
@@ -3901,7 +3962,7 @@ console.log('\nconfig.html — las traducciones de la espera larga y "Comprobar 
 // `r.pending` es de la ULTIMA CORRIDA y la lista se pinta con `activity.pending`, que
 // se actualiza en cada sync. Un panel que se contradice consigo mismo no se cree ni
 // cuando acierta.
-console.log('\nactivity.html — la cabecera no puede contradecir a la lista')
+titulo('activity.html — la cabecera no puede contradecir a la lista')
 {
   const pendientes = [
     { stanzaId: 'M1', date: '2026-09-23 17:35', chat: 'Equipo Operaciones',
@@ -3933,7 +3994,7 @@ console.log('\nactivity.html — la cabecera no puede contradecir a la lista')
     vacio.doc.getElementById('runline').textContent)
 }
 
-console.log('\nactivity.html — dice si la linea esta viva y sobre cuanto actua')
+titulo('activity.html — dice si la linea esta viva y sobre cuanto actua')
 {
   const base = { pending: [], recent: [], running: false, syncedAt: '2026-09-23 17:41',
     mapped: 1, authorized: 1,
@@ -3985,7 +4046,7 @@ console.log('\nactivity.html — dice si la linea esta viva y sobre cuanto actua
 }
 
 // ───────── "Linea conectada" con el mismo criterio de vida que el panel de config ─────────
-console.log('\nactivity.html — "linea conectada" solo con latido fresco')
+titulo('activity.html — "linea conectada" solo con latido fresco')
 {
   const base = { pending: [], recent: [], running: false, syncedAt: '2026-09-23 17:41',
     mapped: 1, authorized: 1 }
@@ -4027,7 +4088,7 @@ console.log('\nactivity.html — "linea conectada" solo con latido fresco')
     JSON.stringify([S.es.lineaSinSenal, S.en.lineaSinSenal, S.pt && S.pt.lineaSinSenal]))
 }
 
-console.log('\nactivity.html — T9: tras cambiar de numero, la actividad del anterior no se pinta')
+titulo('activity.html — T9: tras cambiar de numero, la actividad del anterior no se pinta')
 {
   // Lo que se vio en vivo con +573000000012 recien vinculado: "actua sobre 3 de 306",
   // avisos y "lo ultimo que hizo" del numero viejo, y "la revision arranco y no volvio
@@ -4129,7 +4190,7 @@ const buscar = (doc, texto) => {
 const visibles = (doc) => [...doc.querySelectorAll('#board-body .card[data-case]')]
   .map((n) => n.dataset.case)
 
-console.log('\nactivity.html — tablero: es lo que se ve al abrir')
+titulo('activity.html — tablero: es lo que se ve al abrir')
 {
   const { doc } = await montar('activity.html', { board: tablero([tarjeta()]) }, 'es-419')
   await espera()
@@ -4140,7 +4201,7 @@ console.log('\nactivity.html — tablero: es lo que se ve al abrir')
   ok('releer lo deja ahi', !!doc.querySelector('.card[data-case="1"]'))
 }
 
-console.log('\nactivity.html — la excepcion solo es una necesidad en Decision')
+titulo('activity.html — la excepcion solo es una necesidad en Decision')
 {
   const respondido = tarjeta({ case_id: 7, stage: 'respondido', exceptions: ['commitment'],
     proposal: null, actions: ['cerrar', 'reabrir'] })
@@ -4157,7 +4218,7 @@ console.log('\nactivity.html — la excepcion solo es una necesidad en Decision'
     !/Necesita su decision/.test(abrirDetalle(doc, 7).textContent))
 }
 
-console.log('\nactivity.html — la linea de arriba cuenta casos, no la cola vieja')
+titulo('activity.html — la linea de arriba cuenta casos, no la cola vieja')
 {
   const AHORA = new Date().toISOString().slice(0, 16).replace('T', ' ')
   const actividad = { syncedAt: AHORA, running: false, pending: [], recent: [],
@@ -4241,7 +4302,7 @@ console.log('\nactivity.html — la linea de arriba cuenta casos, no la cola vie
   linea(pt))
 }
 
-console.log('\nactivity.html — la historia marca cada reapertura')
+titulo('activity.html — la historia marca cada reapertura')
 {
   const ev = (de, a, actor, ms) => ({ de, a, actor, at: hace(ms) })
   const reabierta = tarjeta({ case_id: 9, stage: 'recibido', proposal: null, exceptions: [],
@@ -4277,7 +4338,7 @@ console.log('\nactivity.html — la historia marca cada reapertura')
     && ds.querySelectorAll('.det-hist li').length === 2)
 }
 
-console.log('\nactivity.html — una propuesta escalar sin texto dice por que')
+titulo('activity.html — una propuesta escalar sin texto dice por que')
 {
   const escalar = tarjeta({ case_id: 11, stage: 'decision', exceptions: ['credential', 'commitment'],
     proposal: { tipo: 'escalar', texto: null, version: 'v-esc' },
@@ -4303,7 +4364,7 @@ console.log('\nactivity.html — una propuesta escalar sin texto dice por que')
     && !abrirDetalle(conTexto.doc, 12).querySelector('.det-escalar'))
 }
 
-console.log('\nactivity.html — tablero: columnas')
+titulo('activity.html — tablero: columnas')
 {
   const cards = [
     tarjeta({ case_id: 1, stage: 'decision' }),
@@ -4360,7 +4421,7 @@ console.log('\nactivity.html — tablero: columnas')
     !doc.querySelector('.col[data-stage="trabajo"] .col-more'))
 }
 
-console.log('\nactivity.html — tablero: la fila de etapas filtra')
+titulo('activity.html — tablero: la fila de etapas filtra')
 {
   const cards = [
     tarjeta({ case_id: 1, stage: 'decision' }),
@@ -4403,7 +4464,7 @@ console.log('\nactivity.html — tablero: la fila de etapas filtra')
     !sin.doc.querySelector('#board-chips button[data-etapa="decision"]').classList.contains('fuerte'))
 }
 
-console.log('\nactivity.html — tablero: buscar por numero, titulo o chat')
+titulo('activity.html — tablero: buscar por numero, titulo o chat')
 {
   const cards = [
     tarjeta({ case_id: 1, title: 'Piden descuento en la renovación' }),
@@ -4445,7 +4506,7 @@ console.log('\nactivity.html — tablero: buscar por numero, titulo o chat')
   ok('buscar no escribe nada en storage', enviados.every((e) => e.action !== 'storage.set'))
 }
 
-console.log('\nactivity.html — tablero: Lista y Tablero')
+titulo('activity.html — tablero: Lista y Tablero')
 {
   const cards = [
     tarjeta({ case_id: 1 }),
@@ -4478,7 +4539,7 @@ console.log('\nactivity.html — tablero: Lista y Tablero')
     doc.getElementById('board-list').hidden)
 }
 
-console.log('\nactivity.html — tablero: la tarjeta')
+titulo('activity.html — tablero: la tarjeta')
 {
   const ticket = 'ACM-42'
   const board = tablero([
@@ -4546,7 +4607,7 @@ console.log('\nactivity.html — tablero: la tarjeta')
     !nulos.doc.querySelector('.card .card-exc') && !nulos.doc.querySelector('.card .card-prio'))
 }
 
-console.log('\nactivity.html — tablero: el detalle del caso')
+titulo('activity.html — tablero: el detalle del caso')
 {
   const board = tablero([tarjeta({ ticket: 'ACM-42' }),
     tarjeta({ case_id: 2, stage: 'trabajo', exceptions: [], proposal: null, title: 'Otro caso' })])
@@ -4613,7 +4674,7 @@ console.log('\nactivity.html — tablero: el detalle del caso')
   ok('sin `events` no hay historia vacia', !abrirDetalle(doc, 1).querySelector('.det-hist'))
 }
 
-console.log('\nactivity.html — tablero: texto de clientes, nunca HTML')
+titulo('activity.html — tablero: texto de clientes, nunca HTML')
 {
   const hostil = '<img src=x onerror="window.__xss=1"><b>negrita</b>'
   const board = tablero([tarjeta({ title: hostil, chat_name: hostil, summary: hostil,
@@ -4647,7 +4708,7 @@ const mensajeDe = (doc, caso) =>
   doc.querySelector(`.card[data-case="${caso}"] .card-msg`) ||
   doc.querySelector(`#board-detail[data-case="${caso}"] .card-msg`)
 
-console.log('\nactivity.html — tablero: que botones ofrece cada caso (T6)')
+titulo('activity.html — tablero: que botones ofrece cada caso (T6)')
 {
   // Solo lo que la tarjeta trae en `actions` Y vale en su etapa. Un boton que el worker va
   // a rechazar siempre es un boton que no hace nada, y eso esta prohibido.
@@ -4752,13 +4813,8 @@ const abrirConWorker = async (cards, worker, extra = {}, idioma = 'es-419') => {
   await espera()
   return { ...m, storage }
 }
-const hastaPanel = async (cond, ms = 6000) => {
-  const fin = Date.now() + ms
-  while (Date.now() < fin) { if (cond()) return true; await new Promise((r) => setTimeout(r, 50)) }
-  return false
-}
 
-console.log('\nactivity.html — un caso es un pedido: "Caso anterior"')
+titulo('activity.html — un caso es un pedido: "Caso anterior"')
 {
   const anterior = tarjeta({ case_id: 30, stage: 'respondido', proposal: null, exceptions: [],
     actions: ['cerrar', 'reabrir'], title: 'Pedido de la manana' })
@@ -4784,7 +4840,7 @@ console.log('\nactivity.html — un caso es un pedido: "Caso anterior"')
   ok('en portugues', /Caso anterior/.test(abrirDetalle(pt.doc, 31).textContent))
 }
 
-console.log('\nactivity.html — tablero: Autorizar')
+titulo('activity.html — tablero: Autorizar')
 {
   const escalado = tarjeta({ case_id: 21, stage: 'decision', exceptions: ['credential', 'commitment'],
     proposal: { tipo: 'escalar', texto: null, version: 'v-esc' },
@@ -4828,7 +4884,7 @@ console.log('\nactivity.html — tablero: Autorizar')
     abrirDetalle(pt.doc, 21).querySelector('button[data-accion="autorizar"]')?.textContent || ''))
 }
 
-console.log('\nactivity.html — tablero: Enviar, de punta a punta')
+titulo('activity.html — tablero: Enviar, de punta a punta')
 {
   // El worker tarda: es lo que hace un envio de verdad, y el estado "en vuelo" es lo que se mira.
   const w = conWorker({ ok: true, code: 'enviado' }, { demoraMs: 600 })
@@ -4878,7 +4934,7 @@ console.log('\nactivity.html — tablero: Enviar, de punta a punta')
     /Enviado/.test(n.doc.querySelector('#board-detail .card-msg')?.textContent || '')))
 }
 
-console.log('\nactivity.html — retenidos fuera de un caso: el dueno los aprueba o los cancela')
+titulo('activity.html — retenidos fuera de un caso: el dueno los aprueba o los cancela')
 {
   // approve-solo-dueno: el aviso de la sesion de un proyecto que el piso freno no es de
   // ningun caso. El tablero lo lista con su texto y su motivo, y el dueno lo aprueba (por el
@@ -4945,7 +5001,7 @@ console.log('\nactivity.html — retenidos fuera de un caso: el dueno los aprueb
   }
 }
 
-console.log('\nactivity.html — los avisos al dueno que no salieron (linea-viva-2, W4)')
+titulo('activity.html — los avisos al dueno que no salieron (linea-viva-2, W4)')
 {
   // Un aviso de aprobacion o de bloqueo que `wa-send` nego, o que vencio sin salir, solo
   // quedaba en la base. El tablero (`notices_failed`) lo trae mientras el caso siga donde lo
@@ -4995,7 +5051,7 @@ console.log('\nactivity.html — los avisos al dueno que no salieron (linea-viva
   }
 }
 
-console.log('\nactivity.html — tablero: cada error se dice, en su idioma')
+titulo('activity.html — tablero: cada error se dice, en su idioma')
 {
   const CODIGOS = ['E_ARGS', 'E_NOT_FOUND', 'E_STAGE', 'E_NOT_APPROVED', 'E_VERSION', 'E_EXCEPTION',
     'E_BUSY', 'E_NOT_OWNER', 'accion-invalida', 'send-denied', 'send-needs-approval', 'send-no-transport',
@@ -5062,7 +5118,7 @@ console.log('\nactivity.html — tablero: cada error se dice, en su idioma')
     JSON.stringify(w2.pedidos))
 }
 
-console.log('\nactivity.html — tablero: sin respuesta del plugin')
+titulo('activity.html — tablero: sin respuesta del plugin')
 {
   const w = conWorker(null)
   const { doc, window, storage } = await abrirConWorker([tarjeta()], w)
@@ -5078,7 +5134,7 @@ console.log('\nactivity.html — tablero: sin respuesta del plugin')
   ok('el boton vuelve', !botonTarjeta(doc, 1, 'enviar').disabled)
 }
 
-console.log('\nactivity.html — tablero: un escalar con texto para el cliente (WAINBOX-57)')
+titulo('activity.html — tablero: un escalar con texto para el cliente (WAINBOX-57)')
 {
   // La tarjeta trae aparte el texto para el cliente (`texto`) y la pregunta al dueno
   // (`pregunta`): el texto es lo que Enviar manda y lo que el editor trae; la pregunta se
@@ -5112,7 +5168,7 @@ console.log('\nactivity.html — tablero: un escalar con texto para el cliente (
     .test(d2.querySelector('.det-escalar')?.textContent || ''), d2.innerHTML.slice(0, 400))
 }
 
-console.log('\nactivity.html — tablero: Editar y enviar')
+titulo('activity.html — tablero: Editar y enviar')
 {
   const w = conWorker({ ok: true, code: 'enviado' })
   const { doc, window } = await abrirConWorker([tarjeta()], w)
@@ -5154,7 +5210,7 @@ console.log('\nactivity.html — tablero: Editar y enviar')
     w.pedidos.length === 1)
 }
 
-console.log('\nactivity.html — tablero: Ejecutar, Reclasificar, Cerrar y Reabrir')
+titulo('activity.html — tablero: Ejecutar, Reclasificar, Cerrar y Reabrir')
 {
   const w = conWorker({ ok: true, code: 'hecho' })
   const trabajo = tarjeta({ proposal: { tipo: 'trabajar', texto: 'Revisar el modulo', version: 'abc' } })
@@ -5199,7 +5255,7 @@ console.log('\nactivity.html — tablero: Ejecutar, Reclasificar, Cerrar y Reabr
   ok('ninguno de esos pedidos lleva actor', w.pedidos.every((p) => !('actor' in p)), JSON.stringify(w.pedidos))
 }
 
-console.log('\nactivity.html — tablero: lo aprobado y en cola')
+titulo('activity.html — tablero: lo aprobado y en cola')
 {
   const w = conWorker({ ok: true, code: 'aprobada' })
   const { doc } = await abrirConWorker([tarjeta({ stage: 'trabajo', actions: ['cerrar'],
@@ -5211,7 +5267,7 @@ console.log('\nactivity.html — tablero: lo aprobado y en cola')
   ok('y una que espera su decision no', !m.doc.querySelector('.card-aprobada'))
 }
 
-console.log('\nactivity.html — tablero: el despacho al agente del proyecto (T8)')
+titulo('activity.html — tablero: el despacho al agente del proyecto (T8)')
 {
   const desde = hace(12 * 60000)
   const board = tablero([
@@ -5260,7 +5316,7 @@ console.log('\nactivity.html — tablero: el despacho al agente del proyecto (T8
   ok('en ingles tambien', /Dispatched to Alfa Demo/.test(en.doc.querySelector('.card[data-case="1"] .card-despacho')?.textContent || ''))
 }
 
-console.log('\nactivity.html — tablero: texto de clientes en el editor y en los mensajes, nunca HTML')
+titulo('activity.html — tablero: texto de clientes en el editor y en los mensajes, nunca HTML')
 {
   const hostil = '<img src=x onerror="window.__xss2=1"><b>negrita</b>'
   const w = conWorker({ ok: false, code: hostil })
@@ -5276,7 +5332,7 @@ console.log('\nactivity.html — tablero: texto de clientes en el editor y en lo
     m.window.__xss2 === undefined && m.doc.querySelector('.card-msg').textContent.includes('<img'))
 }
 
-console.log('\nactivity.html — tablero: textos de las acciones (tres idiomas)')
+titulo('activity.html — tablero: textos de las acciones (tres idiomas)')
 {
   const { window } = await montar('activity.html')
   const S = window.STRINGS
@@ -5296,7 +5352,7 @@ console.log('\nactivity.html — tablero: textos de las acciones (tres idiomas)'
     JSON.stringify([S.es.acEnviar, S.es.acEditar, S.es.acEjecutar]))
 }
 
-console.log('\nactivity.html — tablero: estados vacios')
+titulo('activity.html — tablero: estados vacios')
 {
   const vacioDe = (doc) => doc.getElementById('board-empty')
   const sin = await abrirTablero({})
@@ -5337,7 +5393,7 @@ console.log('\nactivity.html — tablero: estados vacios')
     !!vieja.doc.querySelector('#board-synced .vieja'), vieja.doc.getElementById('board-synced').innerHTML)
 }
 
-console.log('\nactivity.html — tablero: cada numero, su tablero (T9)')
+titulo('activity.html — tablero: cada numero, su tablero (T9)')
 {
   const ajena = tarjeta({ case_id: 7, account: 'pn:573000000013', title: 'Caso de otra linea' })
   const mia = tarjeta({ case_id: 8, account: 'pn:573000000012', title: 'Caso de esta linea' })
@@ -5353,7 +5409,7 @@ console.log('\nactivity.html — tablero: cada numero, su tablero (T9)')
   ok('sin numero conocido no se filtra nada', sinLinea.doc.querySelectorAll('.card').length === 2)
 }
 
-console.log('\nactivity.html — tablero: textos largos')
+titulo('activity.html — tablero: textos largos')
 {
   const largo = 'Texto muy largo sin fin '.repeat(40)
   const cards = [tarjeta({ title: largo, summary: largo,
@@ -5369,7 +5425,7 @@ console.log('\nactivity.html — tablero: textos largos')
   ok('no queda el viejo "Ver todo"', !doc.querySelector('.card-more'))
 }
 
-console.log('\nactivity.html — tablero: tres idiomas')
+titulo('activity.html — tablero: tres idiomas')
 {
   const board = tablero([tarjeta({ ticket: 'ACM-42' }), tarjeta({ case_id: 2, stage: 'bloqueado',
     blocked_reason: 'x', exceptions: [] })])
@@ -5427,7 +5483,7 @@ console.log('\nactivity.html — tablero: tres idiomas')
     JSON.stringify(sinFrase))
 }
 
-console.log('\nactivity.html — tablero: lo que era la cola, con Atender ahora e Ignorar')
+titulo('activity.html — tablero: lo que era la cola, con Atender ahora e Ignorar')
 {
   const recibido = tarjeta({ case_id: 4, stage: 'recibido', proposal: null, exceptions: [],
     title: 'Nota de voz', actions: ['atender', 'ignorar', 'reclasificar', 'cerrar', 'proyecto'] })
@@ -5471,7 +5527,7 @@ console.log('\nactivity.html — tablero: lo que era la cola, con Atender ahora 
     !e.doc.querySelector('#board-detail button[data-accion="ignorar"]'))
 }
 
-console.log('\nactivity.html — tablero: Atender ahora dice si el agente salio')
+titulo('activity.html — tablero: Atender ahora dice si el agente salio')
 {
   const caso = () => tarjeta({ case_id: 4, stage: 'recibido', proposal: null, exceptions: [],
     title: 'Nota de voz', actions: ['atender', 'ignorar', 'reclasificar', 'cerrar', 'proyecto'] })
@@ -5530,7 +5586,7 @@ console.log('\nactivity.html — tablero: Atender ahora dice si el agente salio'
     /proxima corrida/.test(raro?.textContent || ''), raro?.textContent)
 }
 
-console.log('\nconfig.html — la cuenta de Claude del bot')
+titulo('config.html — la cuenta de Claude del bot')
 {
   const CUENTAS = [
     { id: 'cuenta-bot', email: 'bot@example.invalid', authenticated: true, active: false, used: 20 },
@@ -5606,7 +5662,7 @@ console.log('\nconfig.html — la cuenta de Claude del bot')
     /Automatic/.test((opciones(en.doc)[0] || [])[1]), JSON.stringify(opciones(en.doc)))
 }
 
-console.log('\nactivity.html — tablero: si no pude lanzar al agente, se dice')
+titulo('activity.html — tablero: si no pude lanzar al agente, se dice')
 {
   const AHORA = new Date().toISOString().slice(0, 16).replace('T', ' ')
   const actividad = { syncedAt: AHORA, running: false, pending: [], recent: [],
@@ -5684,7 +5740,7 @@ console.log('\nactivity.html — tablero: si no pude lanzar al agente, se dice')
     nota(pt, 5)?.textContent)
 }
 
-console.log('\nactivity.html — tablero: con que cuenta de Claude, si no fue la del bot')
+titulo('activity.html — tablero: con que cuenta de Claude, si no fue la del bot')
 {
   const AHORA = new Date().toISOString().slice(0, 16).replace('T', ' ')
   const actividad = { syncedAt: AHORA, running: false, pending: [], recent: [],
@@ -5729,7 +5785,7 @@ console.log('\nactivity.html — tablero: con que cuenta de Claude, si no fue la
     texto(en, 9))
 }
 
-console.log('\nactivity.html — tablero: el proyecto del caso, a mano')
+titulo('activity.html — tablero: el proyecto del caso, a mano')
 {
   const caso = tarjeta({ case_id: 6, stage: 'clasificado', proposal: null, exceptions: [],
     project: { id: 'alfa-demo', name: 'Alfa Demo' },
@@ -5795,7 +5851,7 @@ console.log('\nactivity.html — tablero: el proyecto del caso, a mano')
     detalle(sinCat.doc).textContent.slice(0, 300))
 }
 
-console.log('\nactivity.html — tablero: lo que hizo el agente, en la historia del caso')
+titulo('activity.html — tablero: lo que hizo el agente, en la historia del caso')
 {
   const caso = tarjeta({ case_id: 3, events: [
     { de: null, a: 'recibido', actor: 'automatizacion', at: hace(40 * 60000) },
@@ -5814,7 +5870,7 @@ console.log('\nactivity.html — tablero: lo que hizo el agente, en la historia 
     /otro/.test(filas[4]), filas[4])
 }
 
-console.log('\nactivity.html — T14: la historia dice lo que paso por WhatsApp')
+titulo('activity.html — T14: la historia dice lo que paso por WhatsApp')
 {
   const caso = tarjeta({ case_id: 5, events: [
     { de: null, a: 'recibido', actor: 'automatizacion', que: 'message', at: hace(50 * 60000) },
@@ -5836,7 +5892,7 @@ console.log('\nactivity.html — T14: la historia dice lo que paso por WhatsApp'
   }
 }
 
-console.log('\nactivity.html — casos-cli K5: una nota se lee en la historia')
+titulo('activity.html — casos-cli K5: una nota se lee en la historia')
 {
   const caso = tarjeta({ case_id: 6, events: [
     { de: null, a: 'recibido', actor: 'automatizacion', que: 'message', at: hace(50 * 60000) },
@@ -5856,7 +5912,7 @@ console.log('\nactivity.html — casos-cli K5: una nota se lee en la historia')
   }
 }
 
-console.log('\nactivity.html — casos-cli K7: una edicion dice que cambio')
+titulo('activity.html — casos-cli K7: una edicion dice que cambio')
 {
   const caso = tarjeta({ case_id: 7, events: [
     { de: null, a: 'recibido', actor: 'automatizacion', que: 'message', at: hace(50 * 60000) },
@@ -5871,7 +5927,7 @@ console.log('\nactivity.html — casos-cli K7: una edicion dice que cambio')
   }
 }
 
-console.log('\nactivity.html — casos-cli K10: recordatorios y posponer en la tarjeta')
+titulo('activity.html — casos-cli K10: recordatorios y posponer en la tarjeta')
 {
   const pronto = new Date(Date.now() + 2 * 3600000).toISOString()
   const caso = tarjeta({ case_id: 8, reminder: { at: pronto, snoozed_until: null }, events: [
@@ -5909,7 +5965,7 @@ console.log('\nactivity.html — casos-cli K10: recordatorios y posponer en la t
   ok('una tarjeta sin recordatorio no lleva la linea', !doc.querySelector('.card-recordatorio'))
 }
 
-console.log('\nactivity.html — seguimiento-casos S4: lo que espera el caso y su marca de cierre')
+titulo('activity.html — seguimiento-casos S4: lo que espera el caso y su marca de cierre')
 {
   const pronto = new Date(Date.now() + 24 * 3600000).toISOString()
   const espera = tarjeta({ case_id: 11, stage: 'respondido',
@@ -5992,7 +6048,7 @@ console.log('\nactivity.html — seguimiento-casos S4: lo que espera el caso y s
   ok('una tarjeta sin seguimiento no lleva la linea', !doc.querySelector('.card-seguimiento'))
 }
 
-console.log('\nactivity.html — T22: la historia dice que paso, y agrupa lo repetido')
+titulo('activity.html — T22: la historia dice que paso, y agrupa lo repetido')
 {
   const caso = tarjeta({ case_id: 4, events: [
     { de: null, a: 'recibido', actor: 'automatizacion', que: 'message', at: hace(50 * 60000) },
@@ -6034,7 +6090,7 @@ console.log('\nactivity.html — T22: la historia dice que paso, y agrupa lo rep
     /llego un mensaje/.test(filas[0]), filas[0])
 }
 
-console.log('\nactivity.html — tablero: la ultima corrida del agente, en una linea')
+titulo('activity.html — tablero: la ultima corrida del agente, en una linea')
 {
   const AHORA = new Date().toISOString().slice(0, 16).replace('T', ' ')
   const { doc } = await abrirTablero({ board: tablero([tarjeta()]), activity: { syncedAt: AHORA,
@@ -6045,7 +6101,7 @@ console.log('\nactivity.html — tablero: la ultima corrida del agente, en una l
     /Ultima revision/.test(linea.textContent), linea.textContent)
 }
 
-console.log('\nactivity.html — tablero: composicion (los anchos los mira shots)')
+titulo('activity.html — tablero: composicion (los anchos los mira shots)')
 {
   const html = readFileSync(join(root, 'activity.html'), 'utf8')
   ok('hay un corte a 768 px que pasa el tablero a lista por etapa',
@@ -6062,7 +6118,7 @@ console.log('\nactivity.html — tablero: composicion (los anchos los mira shots
 // prueba es lo que importa de verdad: que el aviso este en los tres idiomas y diga a
 // donde va, que venga apagado, que la llave viaje por el canal del worker y NUNCA vuelva
 // a la pantalla, y que cada falla se diga.
-console.log('\nconfig.html — Jev: el aviso esta en los tres idiomas y dice a donde va el texto')
+titulo('config.html — Jev: el aviso esta en los tres idiomas y dice a donde va el texto')
 {
   for (const [lang, apagado, masc] of [
     ['es-419', /apagado de f/i, /enmascaran/i],
@@ -6086,7 +6142,7 @@ console.log('\nconfig.html — Jev: el aviso esta en los tres idiomas y dice a d
   }
 }
 
-console.log('\nconfig.html — Jev: de usted y sin tildes ni enie, como el resto del panel')
+titulo('config.html — Jev: de usted y sin tildes ni enie, como el resto del panel')
 {
   const { window } = await montar('config.html')
   const S = window.STRINGS
@@ -6124,7 +6180,7 @@ function trabajadorJev (resultado) {
 
 const LLAVE_JEV = 'tsk-FALSA-0000000000000000'
 
-console.log('\nconfig.html — Jev: guardar la llave va por el worker y no vuelve a la pantalla')
+titulo('config.html — Jev: guardar la llave va por el worker y no vuelve a la pantalla')
 {
   const storage = {}
   const { doc, window } = await montar('config.html', storage, 'es-419',
@@ -6147,7 +6203,7 @@ console.log('\nconfig.html — Jev: guardar la llave va por el worker y no vuelv
 
   doc.getElementById('jev-key').value = `  ${LLAVE_JEV}  `
   doc.getElementById('jev-save-key').click()
-  await new Promise((r) => setTimeout(r, 3500))
+  await hastaPanel(() => doc.getElementById('said-jev-key').textContent.includes('✓') && /llave guardada/i.test(doc.getElementById('jev-status').textContent), 10000)
   const pedido = storage.jevRequestVisto
   ok('manda el pedido a la clave del worker, con id y marca de tiempo',
     !!pedido && pedido.action === 'guardar-llave' && typeof pedido.id === 'string' &&
@@ -6174,7 +6230,7 @@ console.log('\nconfig.html — Jev: guardar la llave va por el worker y no vuelv
   void window
 }
 
-console.log('\nconfig.html — Jev: encender, quitar la llave y lo que dice cada estado')
+titulo('config.html — Jev: encender, quitar la llave y lo que dice cada estado')
 {
   const storage = { jevStatus: { at: new Date().toISOString(), enabled: false, keySet: true,
     mirror: 'apagado' } }
@@ -6194,7 +6250,7 @@ console.log('\nconfig.html — Jev: encender, quitar la llave y lo que dice cada
     doc.getElementById('jev-status').textContent)
 
   doc.getElementById('jev-enabled').click()
-  await new Promise((r) => setTimeout(r, 3500))
+  await hastaPanel(() => /encendido.*llave guardada/i.test(doc.getElementById('jev-status').textContent), 10000)
   ok('encender manda activar con enabled verdadero',
     storage.jevRequestVisto && storage.jevRequestVisto.action === 'activar' &&
     storage.jevRequestVisto.enabled === true, JSON.stringify(storage.jevRequestVisto))
@@ -6203,7 +6259,7 @@ console.log('\nconfig.html — Jev: encender, quitar la llave y lo que dice cada
     doc.getElementById('jev-status').textContent)
 
   doc.getElementById('jev-remove-key').click()
-  await new Promise((r) => setTimeout(r, 3500))
+  await hastaPanel(() => /sin llave/i.test(doc.getElementById('jev-status').textContent), 10000)
   ok('quitar la llave manda quitar-llave',
     storage.jevRequestVisto && storage.jevRequestVisto.action === 'quitar-llave',
     JSON.stringify(storage.jevRequestVisto))
@@ -6214,7 +6270,7 @@ console.log('\nconfig.html — Jev: encender, quitar la llave y lo que dice cada
   ok('sin llave ya no se ofrece quitarla', doc.getElementById('jev-remove-key').hidden)
 }
 
-console.log('\nconfig.html — Jev: lo que falla se dice, y un archivo ajeno se explica')
+titulo('config.html — Jev: lo que falla se dice, y un archivo ajeno se explica')
 {
   const storage = { jevStatus: { at: new Date().toISOString(), enabled: true, keySet: true,
     mirror: 'ajeno' } }
@@ -6231,7 +6287,7 @@ console.log('\nconfig.html — Jev: lo que falla se dice, y un archivo ajeno se 
     usar ? `${usar.hidden} ${usar.textContent}` : 'no existe #jev-use-saved')
   doc.getElementById('jev-key').value = 'dos palabras'
   doc.getElementById('jev-save-key').click()
-  await new Promise((r) => setTimeout(r, 3500))
+  await hastaPanel(() => doc.getElementById('said-jev-key').className.includes('bad'), 10000)
   const dicho = doc.getElementById('said-jev-key')
   ok('una llave invalida se dice con la frase del panel, no con el codigo',
     dicho.className.includes('bad') && /no es v/i.test(dicho.textContent) &&
@@ -6240,7 +6296,7 @@ console.log('\nconfig.html — Jev: lo que falla se dice, y un archivo ajeno se 
     doc.getElementById('jev-key').value === 'dos palabras')
 }
 
-console.log('\nconfig.html — Jev: "Usar la llave guardada" reemplaza el archivo ajeno sin mostrar la llave')
+titulo('config.html — Jev: "Usar la llave guardada" reemplaza el archivo ajeno sin mostrar la llave')
 {
   const storage = { jevStatus: { at: new Date().toISOString(), enabled: true, keySet: true,
     mirror: 'ajeno' } }
@@ -6251,7 +6307,8 @@ console.log('\nconfig.html — Jev: "Usar la llave guardada" reemplaza el archiv
       return { ok: true, code: 'activado', mirror: 'activo', pedido: pedido.action }
     }))
   doc.getElementById('jev-use-saved').click()
-  await new Promise((r) => setTimeout(r, 3500))
+  await hastaPanel(() => doc.getElementById('said-jev-key').textContent.includes('✓') &&
+    doc.getElementById('jev-mirror-note').hidden, 10000)
   const pedido = storage.jevRequestVisto
   ok('el boton manda activar con enabled verdadero: lo mismo que encender el interruptor',
     !!pedido && pedido.action === 'activar' && pedido.enabled === true &&
@@ -6265,7 +6322,7 @@ console.log('\nconfig.html — Jev: "Usar la llave guardada" reemplaza el archiv
     doc.getElementById('said-jev-key').textContent)
 }
 
-console.log('\nconfig.html — Jev: archivo ajeno SIN llave guardada pide la llave, y no ofrece el boton')
+titulo('config.html — Jev: archivo ajeno SIN llave guardada pide la llave, y no ofrece el boton')
 {
   const storage = { jevStatus: { at: new Date().toISOString(), enabled: true, keySet: false,
     mirror: 'ajeno' } }
@@ -6279,7 +6336,7 @@ console.log('\nconfig.html — Jev: archivo ajeno SIN llave guardada pide la lla
 
 for (const [loc, nota, boton] of [['en', /already a saved key/i, /use the saved key/i],
   ['pt-BR', /ja ha uma chave salva/i, /usar a chave salva/i]]) {
-  console.log(`\nconfig.html — Jev: archivo ajeno con llave guardada, en ${loc}`)
+  titulo(`config.html — Jev: archivo ajeno con llave guardada, en ${loc}`)
   const storage = { jevStatus: { at: new Date().toISOString(), enabled: true, keySet: true,
     mirror: 'ajeno' } }
   const { doc } = await montar('config.html', storage, loc, trabajadorJev(() => ({ ok: true })))
@@ -6289,14 +6346,14 @@ for (const [loc, nota, boton] of [['en', /already a saved key/i, /use the saved 
     doc.getElementById('jev-use-saved').textContent)
 }
 
-console.log('\nconfig.html — Jev: si el worker no contesta, la llave no queda esperando en storage')
+titulo('config.html — Jev: si el worker no contesta, la llave no queda esperando en storage')
 {
   const storage = {}
   const { doc, window } = await montar('config.html', storage, 'es-419')
   window.VEREDICTO_ESPERA_MS = 400
   doc.getElementById('jev-key').value = LLAVE_JEV
   doc.getElementById('jev-save-key').click()
-  await new Promise((r) => setTimeout(r, 4500))
+  await hastaPanel(() => /no contest/i.test(doc.getElementById('said-jev-key').textContent), 10000)
   ok('el panel dice que el plugin no contesto',
     /no contest/i.test(doc.getElementById('said-jev-key').textContent),
     doc.getElementById('said-jev-key').textContent)
@@ -6306,7 +6363,7 @@ console.log('\nconfig.html — Jev: si el worker no contesta, la llave no queda 
     JSON.stringify(storage.jevRequest))
 }
 
-console.log('\nconfig.html — Avanzado: lo que el intervalo controla y cuando se transcribe')
+titulo('config.html — Avanzado: lo que el intervalo controla y cuando se transcribe')
 for (const [idioma, nombre, minuto, caso] of [
   ['es-419', 'ES', /cada minuto/i, /llegan a un caso/i],
   ['en', 'EN', /every minute/i, /reach a case/i],
@@ -6326,7 +6383,7 @@ for (const [idioma, nombre, minuto, caso] of [
     /(no transcribir|do not transcribe|nao transcrever)/i.test(voz), voz)
 }
 
-console.log('\nconfig.html — respuestas automaticas: acuse de recibo y saludo')
+titulo('config.html — respuestas automaticas: acuse de recibo y saludo')
 {
   const { doc, storage } = await montar('config.html', {
     chats: [{ jid: '1@g.us', name: 'Soporte Norte', kind: 'grupo' }] }, 'es-419')
@@ -6369,7 +6426,7 @@ console.log('\nconfig.html — respuestas automaticas: acuse de recibo y saludo'
     doc.getElementById('chat-ack-text').value === 'Recibido, lo vemos.' &&
     valorSeg(doc, 'chat-greeting') === 'off', `${valorSeg(doc, 'chat-ack')}`)
 }
-console.log('\nconfig.html — el primer mensaje (beta): modos, respaldo y ritmo')
+titulo('config.html — el primer mensaje (beta): modos, respaldo y ritmo')
 {
   const { doc, storage } = await montar('config.html', {
     chats: [{ jid: '1@g.us', name: 'Soporte Norte', kind: 'grupo' }] }, 'es-419')
@@ -6476,7 +6533,7 @@ for (const [idioma, nombre] of [['es-419', 'ES'], ['en', 'EN'], ['pt-BR', 'PT']]
 // Decision c del dueno (2026-10-05): el acuse no cae en medio de una conversacion. Un ajuste
 // global en minutos (0..240, 30 de fabrica, 0 lo apaga) en la clave plana `ackQuietMinutes`,
 // en texto como el resto, junto al acuse en la tarjeta de las respuestas automaticas.
-console.log('\nconfig.html — acuse-inteligente: el silencio del acuse')
+titulo('config.html — acuse-inteligente: el silencio del acuse')
 {
   const { doc, storage } = await montar('config.html', {}, 'es-419')
   await espera()
@@ -6570,7 +6627,7 @@ for (const [idioma, nombre, etiqueta, pista] of [
     /(grupo|group)/i.test(intro) && /(abre un caso|opens a case|abre um caso)/i.test(intro), intro)
 }
 
-console.log('\nactivity.html — un caso cerrado sin agente dice por que regla')
+titulo('activity.html — un caso cerrado sin agente dice por que regla')
 for (const [idioma, nombre, lead, regla] of [
   ['es-419', 'ES', /No requiere agente/, /grupo que no es para el asistente/],
   ['en', 'EN', /No agent needed/, /group chatter not meant for the assistant/i],
@@ -6596,7 +6653,7 @@ for (const [idioma, nombre, lead, regla] of [
     !abrirDetalle(doc, 6).querySelector('.card-noagent'))
 }
 
-console.log('\nactivity.html — un caso de un chat observar dice Solo leer')
+titulo('activity.html — un caso de un chat observar dice Solo leer')
 for (const [idioma, nombre, re] of [['es-419', 'ES', /Solo leer/], ['en', 'EN', /Read only/],
   ['pt-BR', 'PT', /So leitura/]]) {
   const c = tarjeta({ case_id: 8, stage: 'clasificado', proposal: null, exceptions: [],
@@ -6631,7 +6688,7 @@ async function clicReal (window, nodo, entre) {
   if (nodo.isConnected) nodo.dispatchEvent(new window.MouseEvent('click', opc))
 }
 
-console.log('\nactivity.html — tablero: el primer clic no se pierde por la recarga al tomar foco')
+titulo('activity.html — tablero: el primer clic no se pierde por la recarga al tomar foco')
 {
   const { window, doc } = await abrirTablero({ board: tablero([tarjeta({ case_id: 3 })]) })
   const card = doc.querySelector('.card[data-case="3"]')
@@ -6666,7 +6723,7 @@ console.log('\nactivity.html — tablero: el primer clic no se pierde por la rec
     await hastaPanel(() => w.pedidos.length === 1, 2000), JSON.stringify(w.pedidos))
 }
 
-console.log('\nactivity.html — tablero: lo que llega con el puntero apretado se pinta al soltar')
+titulo('activity.html — tablero: lo que llega con el puntero apretado se pinta al soltar')
 {
   const storage = { board: tablero([tarjeta({ case_id: 3 })]) }
   const { window, doc } = await abrirTablero(storage)
@@ -6745,7 +6802,7 @@ console.log('\nactivity.html — tablero: lo que llega con el puntero apretado s
     mensajeDe(doc, 4)?.textContent)
 }
 
-console.log('\nactivity.html — tablero: lo que depende del reloj se repinta aunque nada mas cambie')
+titulo('activity.html — tablero: lo que depende del reloj se repinta aunque nada mas cambie')
 /** Corre el reloj del panel `ms` hacia adelante (solo `Date.now`, que es lo que lee). */
 const adelantarReloj = (window, ms) => {
   const real = window.Date.now.bind(window.Date)
@@ -6827,7 +6884,7 @@ const TARJETAS_PERIODO = () => [
   terminada(7, 'cerrado', undefined, { updated_at: diasAtras(10) })
 ]
 
-console.log('\nactivity.html — I1: el periodo acota Respondido y Cerrado, nunca lo abierto')
+titulo('activity.html — I1: el periodo acota Respondido y Cerrado, nunca lo abierto')
 {
   const { doc } = await abrirTablero({ board: tablero(TARJETAS_PERIODO()) })
   ok('el periodo de fabrica es 7 dias', periodoApretado(doc) === '7d', periodoApretado(doc))
@@ -6872,7 +6929,7 @@ console.log('\nactivity.html — I1: el periodo acota Respondido y Cerrado, nunc
   ok('un periodo guardado que no existe deja el de fabrica', periodoApretado(doc) === '7d')
 }
 
-console.log('\nactivity.html — I1: las cuentas siguen al periodo')
+titulo('activity.html — I1: las cuentas siguen al periodo')
 {
   const board = tablero(TARJETAS_PERIODO(), {
     counts: cuentas({ decision: 1, respondido: 3, cerrado: 40 }),
@@ -6912,7 +6969,7 @@ console.log('\nactivity.html — I1: las cuentas siguen al periodo')
   ok('en la lista el periodo acota igual', visibles(doc).sort().join() === '1,2,3,5',
     visibles(doc).join())
 }
-console.log('\nactivity.html — I1: el periodo no pierde el primer clic')
+titulo('activity.html — I1: el periodo no pierde el primer clic')
 {
   const { window, doc } = await abrirTablero({ board: tablero(TARJETAS_PERIODO()) })
   const boton = doc.querySelector('#period button[data-periodo="all"]')
@@ -6934,7 +6991,7 @@ const enColumna = (doc, etapa) =>
   [...doc.querySelectorAll(`.col[data-stage="${etapa}"] .card[data-case]`)].map((n) => n.dataset.case)
 const botonMas = (doc, etapa) => doc.querySelector(`[data-stage="${etapa}"] button.col-mas`)
 
-console.log('\nactivity.html — I2: Respondido y Cerrado, de 20 en 20')
+titulo('activity.html — I2: Respondido y Cerrado, de 20 en 20')
 {
   const cards = [tarjeta({ case_id: 1 }), ...muchas('cerrado', 45), ...muchas('respondido', 22, 2000)]
   const { doc } = await abrirTablero({ board: tablero(cards) })
@@ -6994,7 +7051,7 @@ for (const [idioma, re] of [['en', /Show 20 more/], ['pt-BR', /Mostrar mais 20/]
     String(enColumna(doc, 'cerrado').length))
 }
 
-console.log('\nactivity.html — I2: cada columna se desplaza sola')
+titulo('activity.html — I2: cada columna se desplaza sola')
 {
   const { doc, window } = await abrirTablero({ board: tablero([tarjeta({ case_id: 1 }), ...muchas('cerrado', 45)]) })
   const cols = doc.getElementById('board-cols')
@@ -7012,7 +7069,7 @@ console.log('\nactivity.html — I2: cada columna se desplaza sola')
 // Un ajuste global en minutos (1..1440, 15 de fabrica) en la clave plana `slaMinutes`, en
 // texto como el resto: wa-scope la valida y la manda de vuelta en cada sync. Vive junto a las
 // respuestas automaticas, que son el primer contacto que mide.
-console.log('\nconfig.html — I4: la meta del primer contacto')
+titulo('config.html — I4: la meta del primer contacto')
 {
   const { doc, storage } = await montar('config.html', {}, 'es-419')
   await espera()
@@ -7092,7 +7149,7 @@ const azulejo = (doc, cual) => txt(doc, `#reports-body [data-metrica="${cual}"] 
 /** Un numero como lo escribe el idioma del panel (es-419 agrupa con coma; pt-BR con punto). */
 const comoEn = (tag, n, opc) => new Intl.NumberFormat(tag, opc).format(n).replace(/\s+/g, ' ')
 
-console.log('\nactivity.html — I5: Tablero e Informes son dos pestanas')
+titulo('activity.html — I5: Tablero e Informes son dos pestanas')
 {
   const { doc, enviados } = await abrirTablero({ board: tablero([tarjeta()]), reports: informeDeEjemplo() })
   const tabs = [...doc.querySelectorAll('[role="tablist"] [role="tab"]')]
@@ -7114,7 +7171,7 @@ console.log('\nactivity.html — I5: Tablero e Informes son dos pestanas')
     !doc.getElementById('view-board').hidden)
 }
 
-console.log('\nactivity.html — I5: los seis bloques, con 7 dias')
+titulo('activity.html — I5: los seis bloques, con 7 dias')
 {
   const { doc } = await abrirInformes({ board: tablero([tarjeta()]), reports: informeDeEjemplo() })
   ok('los siete bloques, cada uno con su definicion',
@@ -7187,7 +7244,7 @@ console.log('\nactivity.html — I5: los seis bloques, con 7 dias')
   ok('las tablas tienen encabezados', bloque(doc, 'proyectos').querySelectorAll('thead th').length === 7)
 }
 
-console.log('\nactivity.html — I5: el periodo manda en los informes')
+titulo('activity.html — I5: el periodo manda en los informes')
 {
   const { doc } = await abrirInformes({ board: tablero([tarjeta()]), reports: informeDeEjemplo() })
   apretarPeriodo(doc, 'today')
@@ -7207,7 +7264,7 @@ console.log('\nactivity.html — I5: el periodo manda en los informes')
     /Semana/.test(tiempo(doc, 'first_response').querySelector('.rep-grupo').getAttribute('title') || ''))
 }
 
-console.log('\nactivity.html — I5: lo vacio se dice')
+titulo('activity.html — I5: lo vacio se dice')
 {
   const { doc } = await abrirInformes({ board: tablero([tarjeta()]) })
   ok('sin la clave, dice que todavia no hay informes y cuando llegan',
@@ -7223,7 +7280,7 @@ console.log('\nactivity.html — I5: lo vacio se dice')
 // Medido en la maquina del dueno: el agente dejo de producir el 3 de octubre y Jev
 // siguio clasificando hasta el 9 —unos 70 veredictos `card`— sin que el panel dijera
 // nada. Los tiempos de la pestana seguian bien porque dejan de moverse, no empeoran.
-console.log('\nactivity.html — panel-urgente U5: la automatizacion detenida se ve')
+titulo('activity.html — panel-urgente U5: la automatizacion detenida se ve')
 {
   const { doc } = await abrirInformes({ board: tablero([tarjeta()]), reports: informeDeEjemplo() })
   ok('con el agente al dia, el bloque esta y no avisa nada',
@@ -7275,7 +7332,7 @@ console.log('\nactivity.html — panel-urgente U5: la automatizacion detenida se
   ok('sin datos: comparaciones sin base no se muestran', !doc.querySelector('#reports-body .rep-delta'))
 }
 
-console.log('\nactivity.html — I5: en ingles y portugues, con sus numeros')
+titulo('activity.html — I5: en ingles y portugues, con sus numeros')
 {
   const { doc } = await abrirInformes({ board: tablero([tarjeta()]), reports: informeDeEjemplo() }, 'en')
   ok('EN: los textos y los numeros en ingles', azulejo(doc, 'received') === '12,345' &&
@@ -7291,7 +7348,7 @@ console.log('\nactivity.html — I5: en ingles y portugues, con sus numeros')
     !/rep[A-Z][a-zA-Z]+/.test(txt(doc, '#view-reports')), txt(doc, '#view-reports').slice(0, 200))
 }
 
-console.log('\nactivity.html — I5: los informes no le roban el clic a nadie')
+titulo('activity.html — I5: los informes no le roban el clic a nadie')
 {
   const storage = { board: tablero([tarjeta()]), reports: informeDeEjemplo() }
   const { window, doc } = await abrirInformes(storage)
@@ -7337,7 +7394,7 @@ const conPortapapeles = (window, resultado = true) => {
 }
 const botonCsv = (doc) => doc.getElementById('reports-csv')
 
-console.log('\nactivity.html — I6: copiar los casos del periodo como CSV')
+titulo('activity.html — I6: copiar los casos del periodo como CSV')
 {
   const informe = informeDeEjemplo()
   const { window, doc } = await abrirInformes({ board: tablero([tarjeta()]), reports: informe })
@@ -7426,7 +7483,7 @@ for (const [idioma, enc, si] of [['en', 'Case,Chat,Created,First response (s),Re
 
 // ── Lo que encontro la revision de Informes y del tablero con periodo ──
 // Cada uno se vio de verdad (jsdom o captura) antes de arreglarlo.
-console.log('\nactivity.html — revision: un periodo sin nada no es un tablero vacio')
+titulo('activity.html — revision: un periodo sin nada no es un tablero vacio')
 {
   // Todo cerrado hace 3 dias, nada abierto y "Hoy" guardado: hay casos, solo que ninguno
   // en el periodo. Decir "Todavia no hay casos" es falso, y la barra no puede irse.
@@ -7450,7 +7507,7 @@ console.log('\nactivity.html — revision: un periodo sin nada no es un tablero 
     /Todavia no hay casos/.test(txt(doc, '#board-empty')) && doc.getElementById('board-bar').hidden)
 }
 
-console.log('\nactivity.html — revision: Informes tolera una clave rara y la de otra linea')
+titulo('activity.html — revision: Informes tolera una clave rara y la de otra linea')
 {
   const r = informeDeEjemplo()
   r.cases.push(null)
@@ -7471,7 +7528,7 @@ console.log('\nactivity.html — revision: Informes tolera una clave rara y la d
   ok('el de esta linea si', !!bloque(doc, 'ahora') && doc.getElementById('reports-empty').hidden)
 }
 
-console.log('\nactivity.html — revision: el aviso de Copiar CSV se anuncia')
+titulo('activity.html — revision: el aviso de Copiar CSV se anuncia')
 {
   const { window, doc } = await abrirInformes({ board: tablero([tarjeta()]), reports: informeDeEjemplo() })
   const region = doc.getElementById('reports-csv-msg')
@@ -7495,7 +7552,7 @@ console.log('\nactivity.html — revision: el aviso de Copiar CSV se anuncia')
     msg.getAttribute('role') === 'alert' && msg.classList.contains('mala'), msg.outerHTML)
 }
 
-console.log('\nactivity.html — revision: los ejes y los mapas caben')
+titulo('activity.html — revision: los ejes y los mapas caben')
 {
   const { doc } = await abrirInformes({ board: tablero([tarjeta()]), reports: informeDeEjemplo() })
   apretarPeriodo(doc, 'all')
@@ -7556,7 +7613,7 @@ const aLaVista = (n) => {
 const camposProyecto = (doc) => [doc.getElementById('workspace-search')].concat(
   [...doc.querySelectorAll('#workspace-more input[role="combobox"]')])
 
-console.log('\nconfig.html — proyectos-por-chat (M6): una conversacion con varios proyectos')
+titulo('config.html — proyectos-por-chat (M6): una conversacion con varios proyectos')
 await seccion(async () => {
   const storage = { projects: PROYECTOS_TRES,
     chats: [{ jid: '1@g.us', name: 'Soporte Norte', kind: 'grupo' }] }
@@ -7674,7 +7731,7 @@ await seccion(async () => {
     valorSeg(doc, 'chat-project-question') === 'auto', JSON.stringify(filasProyecto(doc)))
 })
 
-console.log('\nconfig.html — proyectos-por-chat (M6): las entradas de antes se leen como el CLI')
+titulo('config.html — proyectos-por-chat (M6): las entradas de antes se leen como el CLI')
 await seccion(async () => {
   const storage = {
     projects: PROYECTOS_TRES,
@@ -7741,7 +7798,7 @@ await seccion(async () => {
     storage.scope['33@g.us'].workspace === null, JSON.stringify(storage.scope['33@g.us']))
 })
 
-console.log('\nconfig.html — proyectos-por-chat (M6): cuantas horas espera la pregunta de proyecto')
+titulo('config.html — proyectos-por-chat (M6): cuantas horas espera la pregunta de proyecto')
 await seccion(async () => {
   const { doc, storage } = await montar('config.html', {}, 'es-419')
   await espera()
@@ -7776,7 +7833,7 @@ await seccion(async () => {
     guardada.doc.getElementById('pq-hours').value)
 })
 
-console.log('\nconfig.html — seguimiento-casos S5: los plazos del seguimiento')
+titulo('config.html — seguimiento-casos S5: los plazos del seguimiento')
 await seccion(async () => {
   const { doc, storage } = await montar('config.html', {}, 'es-419')
   await espera()
@@ -7849,7 +7906,7 @@ await seccion(async () => {
   ok('y en portugues propio', sinPt.length === 0, `sin portugues = ${JSON.stringify(sinPt)}`)
 })
 
-console.log('\nconfig.html — proyectos-por-chat (M6): los textos nuevos en los tres idiomas')
+titulo('config.html — proyectos-por-chat (M6): los textos nuevos en los tres idiomas')
 await seccion(async () => {
   const { window } = await montar('config.html')
   const S = window.STRINGS
@@ -7890,7 +7947,7 @@ const casoProyecto = (extra = {}) => tarjeta({ case_id: 7, stage: 'clasificado',
   exceptions: [], project: { id: 'beta-demo', name: 'Beta Demo' },
   actions: ['atender', 'ignorar', 'reclasificar', 'cerrar', 'proyecto'], ...extra })
 
-console.log('\nactivity.html — proyectos-por-chat (M6): el proyecto del caso, su porque y quien lo eligio')
+titulo('activity.html — proyectos-por-chat (M6): el proyecto del caso, su porque y quien lo eligio')
 await seccion(async () => {
   const w = conWorker({ ok: true, code: 'proyecto-cambiado' })
   const { doc, window } = await abrirConWorker([casoProyecto()], w, { projects: PROYECTOS_TRES,
@@ -7989,7 +8046,7 @@ await seccion(async () => {
   ok('en portugues', /regra/i.test(pt) && /facturacion/.test(pt), pt)
 })
 
-console.log('\nactivity.html — proyectos-por-chat (M6): la pregunta "A o B?" abierta')
+titulo('activity.html — proyectos-por-chat (M6): la pregunta "A o B?" abierta')
 await seccion(async () => {
   const pregunta = (extra = {}) => ({ candidates: [{ id: 'alfa-demo', name: 'Alfa Demo' },
     { id: 'beta-demo', name: 'Beta Demo' }], to: 'writer', text: 'Es sobre la tienda o sobre el portal?',
@@ -8036,7 +8093,7 @@ await seccion(async () => {
     detalle(pt.doc).querySelector('.det-pregunta')?.textContent)
 })
 
-console.log('\nactivity.html — proyectos-por-chat (M6): los motivos y eventos nuevos en palabras')
+titulo('activity.html — proyectos-por-chat (M6): los motivos y eventos nuevos en palabras')
 await seccion(async () => {
   const caso = casoProyecto({ case_id: 31, events: [
     { de: 'decision', a: 'decision', actor: 'automatizacion', que: 'work_waits', args: ['no_project'], at: hace(9 * 60000) },
@@ -8068,7 +8125,7 @@ await seccion(async () => {
     /pergunta de projeto: a quem escreveu/.test(pt) && /respondeu a pergunta de projeto/.test(pt), pt)
 })
 
-console.log('\nactivity.html — proyectos-por-chat (M6): el primer clic con la ruta del proyecto')
+titulo('activity.html — proyectos-por-chat (M6): el primer clic con la ruta del proyecto')
 await seccion(async () => {
   // La ruta viaja dentro del tablero: el mismo tablero no reconstruye nada, y una ruta que
   // cambia con el puntero apretado se pinta al soltar, no debajo del dedo.
@@ -8098,7 +8155,7 @@ await seccion(async () => {
 })
 
 // ── Lo que encontro la verificacion: el proyecto quitado, la pregunta en respondido y el "¿" ──
-console.log('\nactivity.html — proyectos-por-chat: el unico proyecto del chat, quitado del catalogo')
+titulo('activity.html — proyectos-por-chat: el unico proyecto del chat, quitado del catalogo')
 await seccion(async () => {
   const quitado = { why: 'project alfa-demo is no longer in the accepted list', candidates: [],
     missing: ['alfa-demo'], question: null }
@@ -8118,7 +8175,7 @@ await seccion(async () => {
     /Sin proyecto/.test(vieja) && !/conversacion/i.test(vieja), vieja)
 })
 
-console.log('\nactivity.html — proyectos-por-chat: el dueno elige con la pregunta esperando al que escribio')
+titulo('activity.html — proyectos-por-chat: el dueno elige con la pregunta esperando al que escribio')
 await seccion(async () => {
   const pregunta = { candidates: [{ id: 'alfa-demo', name: 'Alfa Demo' }, { id: 'beta-demo', name: 'Beta Demo' }],
     to: 'writer', text: 'Es sobre la tienda o sobre el portal?', at: hace(30 * 60000), state: 'open',
@@ -8139,7 +8196,7 @@ await seccion(async () => {
     /escolha o projeto aqui/i.test(S.pt.pqToWriter), `${S.en.pqToWriter} | ${S.pt.pqToWriter}`)
 })
 
-console.log('\nconfig.html — proyectos-por-chat: la ayuda del plazo escribe la pregunta con "¿"')
+titulo('config.html — proyectos-por-chat: la ayuda del plazo escribe la pregunta con "¿"')
 await seccion(async () => {
   const { window } = await montar('config.html')
   const S = window.STRINGS
@@ -8181,7 +8238,7 @@ function elegirRol (doc, id, rol) {
 const filaDeChat = (doc, txt) =>
   [...doc.querySelectorAll('#scope-wrap tbody tr')].find((f) => f.textContent.includes(txt))
 
-console.log('\nconfig.html — roles-por-numero (M11): la persona de un chat directo')
+titulo('config.html — roles-por-numero (M11): la persona de un chat directo')
 await seccion(async () => {
   const storage = { owners: [DUENO_ROL],
     chats: [{ jid: DIRECTO_ROL, name: 'Camila Restrepo', kind: 'directo', phone: '+573000000001' }] }
@@ -8252,7 +8309,7 @@ await seccion(async () => {
     rolDe(doc, DIRECTO_ROL) === 'admin', String(rolDe(doc, DIRECTO_ROL)))
 })
 
-console.log('\nconfig.html — roles-por-numero (M11): el directo de un numero de confianza')
+titulo('config.html — roles-por-numero (M11): el directo de un numero de confianza')
 await seccion(async () => {
   const storage = { owners: [DUENO_ROL],
     chats: [{ jid: DUENO_ROL.id, name: 'Ana Restrepo', kind: 'directo', phone: '+573000000011' }] }
@@ -8275,7 +8332,7 @@ await seccion(async () => {
     JSON.stringify(storage.scope[DUENO_ROL.id]))
 })
 
-console.log('\nconfig.html — roles-por-numero (M11): los participantes de un grupo')
+titulo('config.html — roles-por-numero (M11): los participantes de un grupo')
 await seccion(async () => {
   const storage = { owners: [DUENO_ROL],
     chats: [{ jid: GRUPO_ROL, name: 'Soporte Norte', kind: 'grupo' }],
@@ -8349,7 +8406,7 @@ await seccion(async () => {
     personasVisibles(doc).length === 5)
 })
 
-console.log('\nconfig.html — roles-por-numero (M11): un grupo sin lista de participantes')
+titulo('config.html — roles-por-numero (M11): un grupo sin lista de participantes')
 for (const [nombre, gm] of [['sin la clave', undefined], ['con la lista vacia', []]]) {
   await seccion(async () => {
     const storage = { owners: [DUENO_ROL], chats: [{ jid: GRUPO_ROL, name: 'Soporte Norte', kind: 'grupo' }] }
@@ -8368,7 +8425,7 @@ for (const [nombre, gm] of [['sin la clave', undefined], ['con la lista vacia', 
   })
 }
 
-console.log('\nconfig.html — roles-por-numero (M11): la lista del grupo llega despues de abrirlo')
+titulo('config.html — roles-por-numero (M11): la lista del grupo llega despues de abrirlo')
 await seccion(async () => {
   const storage = { owners: [DUENO_ROL], chats: [{ jid: GRUPO_ROL, name: 'Soporte Norte', kind: 'grupo' }],
     scope: { [GRUPO_ROL]: { chatName: 'Soporte Norte', mode: 'observar' } } }
@@ -8384,7 +8441,7 @@ await seccion(async () => {
     doc.getElementById('cancel-edit').hidden === false, String(personas(doc).length))
 })
 
-console.log('\nconfig.html — roles-por-numero (M11): los textos en los tres idiomas')
+titulo('config.html — roles-por-numero (M11): los textos en los tres idiomas')
 await seccion(async () => {
   const { window } = await montar('config.html')
   const S = window.STRINGS
@@ -8421,7 +8478,7 @@ for (const [idioma, re] of [['en-US', /Operator/], ['pt-BR', /Operador/]]) {
 // comparte su telefono por el par LID-telefono no es el dueno, y la tarjeta no lo muestra
 // fijo como Super admin. El contador del buscador es una region viva que existe antes de
 // la primera busqueda. Y un grupo ya guardado sin lista no pide guardarlo otra vez.
-console.log('\nconfig.html — roles-por-numero: lo que encontro la verificacion')
+titulo('config.html — roles-por-numero: lo que encontro la verificacion')
 await seccion(async () => {
   const LID_DEL_DUENO = '100000000000002@lid'
   const storage = { owners: [{ id: '573000000011@s.whatsapp.net', name: 'Ana Restrepo' }],
@@ -8481,7 +8538,7 @@ await seccion(async () => {
 // Una tarjeta en la pestana de aprobacion: un interruptor por tipo (apagados de fabrica), las
 // horas de silencio, el tope por hora y la espera del "termino". Todo en UNA clave,
 // `orcaNotices`, en texto como el resto. Sin numero de aprobacion lo dice al lado.
-console.log('\nconfig.html — avisos-orca: los avisos de Orca')
+titulo('config.html — avisos-orca: los avisos de Orca')
 {
   const ANA = '100000000000001@lid'
   const { doc, storage } = await montar('config.html', {}, 'es-419')
@@ -8702,7 +8759,7 @@ const HILO = {
 /** Un worker que contesta `hilo` con lo que se le pase y lo demas como `conWorker`. */
 const conHilo = (hilo, otra = { ok: true, code: 'enviado' }) =>
   conWorker((pedido) => (pedido.action === 'hilo' ? hilo : otra))
-console.log('\nactivity.html — panel-caso-movil: la conversacion del caso en el detalle')
+titulo('activity.html — panel-caso-movil: la conversacion del caso en el detalle')
 {
   const w = conHilo(HILO)
   const { doc } = await abrirConWorker([tarjeta()], w)
@@ -8788,7 +8845,7 @@ for (const [idioma, nombre, titulo] of [['en', 'EN', /Conversation/], ['pt-BR', 
   detalle(doc).querySelector('.det-hilo')?.textContent)
 }
 
-console.log('\nactivity.html — panel-caso-movil: la X a la vista y la hoja en lo angosto')
+titulo('activity.html — panel-caso-movil: la X a la vista y la hoja en lo angosto')
 {
   const { doc, window } = await abrirTablero({ board: tablero([tarjeta()]) })
   abrirDetalle(doc, 1)
@@ -8821,7 +8878,7 @@ console.log('\nactivity.html — panel-caso-movil: la X a la vista y la hoja en 
   ok('P3: la X tambien la cierra', detalle(doc).hidden && !doc.body.classList.contains('con-hoja'))
 }
 
-console.log('\nactivity.html — panel-caso-movil: lo angosto no se corta')
+titulo('activity.html — panel-caso-movil: lo angosto no se corta')
 {
   const { doc, window } = await abrirTablero({ board: tablero([tarjeta()]) })
   const css = [...doc.querySelectorAll('style')].map((x) => x.textContent).join('\n')
@@ -8864,7 +8921,7 @@ function trabajadorLineas (d, st) {
 const conLineas = (lineas) => Object.assign(vivaDe(L_A), { lineas })
 const textoDe = (doc, sel) => doc.querySelector(sel)?.textContent ?? ''
 
-console.log('\nconfig.html — L4: la tarjeta de lineas, con una sola')
+titulo('config.html — L4: la tarjeta de lineas, con una sola')
 {
   const { doc } = await montar('config.html', { sidecar: conLineas([lineaA]) }, 'es-419')
   await espera()
@@ -8893,7 +8950,7 @@ console.log('\nconfig.html — L4: la tarjeta de lineas, con una sola')
     textoDe(doc, '#lineas-card'))
 }
 
-console.log('\nconfig.html — L4: la unica linea, esperando su codigo, no ofrece soltarla')
+titulo('config.html — L4: la unica linea, esperando su codigo, no ofrece soltarla')
 {
   const sola = { carpeta: 'nueva-prueba', cuenta: null, tipo: 'support', alta: ALTA }
   const { doc } = await montar('config.html', { sidecar: { connection: null, qr: null,
@@ -8907,7 +8964,7 @@ console.log('\nconfig.html — L4: la unica linea, esperando su codigo, no ofrec
     doc.getElementById('pairing-msg').closest('#lineas-card') !== null, textoDe(doc, '#pairing-msg'))
 }
 
-console.log('\nconfig.html — L4: vincular otra linea le pide al worker una linea nueva')
+titulo('config.html — L4: vincular otra linea le pide al worker una linea nueva')
 {
   const storage = { sidecar: conLineas([lineaA]) }
   const { doc } = await montar('config.html', storage, 'es-419', trabajadorLineas)
@@ -8920,7 +8977,7 @@ console.log('\nconfig.html — L4: vincular otra linea le pide al worker una lin
     textoDe(doc, '#said-lineas'))
 }
 
-console.log('\nconfig.html — L4: la linea nueva espera su codigo en su propia fila')
+titulo('config.html — L4: la linea nueva espera su codigo en su propia fila')
 {
   const nueva = { carpeta: 'nueva-prueba', cuenta: null, tipo: 'support', alta: ALTA }
   const storage = { sidecar: conLineas([lineaA, nueva]),
@@ -8948,7 +9005,7 @@ console.log('\nconfig.html — L4: la linea nueva espera su codigo en su propia 
     storage.sidecarRequest.carpeta === 'nueva-prueba', JSON.stringify(storage.sidecarRequest))
 }
 
-console.log('\nconfig.html — L4: desvincular una linea pide confirmacion y nombra la suya')
+titulo('config.html — L4: desvincular una linea pide confirmacion y nombra la suya')
 {
   const storage = { sidecar: conLineas([lineaA, lineaB]),
     sidecars: { 'pn-573000000011': vivaDe(L_B) } }
@@ -8979,7 +9036,7 @@ console.log('\nconfig.html — L4: desvincular una linea pide confirmacion y nom
     storage.sidecarRequest.carpeta === 'pn-573000000011', JSON.stringify(storage.sidecarRequest))
 }
 
-console.log('\nconfig.html — A8: sin selector de Tipo en ninguna fila de linea')
+titulo('config.html — A8: sin selector de Tipo en ninguna fila de linea')
 {
   // Un registro que ya dice `personal` (la parte 2): el panel no ofrece cambiarlo, y no le
   // pide nada al worker. El campo y la accion `tipo` del worker siguen para la parte 2.
@@ -9006,7 +9063,7 @@ console.log('\nconfig.html — A8: sin selector de Tipo en ninguna fila de linea
     JSON.stringify(nuevas.filter((k) => !S.es[k] || !S.en[k] || !S.pt[k] || S.pt[k] === S.en[k])))
 }
 
-console.log('\nconfig.html — L4: Conversaciones se ven y se guardan por linea')
+titulo('config.html — L4: Conversaciones se ven y se guardan por linea')
 {
   const G1 = '120363000000000001@g.us'
   const storage = { sidecar: conLineas([lineaA, lineaB]),
@@ -9062,7 +9119,7 @@ console.log('\nconfig.html — L4: Conversaciones se ven y se guardan por linea'
     storage.scopeRequest.linea === L_B, JSON.stringify(storage.scopeRequest))
 }
 
-console.log('\nconfig.html — L4: si la otra linea no contesta, no se ve la lista de la primera')
+titulo('config.html — L4: si la otra linea no contesta, no se ve la lista de la primera')
 {
   const G1 = '120363000000000001@g.us'
   const storage = { sidecar: conLineas([lineaA, lineaB]),
@@ -9091,7 +9148,7 @@ console.log('\nconfig.html — L4: si la otra linea no contesta, no se ve la lis
     /Soporte Segunda/.test(lista()) && !/Soporte Principal/.test(lista()), lista())
 }
 
-console.log('\nactivity.html — L4: el tablero se filtra por linea')
+titulo('activity.html — L4: el tablero se filtra por linea')
 {
   const storage = { sidecar: conLineas([lineaA, lineaB]),
     sidecars: { 'pn-573000000011': vivaDe(L_B) },
@@ -9141,7 +9198,7 @@ console.log('\nactivity.html — L4: el tablero se filtra por linea')
     S.es.linesView && S.en.linesView && S.pt.linesView && S.pt.linesView !== S.en.linesView)
 }
 
-console.log('\nconfig.html — lineas claras: que es de cada linea y que es del equipo')
+titulo('config.html — lineas claras: que es de cada linea y que es del equipo')
 {
   const dos = { sidecar: conLineas([lineaA, lineaB]), sidecars: { 'pn-573000000011': vivaDe(L_B) } }
   const { doc } = await montar('config.html', dos, 'es-419')
@@ -9242,7 +9299,7 @@ function dosLineasConAjustes () {
   }
 }
 
-console.log('\nconfig.html — A5: cada linea muestra y guarda sus propios ajustes')
+titulo('config.html — A5: cada linea muestra y guarda sus propios ajustes')
 {
   const storage = dosLineasConAjustes()
   const { doc } = await montar('config.html', storage, 'es-419')
@@ -9333,7 +9390,7 @@ console.log('\nconfig.html — A5: cada linea muestra y guarda sus propios ajust
     campo('agent') === 'Agente Principal' && campo('tone') === 'Tono de la principal', campo('agent'))
 }
 
-console.log('\nconfig.html — P5: con varias lineas, el triage corre al ritmo de la mas frecuente')
+titulo('config.html — P5: con varias lineas, el triage corre al ritmo de la mas frecuente')
 {
   const latido = (minutes) => ({ at: new Date().toISOString(),
     triage: { minutes, cron: `*/${minutes} * * * *`, ok: true, code: 'ajustado' } })
@@ -9364,7 +9421,7 @@ console.log('\nconfig.html — P5: con varias lineas, el triage corre al ritmo d
     S.pt.triagePaceShared !== S.en.triagePaceShared)
 }
 
-console.log('\nconfig.html — P6: Jev se enciende y se apaga en cada linea, con una sola llave')
+titulo('config.html — P6: Jev se enciende y se apaga en cada linea, con una sola llave')
 {
   const ahora = () => new Date().toISOString()
   const storage = Object.assign(dosLineasConAjustes(), {
@@ -9414,7 +9471,7 @@ console.log('\nconfig.html — P6: Jev se enciende y se apaga en cada linea, con
     S.pt.jevKeyShared !== S.en.jevKeyShared)
 }
 
-console.log('\nconfig.html — P7: las skills se instalan en el equipo y avisan por la linea elegida')
+titulo('config.html — P7: las skills se instalan en el equipo y avisan por la linea elegida')
 {
   const storage = dosLineasConAjustes()
   const { doc } = await montar('config.html', storage, 'es-419')
@@ -9460,7 +9517,7 @@ console.log('\nconfig.html — P7: las skills se instalan en el equipo y avisan 
     claves.filter((k) => !S.es[k] || !S.en[k] || !S.pt[k] || S.pt[k] === S.en[k]).join())
 }
 
-console.log('\nconfig.html — A5: si la otra linea no contesta, no se ven los ajustes de la principal')
+titulo('config.html — A5: si la otra linea no contesta, no se ven los ajustes de la principal')
 {
   const storage = dosLineasConAjustes()
   let callado = true
@@ -9494,7 +9551,7 @@ console.log('\nconfig.html — A5: si la otra linea no contesta, no se ven los a
 // ───────── todo-por-linea P1: los avisos de Orca de cada linea ─────────
 // La tarjeta de los avisos de Orca es de la linea que se mira. Otra linea sin avisos propios
 // NO hereda los de la principal: se pintan apagados, y guardar ahi no toca la raiz.
-console.log('\nconfig.html — P1: los avisos de Orca de cada linea')
+titulo('config.html — P1: los avisos de Orca de cada linea')
 {
   const storage = dosLineasConAjustes()
   const ORCA_A = { waiting: 'on', finished: 'on', automationFailed: 'off', quietStart: '',
@@ -9537,7 +9594,7 @@ console.log('\nconfig.html — P1: los avisos de Orca de cada linea')
 // ───────── todo-por-linea P2: firmar con el nombre del agente, por linea ─────────
 // Un interruptor encima del nombre. Apagado, los mensajes de esa linea salen como del dueno:
 // el nombre deja de ser obligatorio y la lista de lo que falta no lo pide.
-console.log('\nconfig.html — P2: la firma de cada linea')
+titulo('config.html — P2: la firma de cada linea')
 {
   const storage = dosLineasConAjustes()
   storage.agentName = ''
@@ -9591,7 +9648,7 @@ console.log('\nconfig.html — P2: la firma de cada linea')
 }
 
 // ───────── todo-por-linea P3: la cuenta de Claude del bot, por linea ─────────
-console.log('\nconfig.html — P3: la cuenta de Claude del bot de cada linea')
+titulo('config.html — P3: la cuenta de Claude del bot de cada linea')
 {
   const storage = dosLineasConAjustes()
   storage.botClaudeAccount = 'cuenta-bot'
@@ -9632,7 +9689,7 @@ console.log('\nconfig.html — P3: la cuenta de Claude del bot de cada linea')
 }
 
 // ───────── todo-por-linea P4: la transcripcion y su calidad, por linea ─────────
-console.log('\nconfig.html — P4: la transcripcion de cada linea')
+titulo('config.html — P4: la transcripcion de cada linea')
 {
   const storage = dosLineasConAjustes()
   storage.transcribe = 'local'
@@ -9670,7 +9727,7 @@ console.log('\nconfig.html — P4: la transcripcion de cada linea')
 // ───────── P9: las reglas de texto y el catalogo de proyectos, de cada linea ─────────
 // La principal los guarda en la raiz (`routes`, `projects`); cada otra linea, en
 // `ajustesPorLinea[<numero>]`. Lo que se pide al worker nombra la linea que se mira.
-console.log('\nconfig.html — P9: cada linea muestra y guarda sus reglas y sus proyectos')
+titulo('config.html — P9: cada linea muestra y guarda sus reglas y sus proyectos')
 {
   const ALFA = { id: 'alfa-demo', name: 'Alfa Demo', path: '/srv/ejemplo/alfa-demo', note: '' }
   const BETA = { id: 'beta-demo', name: 'Beta Demo', path: '/srv/ejemplo/beta-demo', note: '' }
@@ -9745,7 +9802,7 @@ console.log('\nconfig.html — P9: cada linea muestra y guarda sus reglas y sus 
     enLaPrincipal?.project === 'alfa-demo' && !enLaPrincipal.linea, JSON.stringify(enLaPrincipal))
 }
 
-console.log('\nactivity.html — respuesta-otro-chat: la propuesta dice a que chat va')
+titulo('activity.html — respuesta-otro-chat: la propuesta dice a que chat va')
 {
   const aOtro = tarjeta({ case_id: 21, exceptions: [],
     proposal: { tipo: 'responder', texto: 'Le comparto la conclusion.', version: 'abc',
@@ -9777,7 +9834,7 @@ console.log('\nactivity.html — respuesta-otro-chat: la propuesta dice a que ch
 // no el mecanismo: desde panel-urgente U2 el alcance lo escribe el WORKER y el panel le
 // manda un pedido, asi que lo que puede fallar es el pedido o el veredicto. En cualquiera
 // de los casos vale lo mismo — no se dice guardado y no se pierde lo escrito.
-console.log('\nconfig.html — guardar-panel G1: un Guardar rechazado lo dice y conserva lo escrito')
+titulo('config.html — guardar-panel G1: un Guardar rechazado lo dice y conserva lo escrito')
 {
   const largo = 'Instrucciones de prueba. '.repeat(700).trim()
   for (const [idioma, frase] of [['es-419', /No se guardo/], ['en-US', /was not saved/]]) {
@@ -9841,7 +9898,7 @@ console.log('\nconfig.html — guardar-panel G1: un Guardar rechazado lo dice y 
 // panel escribia el objeto ENTERO en cada Guardar, asi que ninguna conversacion se podia
 // guardar ya: ni la que se estaba editando, que pesaba 661 bytes. Los tres reintentos no
 // podian ayudar, porque entre uno y otro el payload es el mismo.
-console.log('\nconfig.html — panel-urgente U2: con un alcance grande, guardar sigue funcionando')
+titulo('config.html — panel-urgente U2: con un alcance grande, guardar sigue funcionando')
 {
   const instruccion = 'Instrucciones largas de esta conversacion. '.repeat(380).trim()
   const previo = {}
@@ -9887,13 +9944,13 @@ console.log('\nconfig.html — panel-urgente U2: con un alcance grande, guardar 
 // cuyo mousedown y mouseup caen a los dos lados de un repintado no dispara `click`,
 // porque el nodo del boton ya no es el mismo. `renderLineas` ya se guarda de esto con una
 // firma y solo repinta cuando algo cambio; la tabla del alcance nunca lo hizo.
-console.log('\nconfig.html — panel-urgente U4: repintar sin cambios no reemplaza los controles')
+titulo('config.html — panel-urgente U4: repintar sin cambios no reemplaza los controles')
 {
   const entrada = {
     '1@g.us': { chatName: 'Soporte Norte', mode: 'responder', provider: 'ninguno',
       target: null, updatedAt: '2026-10-06T15:50:26.454Z' }
   }
-  const { doc, window } = await montar('config.html', {
+  const { doc, window, enviados } = await montar('config.html', {
     scope: entrada,
     chats: [{ jid: '1@g.us', name: 'Soporte Norte', kind: 'grupo' }]
   })
@@ -9901,9 +9958,13 @@ console.log('\nconfig.html — panel-urgente U4: repintar sin cambios no reempla
   const antes = doc.querySelector('#scope-wrap [data-edit]')
   ok('la tabla del alcance se pinto', antes !== null)
 
-  // La vuelta del sondeo, con EXACTAMENTE lo mismo que ya estaba.
+  // La vuelta del sondeo, con EXACTAMENTE lo mismo que ya estaba. Se mira despues de que
+  // la vuelta pidio y le contestaron: mirar antes daba "el mismo nodo" sin haber repintado.
+  const pedidos = enviados.length
   window.document.dispatchEvent(new window.Event('visibilitychange'))
-  await new Promise((r) => setTimeout(r, 200))
+  ok('la vuelta del sondeo corrio', await hastaPanel(() => enviados.length > pedidos),
+    'el panel no pidio nada al volver a la vista')
+  await espera()
   const despues = doc.querySelector('#scope-wrap [data-edit]')
   ok('el boton Editar sigue siendo el MISMO nodo tras repintar sin cambios',
     despues === antes, 'el repintado reemplazo el nodo: un clic a caballo se pierde')
@@ -9917,7 +9978,7 @@ console.log('\nconfig.html — panel-urgente U4: repintar sin cambios no reempla
 
 // linea-viva V5: una linea que nadie atiende se ve en el panel, en cualquier pestana, con
 // cuanto lleva y si el respaldo del plugin la esta atendiendo. Viaja en el latido.
-console.log('\nconfig.html — linea-viva: el aviso de una linea sin atender')
+titulo('config.html — linea-viva: el aviso de una linea sin atender')
 {
   const L1 = 'pn:15550000001'
   const L2 = 'pn:15550000002'
@@ -10021,5 +10082,5 @@ console.log('\nconfig.html — linea-viva: el aviso de una linea sin atender')
   }
 }
 
-console.log(`\n${pruebas - fallos}/${pruebas} en verde`)
+titulo(`${pruebas - fallos}/${pruebas} en verde`)
 process.exit(fallos ? 1 : 0)
