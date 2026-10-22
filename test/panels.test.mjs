@@ -6203,7 +6203,9 @@ titulo('config.html — Jev: guardar la llave va por el worker y no vuelve a la 
 
   doc.getElementById('jev-key').value = `  ${LLAVE_JEV}  `
   doc.getElementById('jev-save-key').click()
-  await hastaPanel(() => doc.getElementById('said-jev-key').textContent.includes('✓') && /llave guardada/i.test(doc.getElementById('jev-status').textContent), 10000)
+  await hastaPanel(() => doc.getElementById('said-jev-key').textContent.includes('✓') &&
+    /llave guardada/i.test(doc.getElementById('jev-status').textContent), 10000)
+  await espera()
   const pedido = storage.jevRequestVisto
   ok('manda el pedido a la clave del worker, con id y marca de tiempo',
     !!pedido && pedido.action === 'guardar-llave' && typeof pedido.id === 'string' &&
@@ -6251,6 +6253,7 @@ titulo('config.html — Jev: encender, quitar la llave y lo que dice cada estado
 
   doc.getElementById('jev-enabled').click()
   await hastaPanel(() => /encendido.*llave guardada/i.test(doc.getElementById('jev-status').textContent), 10000)
+  await espera()
   ok('encender manda activar con enabled verdadero',
     storage.jevRequestVisto && storage.jevRequestVisto.action === 'activar' &&
     storage.jevRequestVisto.enabled === true, JSON.stringify(storage.jevRequestVisto))
@@ -6260,6 +6263,7 @@ titulo('config.html — Jev: encender, quitar la llave y lo que dice cada estado
 
   doc.getElementById('jev-remove-key').click()
   await hastaPanel(() => /sin llave/i.test(doc.getElementById('jev-status').textContent), 10000)
+  await espera()
   ok('quitar la llave manda quitar-llave',
     storage.jevRequestVisto && storage.jevRequestVisto.action === 'quitar-llave',
     JSON.stringify(storage.jevRequestVisto))
@@ -6288,6 +6292,7 @@ titulo('config.html — Jev: lo que falla se dice, y un archivo ajeno se explica
   doc.getElementById('jev-key').value = 'dos palabras'
   doc.getElementById('jev-save-key').click()
   await hastaPanel(() => doc.getElementById('said-jev-key').className.includes('bad'), 10000)
+  await espera()
   const dicho = doc.getElementById('said-jev-key')
   ok('una llave invalida se dice con la frase del panel, no con el codigo',
     dicho.className.includes('bad') && /no es v/i.test(dicho.textContent) &&
@@ -6309,6 +6314,7 @@ titulo('config.html — Jev: "Usar la llave guardada" reemplaza el archivo ajeno
   doc.getElementById('jev-use-saved').click()
   await hastaPanel(() => doc.getElementById('said-jev-key').textContent.includes('✓') &&
     doc.getElementById('jev-mirror-note').hidden, 10000)
+  await espera()
   const pedido = storage.jevRequestVisto
   ok('el boton manda activar con enabled verdadero: lo mismo que encender el interruptor',
     !!pedido && pedido.action === 'activar' && pedido.enabled === true &&
@@ -6353,7 +6359,9 @@ titulo('config.html — Jev: si el worker no contesta, la llave no queda esperan
   window.VEREDICTO_ESPERA_MS = 400
   doc.getElementById('jev-key').value = LLAVE_JEV
   doc.getElementById('jev-save-key').click()
-  await hastaPanel(() => /no contest/i.test(doc.getElementById('said-jev-key').textContent), 10000)
+  await hastaPanel(() => /no contest/i.test(doc.getElementById('said-jev-key').textContent) &&
+    storage.jevRequest?.tombstone === true, 10000)
+  await espera()
   ok('el panel dice que el plugin no contesto',
     /no contest/i.test(doc.getElementById('said-jev-key').textContent),
     doc.getElementById('said-jev-key').textContent)
