@@ -722,6 +722,11 @@ def scope_db():
 # `aprobador.mjs` (el worker la pide ahi); aca solo se lee. Viaja a `wa-send --approve` en
 # esta variable, y solo al env de ese hijo.
 VARIABLE_APROBADOR = "WA_INBOX_APPROVER"
+# La marca de los envios del propio plugin (WAINBOX-59): el tick, el tablero y el aviso al
+# dueno la ponen en el env de su `wa-send`. Lo que el plugin deja retenido ya tiene su
+# camino (el aviso del caso, el tablero), asi que con ella `wa-send` no pide el aviso de un
+# borrador de sesion. Ponerla solo quita un aviso: nunca manda nada.
+VARIABLE_ENVIO_PLUGIN = "WA_INBOX_PLUGIN_SEND"
 _LLAVE_APROBADOR = re.compile(r"^[0-9a-f]{64}$")
 
 
