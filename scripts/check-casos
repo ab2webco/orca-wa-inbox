@@ -10858,6 +10858,229 @@ if NODE:
             os.environ.update(env_antes)
 
 
+# ── El texto para el cliente de un `escalar` (escalar-texto-cliente, WAINBOX-57/58) ──────
+# Caso vivo: el `escalar` llevaba el texto para el cliente dentro de sus instrucciones
+# (`... Texto: '<texto>'. Verificado: ... No verificado: ...`) y al aprobarlo salio con la
+# cola interna, o con una comilla suelta al final. El texto vive ahora en su propio campo
+# (`respuesta`); aprobar manda ESE campo, byte por byte, y el aviso lo muestra entero.
+FORMAS_VIVAS = (
+    # La que salio con la cola interna: el texto lleva un punto y sigue el reporte.
+    "Hola equipo, el reporte de ventas ya quedo publicado en el tablero. Confirmen si lo "
+    "ven bien.",
+    # La que salio con una comilla suelta: el texto mismo lleva comillas.
+    "Buen dia, el acceso de 'Ana Ejemplo' ya esta activo en el sistema de pruebas.",
+)
+
+
+def escalar_con_texto(home, stanza, respuesta, pregunta="Lo envio tal cual?"):
+    """Un caso en decision con un `escalar` de los tres campos: la pregunta al dueno, el
+    texto para el cliente y lo verificado. Las instrucciones repiten el texto como lo hacia
+    el agente en vivo: nada de eso puede salir."""
+    cid = str(js(home, "caso", "crear", "--chat", PERSONA, "--stanza", stanza,
+                 "--actor", "agente")[0]["case_id"])
+    js(home, "caso", "clasificar", cid, "--clase", "card", "--prioridad", "none",
+       "--actor", "agente")
+    v = js(home, "caso", "propuesta", cid, "--tipo", "escalar", "--respuesta", respuesta,
+           "--instrucciones", f"Confirmar mensaje critico: {pregunta} Texto: '{respuesta}'. "
+           "Verificado: el reporte existe. No verificado: que el cliente lo vea.",
+           "--evidencia", "Verificado: el reporte existe. No verificado: que el cliente lo vea.",
+           "--actor", "agente")[0]["propuesta_version"]
+    return cid, v
+
+
+def sin_firma(cuerpo):
+    """El cuerpo de un envio sin la firma del agente que `wa-send` le agrega al final."""
+    return re.sub(r"\n+-- [^\n]*\s*$", "", cuerpo or "")
+
+
+def al_cliente(home):
+    """Lo que salio por la bandeja hacia el chat del cliente, en orden."""
+    con = sqlite3.connect(pathlib.Path(home) / ".wa-inbox" / "capture.db")
+    con.row_factory = sqlite3.Row
+    filas = [dict(r) for r in con.execute(
+        "select req_id, estado, body from envio where chat_jid=? order by rowid", (PERSONA,))]
+    con.close()
+    return filas
+
+
+def avisos_del_caso(home, cid):
+    """Lo que salio al dueno sobre ese caso (cada parte del aviso es un envio), en orden."""
+    return [a for a in al_dueno(home) if a["req_id"].startswith(f"aviso-{cid}-")]
+
+
+print("\nescalar-texto-cliente: aprobar un escalar manda solo el texto del cliente")
+if NODE:
+    if not any(c["jid"] == DUENO_DM for c in CHATS):
+        CHATS.append({"jid": DUENO_DM, "nombre": "Dueno Directo", "grupo": False})
+    with tempfile.TemporaryDirectory() as home:
+        env_antes = dict(os.environ)
+        linea_lista(home)
+        js(home, "config", "ack", "off")
+        js(home, "set", DUENO_DM, "--provider", "ninguno", "--mode", "responder")
+        pon_duenos(home, DUENO_LID)
+        pon_aprobacion(home, DUENO_LID)
+        sidecar = SidecarFalso(home)
+        try:
+            for i, respuesta in enumerate(FORMAS_VIVAS):
+                llegan(home, A, [msg(PERSONA, f"TX{i}", PEDIDO, 30 - i)])
+                esc, _ = escalar_con_texto(home, f"TX{i}", respuesta)
+                antes = len(al_cliente(home))
+                tick(home)
+                ok(f"el tick no manda solo un escalar con texto ({i + 1})",
+                   len(al_cliente(home)) == antes, f"{al_cliente(home)[antes:]}")
+                avisos = avisos_del_caso(home, esc)
+                cuerpo = "\n".join(a["body"] for a in avisos)
+                ok(f"el aviso muestra el texto entero, tal cual ({i + 1})",
+                   respuesta in cuerpo, cuerpo)
+                ok(f"y no muestra el reporte interno ({i + 1})",
+                   "Verificado" not in cuerpo and "Confirmar mensaje" not in cuerpo, cuerpo)
+                llegan(home, A, [msg(DUENO_DM, f"TXS{i}", f"si {esc}", 1, de=DUENO_LID)])
+                ingiere(home)
+                tick(home)
+                ver = js(home, "caso", "ver", esc)[0]
+                salio = al_cliente(home)[antes:]
+                ok(f"`si N` aprueba el escalar con texto y lo da por respondido ({i + 1})",
+                   ver["aprobada"] and ver["etapa"] == "respondido",
+                   f"{ver['etapa']} {ver['eventos'][-3:]}")
+                ok(f"al cliente sale UN mensaje, y es la respuesta byte por byte ({i + 1})",
+                   len(salio) == 1 and sin_firma(salio[0]["body"]) == respuesta, f"{salio}")
+                ok(f"sin 'Verificado', 'No verificado' ni comillas de las instrucciones ({i + 1})",
+                   salio and "Verificado" not in salio[0]["body"]
+                   and not sin_firma(salio[0]["body"]).endswith("'"), f"{salio}")
+                ultimo = (al_dueno(home) or [{"body": ""}])[-1]["body"]
+                ok(f"la confirmacion dice que salio, no que empieza un trabajo ({i + 1})",
+                   f"Caso {esc}" in ultimo and "trabajo" not in ultimo, ultimo)
+
+            # La forma vieja: el texto solo dentro de las instrucciones. Aprobarla no manda
+            # nada al cliente: vuelve al agente, como cualquier pregunta.
+            llegan(home, A, [msg(PERSONA, "TXV", PEDIDO, 10)])
+            viejo, _ = propuesta_lista(home, "TXV", tipo="escalar", texto=(
+                f"Confirmar mensaje critico: Texto: '{FORMAS_VIVAS[0]}'. Verificado: algo. "
+                "No verificado: otra cosa."))
+            tick(home)
+            antes = len(al_cliente(home))
+            llegan(home, A, [msg(DUENO_DM, "TXVS", f"si {viejo}", 1, de=DUENO_LID)])
+            ingiere(home)
+            tick(home)
+            ver = js(home, "caso", "ver", viejo)[0]
+            ok("un escalar sin texto para el cliente no manda nada al aprobarlo",
+               len(al_cliente(home)) == antes and not ver["aprobada"],
+               f"{al_cliente(home)[antes:]} {ver['etapa']}")
+        finally:
+            sidecar.cerrar()
+            os.environ.clear()
+            os.environ.update(env_antes)
+
+
+print("\nescalar-texto-cliente: el aviso lleva el texto entero y una sola pregunta")
+if NODE:
+    if not any(c["jid"] == DUENO_DM for c in CHATS):
+        CHATS.append({"jid": DUENO_DM, "nombre": "Dueno Directo", "grupo": False})
+    with tempfile.TemporaryDirectory() as home:
+        env_antes = dict(os.environ)
+        linea_lista(home)
+        js(home, "config", "ack", "off")
+        js(home, "set", DUENO_DM, "--provider", "ninguno", "--mode", "responder")
+        pon_duenos(home, DUENO_LID)
+        pon_aprobacion(home, DUENO_LID)
+        sidecar = SidecarFalso(home)
+        try:
+            # Un texto largo: varios parrafos que no caben en un mensaje.
+            parrafo = ("Le cuento el avance del modulo de reportes de ejemplo: la consulta de "
+                       "ventas ya filtra por fecha, el total coincide con el cierre y la "
+                       "exportacion queda en el formato que pidieron. ")
+            largo = "\n\n".join(f"{k + 1}. {parrafo * 4}".strip() for k in range(18))
+            llegan(home, A, [msg(PERSONA, "TL1", PEDIDO, 20)])
+            esc, v1 = escalar_con_texto(home, "TL1", largo)
+            tick(home)
+            partes = avisos_del_caso(home, esc)
+            ok("un texto largo sale en varias partes, cada una dentro del limite",
+               len(partes) >= 2 and all(len(p["body"]) <= 4096 for p in partes)
+               and all(p["estado"] == "enviado" for p in partes),
+               f"{[(p['req_id'], len(p['body'])) for p in partes]}")
+            ok("y entre todas llevan el texto completo, sin cortes",
+               all(linea in "\n".join(p["body"] for p in partes)
+                   for linea in largo.split("\n") if linea), "falta una linea")
+            ok("sin puntos suspensivos de recorte", "…" not in "".join(p["body"] for p in partes))
+            pregunta = [l for l in "\n".join(p["body"] for p in partes).split("\n")
+                        if l.startswith("¿")]
+            ok("UNA pregunta al dueno, en una linea y en castellano, al final",
+               len(pregunta) == 1 and pregunta[0] in partes[-1]["body"]
+               and f"si {esc}" in partes[-1]["body"], f"{pregunta}")
+            ok("la pregunta no es el reporte del agente",
+               not any("Confirmar mensaje" in p["body"] for p in partes))
+            ok("el aviso queda enviado una sola vez",
+               cuenta(home, "select count(*) from aviso where case_id=? and tipo='aprobacion'",
+                      int(esc)) == 1)
+            tick(home)
+            ok("otro tick no repite ninguna parte", len(avisos_del_caso(home, esc)) == len(partes))
+
+            # El texto cambia despues del aviso: aprobar lo que el dueno vio se niega, con un
+            # mensaje claro, y no sale nada.
+            con = sqlite3.connect(pathlib.Path(home) / ".wa-inbox" / "capture.db")
+            cita = con.execute("select stanza_id from envio where req_id=?",
+                               (partes[-1]["req_id"],)).fetchone()[0]
+            con.close()
+            nuevo = "Hola, el reporte queda listo manana."
+            js(home, "caso", "propuesta", esc, "--tipo", "escalar", "--respuesta", nuevo,
+               "--instrucciones", "Lo envio tal cual?", "--actor", "agente")
+            antes = len(al_cliente(home))
+            llegan(home, A, [msg(DUENO_DM, "TL2", "si", 1, de=DUENO_LID, cita_id=cita)])
+            ingiere(home)
+            tick(home)
+            ver = js(home, "caso", "ver", esc)[0]
+            ok("aprobar la version vieja (citando su aviso) no aprueba la nueva",
+               not ver["aprobada"] and ver["etapa"] == "decision", f"{ver['etapa']}")
+            ok("y no sale nada al cliente", len(al_cliente(home)) == antes,
+               f"{al_cliente(home)[antes:]}")
+            respuesta_al_dueno = [a["body"] for a in al_dueno(home)
+                                  if f"caso {esc} cambio" in a["body"].lower()]
+            ok("el dueno lee que el caso cambio desde el aviso", bool(respuesta_al_dueno),
+               f"{al_dueno(home)[-2:]}")
+
+            # Citar la primera parte de un aviso largo contesta ese aviso: sale el texto largo,
+            # entero y en un solo mensaje al cliente.
+            llegan(home, A, [msg(PERSONA, "TL3", PEDIDO, 15)])
+            otro, _ = escalar_con_texto(home, "TL3", largo)
+            tick(home)
+            primera = avisos_del_caso(home, otro)[0]
+            con = sqlite3.connect(pathlib.Path(home) / ".wa-inbox" / "capture.db")
+            cita = con.execute("select stanza_id from envio where req_id=?",
+                               (primera["req_id"],)).fetchone()[0]
+            con.close()
+            antes = len(al_cliente(home))
+            llegan(home, A, [msg(DUENO_DM, "TL4", "si", 1, de=DUENO_LID, cita_id=cita)])
+            ingiere(home)
+            tick(home)
+            salio = al_cliente(home)[antes:]
+            ok("citar una parte del aviso lo contesta: sale el texto largo, byte por byte",
+               primera["req_id"].endswith("-p1") and len(salio) == 1
+               and sin_firma(salio[0]["body"]) == largo,
+               f"{primera['req_id']} {[len(x['body']) for x in salio]}")
+        finally:
+            sidecar.cerrar()
+            os.environ.clear()
+            os.environ.update(env_antes)
+
+
+print("\nescalar-texto-cliente: la tarjeta separa el texto del cliente de la pregunta")
+with tempfile.TemporaryDirectory() as home:
+    linea_lista(home)
+    llegan(home, A, [msg(PERSONA, "TT1", PEDIDO, 5), msg(PERSONA, "TT2", PEDIDO, 4)])
+    con_texto, _ = escalar_con_texto(home, "TT1", FORMAS_VIVAS[0])
+    sin_texto, _ = propuesta_lista(home, "TT2", tipo="escalar",
+                                   texto="Pide un descuento del plan: lo aprueba usted?")
+    tick(home)
+    t1, t2 = tarjeta(home, con_texto), tarjeta(home, sin_texto)
+    ok("con texto: la tarjeta lleva el texto del cliente, nunca las instrucciones",
+       t1 and t1["proposal"]["texto"] == FORMAS_VIVAS[0]
+       and "Verificado" in (t1["proposal"].get("pregunta") or ""), f"{t1 and t1['proposal']}")
+    ok("y ofrece Enviar", t1 and "enviar" in t1["actions"], f"{t1 and t1['actions']}")
+    ok("sin texto: no hay texto que enviar, solo la pregunta",
+       t2 and not t2["proposal"]["texto"] and "descuento" in (t2["proposal"].get("pregunta") or "")
+       and "enviar" not in t2["actions"], f"{t2 and (t2['proposal'], t2['actions'])}")
+
+
 # Revision: el primer tick despues de actualizar (o de elegir el numero) no le manda al
 # dueno, de golpe, cada escalar viejo del tablero como si fuera de hoy: el aviso vence
 # contando desde que se encola, asi que uno de hace semanas llegaba fresco y contestable.
