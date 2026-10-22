@@ -45,3 +45,9 @@ the condition so the suite is deterministic.
   a Jev case this change had converted (the tombstone is written after the
   "did not answer" text). Fixed by waiting for both, then settling.
 - T4 GREEN at dae98da: 10 consecutive runs, all 1785/1785.
+- 4 parallel runs at dae98da: one failure in the per-line settings section
+  (a fixed 500 ms after a save). The 300-500 ms waits after clicks became
+  `espera()` (settle) in 1f9b836.
+- Final at 1f9b836: 10 consecutive runs 1785/1785 (about 242 s each), then
+  4 parallel runs 1785/1785.
+- Not run: shots. No panel HTML/CSS changed, only the test harness.
