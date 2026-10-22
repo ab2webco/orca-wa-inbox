@@ -489,7 +489,8 @@ create table if not exists caso_avance (
 -- La transcripcion de una nota de voz, calculada UNA vez por mensaje: lo que juzga Jev, lo
 -- que mira el piso fijo y lo que lee el agente en el hilo salen de aca. Guarda tambien el
 -- fallo (`ok` 0 y el codigo en `razon`): un audio que no se pudo transcribir se dice, no
--- se adivina, y tampoco se vuelve a pagar en cada reintento.
+-- se adivina, y tampoco se vuelve a pagar en cada reintento. Un fallo pasajero del motor
+-- (WAINBOX-67) agenda su proximo intento en `reintento_ts` (epoch); null es final.
 create table if not exists transcripcion (
   account   text not null default 'local',
   chat_jid  text not null,
@@ -498,6 +499,8 @@ create table if not exists transcripcion (
   texto     text,
   razon     text,
   at        text not null,
+  intentos  integer not null default 1,
+  reintento_ts integer,
   primary key (account, chat_jid, stanza_id)
 );
 -- El caso del tablero (odd/tasks/kanban-casos.md): cinco mensajes del mismo pedido son
@@ -1967,6 +1970,12 @@ def migrate(con):
     # guardar-panel G4: para que mensajes juntos se dio el veredicto.
     if "rafaga" not in juicio_cols:
         con.execute("alter table juicio add column rafaga text")
+    # WAINBOX-67: los intentos de una transcripcion y cuando toca el proximo.
+    transcripcion_cols = {r["name"] for r in con.execute("pragma table_info(transcripcion)")}
+    if "intentos" not in transcripcion_cols:
+        con.execute("alter table transcripcion add column intentos integer not null default 1")
+    if "reintento_ts" not in transcripcion_cols:
+        con.execute("alter table transcripcion add column reintento_ts integer")
     # linea-viva V6: la linea por la que salio cada aviso.
     if "sale_por" not in {r["name"] for r in con.execute("pragma table_info(aviso)")}:
         con.execute("alter table aviso add column sale_por text")
@@ -7633,6 +7642,21 @@ GASTO_AUDIOS = [0]
 # Cuanto puede tardar UN audio. Pasado esto se corta y se marca `timeout`.
 TRANSCRIBE_TIMEOUT_S = 120
 CODIGO_RAZON = re.compile(r"^[a-z0-9_-]{1,40}$")
+# Los fallos del motor que pueden no repetirse (WAINBOX-67): se reintentan en los ticks
+# siguientes, con espera creciente y a lo mas REINTENTOS_TRANSCRIBE veces. Lo demas (`off`,
+# `sin_motor`, `sin_archivo`, `api_no_disponible`, `vacio`...) es final desde el primero.
+TRANSCRIBE_PASAJEROS = ("transcribe_failed", "timeout", "fallo")
+REINTENTOS_TRANSCRIBE = 3
+ESPERA_REINTENTO_S = 120
+
+
+def reintento_de_transcripcion(razon, intentos, ahora=None):
+    """Cuando toca el proximo intento (epoch) despues de `intentos` fallidos, o None si el
+    fallo es final: un codigo permanente, o los reintentos ya gastados."""
+    if razon not in TRANSCRIBE_PASAJEROS or intentos > REINTENTOS_TRANSCRIBE:
+        return None
+    return int(ahora if ahora is not None else time.time()) + \
+        ESPERA_REINTENTO_S * 2 ** (intentos - 1)
 
 
 def es_audio(m):
@@ -7687,17 +7711,41 @@ def transcribe_archivo(ruta, ajustes):
 
 
 def transcripcion_de(con, cuenta, chat, stanza):
-    fila = con.execute("select ok, texto, razon from transcripcion where account=? and "
-                       "chat_jid=? and stanza_id=?", (cuenta, chat, stanza)).fetchone()
+    fila = con.execute("select ok, texto, razon, intentos, reintento_ts from transcripcion "
+                       "where account=? and chat_jid=? and stanza_id=?",
+                       (cuenta, chat, stanza)).fetchone()
     return dict(fila) if fila else None
 
 
 def transcripcion_guarda(con, cuenta, chat, stanza, texto, razon):
-    con.execute("insert into transcripcion (account, chat_jid, stanza_id, ok, texto, razon, at) "
-                "values (?,?,?,?,?,?,?) on conflict(account, chat_jid, stanza_id) do nothing",
+    reintento = None if texto is not None else reintento_de_transcripcion(razon, 1)
+    con.execute("insert into transcripcion (account, chat_jid, stanza_id, ok, texto, razon, at, "
+                "intentos, reintento_ts) values (?,?,?,?,?,?,?,1,?) "
+                "on conflict(account, chat_jid, stanza_id) do nothing",
                 (cuenta, chat, stanza, int(texto is not None), texto, razon,
-                 time.strftime("%Y-%m-%d %H:%M")))
+                 time.strftime("%Y-%m-%d %H:%M"), reintento))
     con.commit()
+
+
+def transcripcion_reintentada(con, cuenta, chat, stanza, fila, texto, razon):
+    """El resultado de un reintento sobre la fila que fallo: el texto, o el nuevo codigo con
+    el proximo intento (o ninguno, si ya es final)."""
+    intentos = (fila.get("intentos") or 1) + 1
+    reintento = None if texto is not None else reintento_de_transcripcion(razon, intentos)
+    con.execute("update transcripcion set ok=?, texto=?, razon=?, at=?, intentos=?, "
+                "reintento_ts=? where account=? and chat_jid=? and stanza_id=?",
+                (int(texto is not None), texto, razon, time.strftime("%Y-%m-%d %H:%M"),
+                 intentos, reintento, cuenta, chat, stanza))
+    con.commit()
+
+
+def transcripcion_toca(fila, ahora=None):
+    """Si a esta transcripcion le falta un intento: nunca se hizo, o fallo de forma pasajera y
+    su espera ya paso."""
+    if fila is None:
+        return True
+    return (not fila["ok"] and fila.get("reintento_ts") is not None
+            and fila["reintento_ts"] <= (ahora if ahora is not None else time.time()))
 
 
 def transcribe_nuevos(con, nuevos, total):
@@ -7940,7 +7988,11 @@ def veredicto_de(m, decision, con=None):
     if m.get("sticker_suelto") and not (m.get("text") or "").strip():
         return {"accion": "cerrar", "actor": "automatizacion",
                 "motivo": motivo_sin_agente("sticker_suelto")}
-    if m.get("kind") != "grupo" and not (m.get("text") or "").strip():
+    # Un mensaje vacio de un grupo (una foto, un adjunto) sigue a Jev; una nota de voz que no
+    # se pudo transcribir no: es contenido, y en un grupo tampoco se cierra en silencio
+    # (WAINBOX-67, sin-silencio).
+    if ((m.get("kind") != "grupo" or m.get("sin_transcribir"))
+            and not (m.get("text") or "").strip()):
         ruta = (m.get("media") or "").lower()
         audio = ruta.endswith(EXTENSIONES_AUDIO)
         sin = m.get("sin_transcribir")
@@ -14446,17 +14498,24 @@ def tick_reconcilia(con, resumen, inicio):
             except sqlite3.Error:
                 return
             for r in filas:
-                if ((r["media_type"] or "").lower() not in TIPOS_AUDIO or not r["media_path"]
-                        or transcripcion_de(con, caso["account"], caso["chat_jid"],
-                                            r["stanza_id"]) is not None):
+                if (r["media_type"] or "").lower() not in TIPOS_AUDIO or not r["media_path"]:
+                    continue
+                fila = transcripcion_de(con, caso["account"], caso["chat_jid"], r["stanza_id"])
+                if not transcripcion_toca(fila):
                     continue
                 if (GASTO_AUDIOS[0] >= TOPE_AUDIOS_INGEST
                         or time.time() - inicio > PRESUPUESTO_TICK_S):
                     break
                 texto, razon, corrio = transcribe_archivo(r["media_path"], ajustes)
                 GASTO_AUDIOS[0] += int(corrio)
-                transcripcion_guarda(con, caso["account"], caso["chat_jid"], r["stanza_id"],
-                                     texto, razon)
+                if fila is None:
+                    transcripcion_guarda(con, caso["account"], caso["chat_jid"],
+                                         r["stanza_id"], texto, razon)
+                else:
+                    # Un fallo pasajero de antes (WAINBOX-67): el caso ya esta abierto por
+                    # el audio, y lo que salga ahora es lo que muestra su hilo.
+                    transcripcion_reintentada(con, caso["account"], caso["chat_jid"],
+                                              r["stanza_id"], fila, texto, razon)
                 resumen["transcritos"] += 1
                 if texto:
                     reevalua_audio(con, caso, r, texto_de_entrante(con, caso, r))

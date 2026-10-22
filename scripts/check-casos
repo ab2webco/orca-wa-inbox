@@ -4495,6 +4495,11 @@ if nombre.startswith("lento"):
 if nombre.startswith("falla"):
     print(json.dumps({"ok": False, "codigo": "sin_motor", "razon": "no engine"}))
     sys.exit(1)
+# Un fallo pasajero del motor: "inestable" falla solo la primera vez, "caido" siempre.
+veces = open(os.environ["FAKE_LOG"]).read().splitlines().count(nombre)
+if nombre.startswith("caido") or (nombre.startswith("inestable") and veces == 1):
+    print(json.dumps({"ok": False, "codigo": "transcribe_failed", "razon": "engine error"}))
+    sys.exit(1)
 if nombre.startswith("clave"):
     print(json.dumps({"ok": True, "texto": "la clave es Zx9secreta"}))
 else:
@@ -4683,6 +4688,127 @@ if NODE:
             ok("en un grupo el tope de cinco audios por corrida sigue",
                len(llamadas(registro)) == 5 and r.get("audios_diferidos") == 2,
                f"{llamadas(registro)} {r}")
+    finally:
+        falso.cerrar()
+        os.environ.clear()
+        os.environ.update(antes)
+
+# WAINBOX-67: una nota de voz de un grupo que no se pudo transcribir se cerraba en silencio.
+# El motor fallo una vez (`transcribe_failed`, pasajero), el fallo quedo guardado sin
+# reintento, y en un grupo el respaldo de texto vacio no corria: Jev vio un mensaje vacio,
+# dijo skip y no se abrio caso. Un audio es contenido: abre su caso, y el fallo pasajero se
+# reintenta en los ticks siguientes, con espera y con tope.
+def transcripcion_fila(home, stanza):
+    fila = db_de(home).execute("select ok, texto, razon, intentos, reintento_ts from "
+                               "transcripcion where stanza_id=?", (stanza,)).fetchone()
+    return dict(fila) if fila else None
+
+
+def reintento_vencido(home, stanza):
+    """La espera del reintento ya paso: se adelanta en la base, sin dormir en la prueba."""
+    con = db_de(home)
+    con.execute("update transcripcion set reintento_ts=1 where stanza_id=? and "
+                "reintento_ts is not null", (stanza,))
+    con.commit()
+    con.close()
+
+
+def tick_env(home, env):
+    previo = dict(os.environ)
+    os.environ.update(env)
+    try:
+        return tick(home)
+    finally:
+        os.environ.clear()
+        os.environ.update(previo)
+
+
+print("\nun audio de grupo sin transcribir abre su caso y el fallo pasajero se reintenta")
+if NODE:
+    falso = JevFalso(jev_segun_texto)
+    antes = dict(os.environ)
+    os.environ["WA_INBOX_JEV_ENDPOINT"] = falso.url
+    try:
+        # 1. El fallo, en un grupo: caso dudoso, nunca `nothing`, y Jev no juzga un vacio.
+        with tempfile.TemporaryDirectory() as home:
+            env, registro = prepara_transcriptor(home)
+            pon_llave(home)
+            llegan(home, A, [audio_de_grupo(home, "GF1", "caido1.ogg")])
+            linea_lista(home, modo_soporte="responder")
+            ingiere_con(home, env)
+            c = caso_de_stanza(home, "GF1")
+            ok("la nota de voz de un grupo que no se pudo transcribir abre su caso",
+               c is not None, f"{transcripcion_fila(home, 'GF1')}")
+            ok("dudoso y con el codigo, nunca cerrado como nada",
+               c is not None and c["clase"] == "doubtful" and c["etapa"] != "cerrado"
+               and "audio sin transcribir: transcribe_failed"
+               in evento(c, "clasificado")["detalle"], f"{c}")
+            ok("y Jev no juzga un mensaje vacio", "" not in falso.textos(), f"{falso.textos()}")
+            x = hilo_de(home, "GF1")
+            ok("el hilo dice que el audio no se transcribio",
+               x and x["text"] == "audio sin transcribir: transcribe_failed"
+               and x["transcripcion"] is False, f"{x}")
+
+        # 2. El fallo pasajero se reintenta despues de su espera, y el texto llega al caso.
+        falso.pedidos.clear()
+        with tempfile.TemporaryDirectory() as home:
+            env, registro = prepara_transcriptor(home)
+            pon_llave(home)
+            llegan(home, A, [audio_de_grupo(home, "GR1", "inestable1.ogg")])
+            linea_lista(home, modo_soporte="responder")
+            ingiere_con(home, env)
+            fila = transcripcion_fila(home, "GR1")
+            ok("el fallo pasajero queda con un reintento agendado",
+               fila and fila["ok"] == 0 and fila["intentos"] == 1
+               and fila["reintento_ts"] is not None, f"{fila}")
+            tick_env(home, env)
+            ok("antes de su espera el tick no lo reintenta",
+               llamadas(registro) == ["inestable1.ogg"], f"{llamadas(registro)}")
+            reintento_vencido(home, "GR1")
+            p, r = tick_env(home, env)
+            ok("pasada la espera el tick lo vuelve a transcribir",
+               llamadas(registro) == ["inestable1.ogg"] * 2, f"{llamadas(registro)} {p.stderr}")
+            x = hilo_de(home, "GR1")
+            ok("y el caso ya abierto muestra la transcripcion",
+               x and x["text"] == "revisa este caso: dijo inestable1.ogg"
+               and x["transcripcion"] is True, f"{x}")
+            ok("Jev juzga el texto transcrito",
+               "revisa este caso: dijo inestable1.ogg" in falso.textos(), f"{falso.textos()}")
+            fila = transcripcion_fila(home, "GR1")
+            ok("la fila queda bien y sin reintento",
+               fila["ok"] == 1 and fila["razon"] is None and fila["reintento_ts"] is None,
+               f"{fila}")
+            reintento_vencido(home, "GR1")
+            tick_env(home, env)
+            ok("y no se vuelve a transcribir", llamadas(registro) == ["inestable1.ogg"] * 2,
+               f"{llamadas(registro)}")
+
+        # 3. Un codigo permanente no se reintenta; un fallo que sigue tiene tope.
+        with tempfile.TemporaryDirectory() as home:
+            env, registro = prepara_transcriptor(home)
+            pon_llave(home)
+            llegan(home, A, [audio_de_grupo(home, "GP1", "falla9.ogg", 5),
+                             audio(home, "GC1", "caido9.ogg", 4)])
+            linea_lista(home, modo_soporte="responder")
+            ingiere_con(home, env)
+            fila = transcripcion_fila(home, "GP1")
+            ok("un codigo permanente no agenda reintento",
+               fila and fila["razon"] == "sin_motor" and fila["reintento_ts"] is None, f"{fila}")
+            for _ in range(6):
+                reintento_vencido(home, "GP1")
+                reintento_vencido(home, "GC1")
+                tick_env(home, env)
+            ok("y nunca se vuelve a pedir", llamadas(registro).count("falla9.ogg") == 1,
+               f"{llamadas(registro)}")
+            ok("un fallo pasajero que sigue se reintenta a lo mas tres veces",
+               llamadas(registro).count("caido9.ogg") == 4, f"{llamadas(registro)}")
+            fila = transcripcion_fila(home, "GC1")
+            ok("y despues queda como final, con su codigo",
+               fila["ok"] == 0 and fila["razon"] == "transcribe_failed"
+               and fila["intentos"] == 4 and fila["reintento_ts"] is None, f"{fila}")
+            c = caso_de_stanza(home, "GC1")
+            ok("el chat directo sigue abriendo su caso dudoso",
+               c is not None and c["clase"] == "doubtful", f"{c}")
     finally:
         falso.cerrar()
         os.environ.clear()
