@@ -89,8 +89,15 @@ receives it, and without the matching key the call is refused with
 `send-approve-not-owner` (exit 3) and nothing is sent. Each approval is written to the
 activity log with who gave it. Honest limit: this stops a mistaken or misdirected agent,
 not code of the same user that reads the plugin's key file on purpose.
+
+THE OWNER'S NOTICE. A draft left from a session (any held draft that is not the plugin's
+own send and not from the terminal of an agent the plugin launched) also goes to the owner's
+approval number at once, with the full text and a short code: his `si <code>` sends it
+through the same approval, and `no <code>` withdraws it. A secret-shaped value or a
+credential never travels in that notice and is approved on the board only. The code is
+never printed here: only his reply from his phone counts.
 """
-import argparse, os, sqlite3, sys, time, uuid
+import argparse, os, sqlite3, subprocess, sys, time, uuid
 
 # Sin esto Python deja un __pycache__ DENTRO de bin/, y el directorio del plugin
 # instalado esta direccionado por hash.
@@ -102,6 +109,7 @@ import wa_reglas  # noqa: E402
 from wa_settings import (ajuste, alcances_de_lineas, plugin_store_raw, scope_db,  # noqa: E402
                          numero_aprobacion, scope_from_plugin, trae_llave_aprobador)
 from wa_settings import jev_en_linea  # noqa: E402
+from wa_settings import VARIABLE_APROBADOR, VARIABLE_ENVIO_PLUGIN  # noqa: E402
 
 SCOPE_DB = scope_db()
 
@@ -678,11 +686,52 @@ def retirar_de_actividad(req_id):
         pass
 
 
+# El aviso al dueno de un borrador de sesion (WAINBOX-59) lo arma `wa-scope draft-notice`:
+# este proceso solo le pasa el id. Su plazo incluye mandarlo, con el del tick.
+WA_SCOPE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "wa-scope")
+PLAZO_AVISO_S = 90
+
+
+def pide_aviso_al_dueno(fila, req_id):
+    """Le pide al plugin el aviso de este borrador al numero de aprobacion, y dice si hay uno.
+    Solo el id viaja; `draft-notice` lee el borrador y decide (un agente que lanzo el plugin
+    no lo recibe). Un envio del propio plugin no lo pide: lo suyo tiene su camino. Nunca
+    tumba la corrida: sin aviso, el borrador sigue en el tablero igual."""
+    if os.environ.get(VARIABLE_ENVIO_PLUGIN):
+        return False
+    env = dict(os.environ)
+    env.pop(VARIABLE_APROBADOR, None)
+    linea = fila.get("account")
+    args = [sys.executable, WA_SCOPE, "draft-notice", f"--req={req_id}", "--json"] \
+        + ([f"--line={linea}"] if linea and linea != CUENTA_LOCAL else [])
+    try:
+        import json
+        p = subprocess.run(args, capture_output=True, text=True, env=env, timeout=PLAZO_AVISO_S)
+        dato = (json.loads(p.stdout or "[]") or [{}])[0]
+        return bool(dato.get("queued")) or dato.get("reason") == "duplicate"
+    except (OSError, subprocess.SubprocessError, ValueError, IndexError, TypeError,
+            AttributeError):
+        return False
+
+
+def como_se_aprueba(avisado):
+    """Quien aprueba y por donde, para quien escribio. El envio del plugin, como siempre: lo
+    suyo tiene su aviso. Una sesion lee si al dueno le llego el aviso o si es el tablero."""
+    if os.environ.get(VARIABLE_ENVIO_PLUGIN):
+        return "Only the owner approves it, on the board or by answering on WhatsApp"
+    if avisado:
+        return ("The owner got a WhatsApp notice with the full text: only the owner approves "
+                "it, there or on the board")
+    return "Only the owner approves it, on the board"
+
+
 def deja_borrador(con, fila, texto, req_id, salida_json, pedia_envio, frenado=None,
                   reescribir=False):
     """Escribe el borrador y dice como se aprueba. No manda nada."""
     encolar(con, fila, texto, req_id, BORRADOR)
     anotar_borrador(fila, req_id, frenado)
+    # Lo que el chat deja al agente (reescribir) es de quien lo escribio, no del dueno.
+    avisado = not reescribir and pide_aviso_al_dueno(fila, req_id)
     if frenado:
         # `responder` y `--send`, pero el piso fijo o Jev lo frenaron (o Jev no
         # contesto). El mismo codigo que el borrador —hay algo escrito esperando al
@@ -694,18 +743,18 @@ def deja_borrador(con, fila, texto, req_id, salida_json, pedia_envio, frenado=No
               + ("This chat leaves these reasons to the agent: rewrite the reply without "
                  f"them and send it again (cancel this one with `wa-send --cancel {req_id}`)."
                  if reescribir else
-                 f"Only the owner approves it, on the board or by answering on WhatsApp; "
-                 f"you cannot approve it (id {req_id})."))
+                 f"{como_se_aprueba(avisado)}; you cannot approve it (id {req_id})."))
     if pedia_envio:
         # `--send` sobre una conversacion en `borrador`. No se calla y no se degrada a
         # "no hice nada": hay algo escrito y hay algo que hacer con ello.
         niega(NECESITA_VISTO,
               f"{fila['chat_name']!r} is on `borrador`: the reply was written and is "
               f"waiting for the owner, not sent. WhatsApp has no draft of its own, so "
-              f"nothing was typed into the chat. Only the owner approves it, on the board "
-              f"or by answering on WhatsApp; you cannot approve it (id {req_id}).")
+              f"nothing was typed into the chat. {como_se_aprueba(avisado)}; you cannot "
+              f"approve it (id {req_id}).")
     informa(salida_json,
-            {"req_id": req_id, "estado": BORRADOR, "chat": fila["chat_name"]},
+            {"req_id": req_id, "estado": BORRADOR, "chat": fila["chat_name"],
+             "owner_notified": avisado},
             f"draft · {fila['chat_name']} · {req_id} · {ESPERA_AL_DUENO}")
     sys.exit(0)
 

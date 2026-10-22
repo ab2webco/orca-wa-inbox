@@ -20,7 +20,7 @@
  *     del pedido: dos clics sobre la misma tarjeta entregan una vez.
  */
 import { join } from 'node:path'
-import { VARIABLE_APROBADOR } from './aprobador.mjs'
+import { VARIABLE_APROBADOR, VARIABLE_ENVIO_PLUGIN } from './aprobador.mjs'
 import { hiloParaPanel } from './hilo.mjs'
 
 /** Lo que el panel puede pedir. Son codigos estables: el panel los escribe y el worker
@@ -188,12 +188,14 @@ export function crearAccionesCaso ({ run, herramienta, motivoDe, lanzarTriage, l
   }
 
   /** `wa-send ...`. Sale 3 y 4 son negativas con motivo (`run` solo rechaza lo que no es
-   *  3), asi que cualquier salida distinta de 0 es un fallo. */
+   *  3), asi que cualquier salida distinta de 0 es un fallo. Siempre con la marca del plugin
+   *  (WAINBOX-59): lo que el tablero deja retenido se ve en el tablero, no pide otro aviso. */
   async function enviar (args, env = null) {
     const cmd = await herramienta('wa-send')
     let r
     try {
-      r = await run(cmd, args, { timeoutMs: ENVIO_TOPE_MS, ...(env ? { env } : {}) })
+      r = await run(cmd, args, { timeoutMs: ENVIO_TOPE_MS,
+        env: { ...(env || {}), [VARIABLE_ENVIO_PLUGIN]: '1' } })
     } catch (error) {
       throw aRechazo(error, motivoDe)
     }

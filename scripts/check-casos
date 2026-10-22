@@ -9739,6 +9739,237 @@ if NODE:
             sidecar.cerrar()
 
 
+# ── Lo que una sesion deja retenido avisa al dueno (WAINBOX-59) ──────────────────────
+# El dueno dicta o aprueba una respuesta en una sesion de Claude y pide que se envie: el piso
+# o Jev la retienen igual, y antes no le llegaba ningun aviso (solo el tablero). Ahora el
+# plugin le escribe al numero de aprobacion con el texto entero y un codigo corto, y `si
+# <codigo>` la manda por el camino del aprobador (`--approve --by whatsapp-reply`). Un
+# agente lanzado por el plugin y los envios del propio plugin siguen sin ese aviso: lo suyo
+# tiene su propio camino (el aviso del caso, el tablero). Un secreto no viaja nunca.
+print("\nWAINBOX-59: lo retenido de una sesion avisa al dueno")
+CODIGO_BORRADOR = re.compile(r"\b(?:si|yes) ([B-DF-HJ-NP-TV-XZ][B-DF-HJ-NP-TV-XZ2-9]{3})\b")
+ENV_DE_SESION = ("WA_INBOX_APPROVER", "WA_INBOX_PLUGIN_SEND", "ORCA_TERMINAL_HANDLE",
+                 "ORCA_TAB_ID", "ORCA_WORKTREE_ID", "ORCA_PANE_KEY", "WA_INBOX_LINEA")
+
+
+def sesion_envia(home, chat, texto, req, *mas, extra=None):
+    """`wa-send` como lo corre una sesion: sin la llave, sin la marca del plugin y sin
+    terminal de Orca, salvo lo que la prueba ponga en `extra`."""
+    env = dict(os.environ, HOME=str(home), XDG_CONFIG_HOME=str(pathlib.Path(home) / ".config"),
+               APPDATA=str(pathlib.Path(home) / "AppData" / "Roaming"),
+               ORCA_CLI_COMMAND=SIN_ORCA)
+    for clave in ENV_DE_SESION:
+        env.pop(clave, None)
+    env.update(extra or {})
+    return subprocess.run([str(RAIZ / "bin" / "wa-send"), chat, texto, f"--id={req}", *mas,
+                           "--timeout=20", "--json"], capture_output=True, text=True,
+                          env=env, timeout=180)
+
+
+def estado_envio(home, req):
+    return next((f["estado"] for f in envios(home) if f["req_id"] == req), None)
+
+
+def aviso_de_borrador(home, req):
+    return [f for f in al_dueno(home) if f["req_id"] == f"aviso-d-{req}"]
+
+
+def codigo_de(aviso):
+    m = CODIGO_BORRADOR.search(aviso[0]["body"]) if aviso else None
+    return m.group(1) if m else None
+
+
+with tempfile.TemporaryDirectory() as home:
+    ws = carga_wa_scope(home)
+    for texto, esperado in (
+            ("si BKTM", {"accion": "si", "borrador": "BKTM"}),
+            ("Sí bktm", {"accion": "si", "borrador": "BKTM"}),
+            ("yes K7Q2", {"accion": "si", "borrador": "K7Q2"}),
+            ("no BKTM.", {"accion": "no", "borrador": "BKTM"}),
+            ("si 18", {"accion": "si", "caso": 18, "borrador": None}),
+            ("si dale", None),
+            ("no gracias", None),
+            ("ok BKTM", None),
+            ("si 7BKT", None)):
+        salio = ws.lee_respuesta(texto)
+        if salio is not None and esperado is not None:
+            salio = {k: salio.get(k) for k in esperado}
+        ok(f"respuesta a un borrador: {texto!r} -> {esperado}", salio == esperado,
+           f"salio {salio}")
+
+if NODE:
+    if not any(c["jid"] == DUENO_DM for c in CHATS):
+        CHATS.append({"jid": DUENO_DM, "nombre": "Dueno Directo", "grupo": False})
+    with tempfile.TemporaryDirectory() as home:
+        linea_lista(home)
+        js(home, "config", "ack", "off")
+        js(home, "set", DUENO_DM, "--provider", "ninguno", "--mode", "responder")
+        pon_duenos(home, DUENO_LID)
+        pon_aprobacion(home, DUENO_LID)
+        sidecar = SidecarFalso(home)
+        try:
+            dictado = "Listo, el arreglo cuesta $50 y ya quedo aplicado."
+            p = sesion_envia(home, PERSONA, dictado, "sesion-1", "--send")
+            ok("una sesion que manda algo que el piso frena: sigue retenido (sale 3)",
+               p.returncode == 3 and estado_envio(home, "sesion-1") == "borrador",
+               f"{p.returncode} {p.stderr[-300:]}")
+            aviso = aviso_de_borrador(home, "sesion-1")
+            ok("y al dueno le llega UN aviso al momento, sin esperar al tick",
+               len(aviso) == 1 and aviso[0]["estado"] == "enviado", f"{al_dueno(home)}")
+            cuerpo = aviso[0]["body"] if aviso else ""
+            codigo = codigo_de(aviso)
+            ok("el aviso lleva el texto entero, el chat y por que se freno",
+               dictado in cuerpo and "Cliente Uno" in cuerpo and "dinero" in cuerpo, cuerpo)
+            ok("y un codigo corto para contestar", codigo is not None, cuerpo)
+            ok("el codigo no se le dice a quien escribio",
+               codigo is not None and codigo not in p.stdout + p.stderr, p.stderr[-300:])
+            ok("la sesion lee que el aviso salio por WhatsApp",
+               "WhatsApp notice" in p.stderr, p.stderr[-300:])
+            ok("queda una fila de aviso de tipo borrador",
+               cuenta(home, "select count(*) from aviso where tipo='borrador' and "
+                            "req_id='aviso-d-sesion-1'") == 1)
+            p = sesion_envia(home, PERSONA, dictado, "sesion-1", "--send")
+            ok("el mismo id no repite el aviso", len(aviso_de_borrador(home, "sesion-1")) == 1,
+               f"{al_dueno(home)}")
+
+            # Nadie mas aprueba con el codigo: otro numero, ni la propia linea escribiendo
+            # en ese directo (lo que manda una sesion por la linea es `from_me`).
+            llegan(home, A, [msg(DUENO_DM, "B59-1", f"si {codigo}", 1, de=OTRO_LID)])
+            ingiere(home)
+            ok("`si <codigo>` de otro numero no la manda",
+               estado_envio(home, "sesion-1") == "borrador")
+            p = sesion_envia(home, DUENO_DM, f"si {codigo}", "sesion-auto", "--send", "--raw")
+            llegan(home, A, [msg(DUENO_DM, "B59-2", f"si {codigo}", 1, yo=True)])
+            ingiere(home)
+            ok("`si <codigo>` que la sesion escribe por la linea no la manda",
+               estado_envio(home, "sesion-1") == "borrador", f"{p.returncode}")
+
+            llegan(home, A, [msg(DUENO_DM, "B59-3", f"si {str(codigo).lower()}", 1, de=DUENO_LID)])
+            ingiere(home)
+            ok("`si <codigo>` del dueno la manda: una sola accion suya",
+               estado_envio(home, "sesion-1") == "enviado", f"{envios(home)}")
+            ok("y la bitacora dice que la aprobo por WhatsApp",
+               cuenta(home, "select count(*) from agent_action where action='approved' and "
+                            "detail like 'sesion-1 · approved by the owner''s WhatsApp reply'")
+               == 1)
+            ok("y ya no dice que espera al dueno",
+               cuenta(home, "select count(*) from agent_action where action='draft' and "
+                            "detail like '%sesion-1%'") == 0)
+            tick(home)
+            ok("el dueno recibe la confirmacion",
+               any("salio" in a["body"] and a["req_id"].startswith("aviso-r-")
+                   for a in al_dueno(home)[-1:]), f"{al_dueno(home)[-1:]}")
+            antes = len(al_dueno(home))
+            llegan(home, A, [msg(DUENO_DM, "B59-4", f"si {codigo}", 1, de=DUENO_LID)])
+            ingiere(home)
+            tick(home)
+            ok("contestarlo otra vez no manda nada mas y lo dice",
+               sidecar.entregados.count("sesion-1") == 1 and len(al_dueno(home)) == antes + 1
+               and "ya" in al_dueno(home)[-1]["body"], f"{al_dueno(home)[antes:]}")
+
+            # `no <codigo>` lo retira.
+            sesion_envia(home, PERSONA, "Le confirmo el cobro de $80.", "sesion-2", "--send")
+            otro = codigo_de(aviso_de_borrador(home, "sesion-2"))
+            llegan(home, A, [msg(DUENO_DM, "B59-5", f"no {otro}", 1, de=DUENO_LID)])
+            ingiere(home)
+            ok("`no <codigo>` lo retira: ya no se puede mandar",
+               otro is not None and estado_envio(home, "sesion-2") == "cancelado",
+               f"{otro} {envios(home)}")
+
+            # Un borrador sin --send tambien es algo que espera al dueno.
+            sesion_envia(home, PERSONA, "Hola, ya lo estamos revisando.", "sesion-3")
+            ok("un borrador sin --send de una sesion tambien avisa",
+               len(aviso_de_borrador(home, "sesion-3")) == 1, f"{al_dueno(home)[-1:]}")
+
+            # El agente de casos que lanzo el plugin, y el de un proyecto: retenido y sin aviso.
+            con = db_de(home)
+            con.execute("insert into agente_corrida (origen, estado, terminal, tab, created_at, "
+                        "updated_at) values ('tick', 'activo', 'term_caso_demo', 'tab_caso_demo', "
+                        "'2026-10-01 09:00', '2026-10-01 09:00')")
+            con.execute("insert into caso_despacho (case_id, evento_id, terminal, tab, estado, "
+                        "created_at, updated_at) values (1, 1, 'term_proy_demo', 'tab_proy_demo', "
+                        "'activo', '2026-10-01 09:00', '2026-10-01 09:00')")
+            con.commit()
+            con.close()
+            for req, extra in (("agente-1", {"ORCA_TERMINAL_HANDLE": "term_caso_demo"}),
+                               ("agente-2", {"ORCA_TERMINAL_HANDLE": "term_nuevo_demo",
+                                             "ORCA_TAB_ID": "tab_caso_demo"}),
+                               ("agente-3", {"ORCA_TERMINAL_HANDLE": "term_proy_demo"}),
+                               ("plugin-1", {"WA_INBOX_PLUGIN_SEND": "1"})):
+                p = sesion_envia(home, PERSONA, dictado, req, "--send", extra=extra)
+                ok(f"{req}: el mismo envio sigue retenido y sin aviso al dueno",
+                   p.returncode == 3 and estado_envio(home, req) == "borrador"
+                   and aviso_de_borrador(home, req) == []
+                   and cuenta(home, "select count(*) from aviso where req_id=?",
+                              f"aviso-d-{req}") == 0, f"{p.returncode} {p.stderr[-200:]}")
+                ok(f"{req}: y no le dice que al dueno le llego un aviso",
+                   "WhatsApp notice" not in p.stderr, p.stderr[-300:])
+            r = corre(home, "draft-notice", "--req=agente-1",
+                      extra={"ORCA_TERMINAL_HANDLE": "term_caso_demo"})
+            ok("pedir el aviso a mano desde la terminal del agente tampoco lo manda",
+               aviso_de_borrador(home, "agente-1") == [], f"{r.stdout} {r.stderr[-200:]}")
+
+            # Un secreto: retenido siempre, el aviso no lo muestra y el codigo no lo manda.
+            clave = "La clave del panel es: Abc12345xyz"
+            p = sesion_envia(home, PERSONA, clave, "sesion-4", "--send")
+            aviso = aviso_de_borrador(home, "sesion-4")
+            cuerpo = aviso[0]["body"] if aviso else ""
+            ok("un secreto sigue retenido y el aviso no lo lleva",
+               p.returncode == 3 and len(aviso) == 1 and "Abc12345xyz" not in cuerpo
+               and "tablero" in cuerpo, f"{p.returncode} {cuerpo}")
+            secreto = codigo_de(aviso)
+            ok("ni ofrece contestarlo por aqui", secreto is None, cuerpo)
+            con = db_de(home)
+            secreto = con.execute("select version from aviso where req_id='aviso-d-sesion-4'"
+                                  ).fetchone()[0]
+            con.close()
+            llegan(home, A, [msg(DUENO_DM, "B59-6", f"si {secreto}", 1, de=DUENO_LID)])
+            ingiere(home)
+            tick(home)
+            ok("y `si <codigo>` no lo manda: va al tablero",
+               estado_envio(home, "sesion-4") == "borrador"
+               and "tablero" in al_dueno(home)[-1]["body"], f"{al_dueno(home)[-1:]}")
+
+            # El chat del dueno sigue sin Jev ni reglas: sale sin aviso.
+            p = sesion_envia(home, DUENO_DM, "El arreglo costo $50, ya quedo.", "sesion-5",
+                             "--send")
+            ok("lo que una sesion le manda al dueno sigue saliendo sin retener",
+               p.returncode == 0 and estado_envio(home, "sesion-5") == "enviado"
+               and aviso_de_borrador(home, "sesion-5") == [], f"{p.stderr[-200:]}")
+
+            # Un `si` a secas que cita el aviso de un borrador contesta ESE borrador: nunca cae
+            # al aviso de un caso que este vivo.
+            llegan(home, A, [msg(PERSONA, "B59-7", PEDIDO, 30)])
+            dinero, _ = propuesta_lista(home, "B59-7", texto="Listo, el arreglo cuesta $50.")
+            tick(home)
+            ok("(el caso tiene su aviso vivo)",
+               any(f"Caso {dinero}" in a["body"] for a in al_dueno(home)), f"{al_dueno(home)}")
+            sesion_envia(home, PERSONA, "Le confirmo el cobro de $90.", "sesion-6", "--send")
+            llegan(home, A, [msg(DUENO_DM, "B59-8", "si", 1, de=DUENO_LID,
+                                 cita_id="STANZA-aviso-d-sesion-6")])
+            ingiere(home)
+            ver = js(home, "caso", "ver", dinero)[0]
+            ok("un `si` que cita el aviso de un borrador manda ese borrador, no el caso",
+               not ver["aprobada"] and ver["etapa"] == "decision"
+               and estado_envio(home, "sesion-6") == "enviado",
+               f"{estado_envio(home, 'sesion-6')} {ver['eventos'][-2:]}")
+        finally:
+            sidecar.cerrar()
+
+    # Sin numero de aprobacion no hay a donde avisar: la sesion lee que es el tablero.
+    with tempfile.TemporaryDirectory() as home:
+        linea_lista(home)
+        sidecar = SidecarFalso(home)
+        try:
+            p = sesion_envia(home, PERSONA, "Listo, el arreglo cuesta $50.", "sesion-7", "--send")
+            ok("sin numero de aprobacion: retenido, sin aviso, y le dice que es el tablero",
+               p.returncode == 3 and cuenta(home, "select count(*) from aviso") == 0
+               and "board" in p.stderr and "WhatsApp notice" not in p.stderr,
+               f"{p.stderr[-300:]}")
+        finally:
+            sidecar.cerrar()
+
+
 # ── Los informes del tablero (odd/tasks/informes-tablero.md, I3) ──────────────────────
 # `wa-scope sync` calcula los numeros de la pestana Informes y los deja en UNA clave del
 # storage (`reports`). Cada numero se fija aca sobre datos armados a mano, con el valor
