@@ -4976,7 +4976,24 @@ def cmd_caso_propuesta(con, a):
             caso_falla("E_ARGS", f"--espera goes with responder: a {a.tipo} proposal sends "
                                  f"nothing to the customer")
         propuesta["espera"] = a.espera
+    nuevo = (getattr(a, "nuevo", None) or "").strip()
+    if nuevo and a.tipo != "trabajar":
+        caso_falla("E_ARGS", f"--nuevo goes with trabajar: a {a.tipo} proposal dispatches nothing")
     if a.tipo == "trabajar":
+        # Lo que el equipo ya verifico no se vuelve a despachar (WAINBOX-61): se contesta, o
+        # se despacha solo lo nuevo. La orden del dueno y el pedido de un operador son su
+        # decision: no se les niega.
+        if nuevo:
+            propuesta["instrucciones"] = (f"{NUEVO_POR_VERIFICAR} {nuevo}\n\n"
+                                          + propuesta["instrucciones"])
+        elif not caso_del_dueno(con, caso) and not pide_un_operador(con, caso, False):
+            sabido = verificado_del_tema(con, caso, propuesta["instrucciones"])
+            if sabido:
+                caso_falla("E_KNOWN", f"case #{sabido['case_id']}'s project agent already verified "
+                                      f"this at {sabido['at']}: {recorta(sabido['resumen'], 300)} "
+                                      f"Reply with it (`caso propuesta {a.id} --tipo responder`), "
+                                      f"or dispatch only what is new with --nuevo \"<what is new "
+                                      f"to verify>\"")
         # El brief lleva los adjuntos del caso: el agente del proyecto los abre con lo suyo.
         adjuntos = brief_de_adjuntos(con, caso)
         if adjuntos and adjuntos not in propuesta["instrucciones"]:
@@ -5396,6 +5413,14 @@ def frenos_de_regla(con, caso):
             al_dueno.append(e)
         elif nivel == wa_reglas.AGENTE:
             al_agente.append(e)
+    # La calidad de lo que sale (WAINBOX-63), juzgada ahora y nunca pegada al caso: al
+    # reescribirla, deja de frenar. Con el nivel `quality` del chat que la lee.
+    internos = wa_reglas.nombres_internos(con, leyente.get("account") or caso["account"])
+    for c in wa_reglas.calidad(respuesta, internos):
+        if niv["quality"] == wa_reglas.PREGUNTAR:
+            al_dueno.append(c)
+        elif niv["quality"] == wa_reglas.AGENTE:
+            al_agente.append(c)
     if scope.get("mode") == "borrador":
         al_dueno.append("borrador")
     # La pregunta "A o B?" es del dueno (un cliente con auto, o el chat en owner): lo que se
@@ -15450,6 +15475,12 @@ def brief_de_despacho(con, caso, proyecto, instrucciones):
             if i.get("respuesta"):
                 enviada = REPORTE_DUENO["previo"] if del_dueno else "reply sent to the customer"
                 previos.append(f"  {enviada}: {i['respuesta']}")
+    otros = [v for v in ya_verificado(con, caso) if v["case_id"] != cid]
+    if otros:
+        previos += ["", "## Already verified (do not repeat it)",
+                    "The project agents already verified this in this chat, at the time "
+                    "shown: build on it and verify only what is new.",
+                    *lineas_de_verificado(otros)]
     reporta = f"{wa} caso resultado {cid}"
     primer = instrucciones_primer_mensaje(con, caso, "trabajador")
     destino = destino_de_propuesta(caso)
@@ -15822,6 +15853,98 @@ DICE_MEMORIA = ("Context so you do not repeat or ask what the line already did i
 LA_LINEA = "the line (us)"
 
 
+# Lo que el equipo ya verifico (WAINBOX-61). Visto en vivo: el mismo tema volvio a despachar
+# el mismo trabajo de solo lectura tres veces en un dia, con los mismos hallazgos, y el
+# cliente esperaba cada vez. Lo que un agente del proyecto reporto `resuelto` en este chat
+# hace menos de VERIFICADO_FRESCO_HORAS se contesta; solo lo nuevo se despacha.
+VERIFICADO_FRESCO_HORAS = 24
+NUEVO_POR_VERIFICAR = "New to verify (the rest is already verified, see the brief):"
+# Palabras que no dicen de que se trata: el tema son las demas.
+PALABRAS_VACIAS = frozenset("""
+    para pero como esta este esto estos estas porque cuando donde tiene tienen hace hacer
+    sobre desde hasta todo toda todos todas otra otro otros otras ahora sigue siguen vuelve
+    tambien favor hola buenos buenas tardes dias noches gracias igual mismo misma bien
+    nada algo cliente usted ustedes nosotros puede pueden podemos quiero queremos necesito
+    with that this from have what when there their them they will would could should about
+    again still please thanks hello also some your just like
+    voce voces obrigado ainda agora mesmo tambem
+""".split())
+TEMA_MINIMO = 2
+
+
+def palabras_del_tema(*textos):
+    """Las palabras que dicen de que se trata: cuatro letras o mas, sin las vacias."""
+    t = wa_reglas.normaliza(" ".join(x or "" for x in textos))
+    return {w for w in re.findall(r"[a-z0-9]{4,}", t) if w not in PALABRAS_VACIAS}
+
+
+def citas_de(texto):
+    """Las lineas citadas de un brief (`> `): lo que el cliente escribio, tal cual."""
+    return "\n".join(l.lstrip()[1:] for l in (texto or "").splitlines()
+                     if l.lstrip().startswith(">"))
+
+
+def mismo_tema(a, b):
+    """Si dos conjuntos de palabras hablan de lo mismo: TEMA_MINIMO en comun, y al menos un
+    tercio del mas chico."""
+    comunes = a & b
+    return len(comunes) >= TEMA_MINIMO and 3 * len(comunes) >= min(len(a), len(b))
+
+
+def ya_verificado(con, caso):
+    """Lo que los agentes del proyecto reportaron `resuelto` en el chat del caso (el caso
+    incluido) en las ultimas VERIFICADO_FRESCO_HORAS, lo mas nuevo primero: [{case_id,
+    titulo, proyecto, at, resumen, tema}]. Un sello que no se entiende no es fresco, y un
+    caso con una credencial no entra."""
+    limite = time.time() - VERIFICADO_FRESCO_HORAS * 3600
+    salida = []
+    for r in con.execute(
+            "select d.case_id, d.proyecto, d.instrucciones, d.informes, c.titulo, c.resumen, "
+            "c.excepciones from caso_despacho d join caso c on c.case_id=d.case_id where "
+            "c.account=? and c.chat_jid=? order by d.id desc",
+            (caso["account"], caso["chat_jid"])):
+        if "credential" in _lista_json(r["excepciones"]):
+            continue
+        for i in _lista_json(r["informes"]):
+            if not isinstance(i, dict) or i.get("estado") != "resuelto":
+                continue
+            momento = sello_a_epoch(i.get("at"))
+            resumen = " ".join(str(i.get("resumen") or "").split())
+            if momento is None or momento < limite or not resumen:
+                continue
+            salida.append({"case_id": r["case_id"],
+                           "titulo": " ".join((r["titulo"] or "").split()) or "untitled",
+                           "proyecto": r["proyecto"], "at": i["at"], "resumen": resumen,
+                           "tema": palabras_del_tema(r["titulo"], r["resumen"],
+                                                     citas_de(r["instrucciones"]), resumen)})
+    return sorted(salida, key=lambda v: v["at"], reverse=True)
+
+
+def verificado_del_tema(con, caso, instrucciones):
+    """Lo ya verificado y fresco sobre el mismo tema que este trabajo, o None."""
+    tema = palabras_del_tema(caso.get("titulo"), caso.get("resumen"), citas_de(instrucciones))
+    return next((v for v in ya_verificado(con, caso) if mismo_tema(tema, v["tema"])), None)
+
+
+def lineas_de_verificado(verificados):
+    return [f"- [{v['at']}] case #{v['case_id']} ({v['titulo']})"
+            + (f", project {v['proyecto']}" if v.get("proyecto") else "")
+            + f": {recorta(v['resumen'], LARGO_MEMORIA)}" for v in verificados]
+
+
+def seccion_de_verificado(con, caso):
+    """El archivo del caso: lo ya verificado en el chat, con su hora, y como usarlo."""
+    verificados = ya_verificado(con, caso)
+    if not verificados:
+        return []
+    return ["", f"## Already verified in this chat (last {VERIFICADO_FRESCO_HORAS} h)",
+            "What the project agents reported solved in this chat, with its time. When the "
+            "customer asks about the same thing, reply with it (`--tipo responder`) instead of "
+            "dispatching again; dispatch only what is new, with `--nuevo \"<what is new>\"`. "
+            "Read the project's memory too when you have it.",
+            *lineas_de_verificado(verificados)]
+
+
 def casos_de_memoria(con, caso):
     """Los casos anteriores del chat (MEMORIA_DIAS_CASOS, a lo mas MEMORIA_CASOS, el mas nuevo
     primero), cada uno en lineas: id, etapa, titulo, resumen y la respuesta que salio. Uno con
@@ -15992,10 +16115,15 @@ def seccion_de_linea(caso):
 def archivo_de_caso(con, caso):
     """El archivo del caso para el agente de casos, en ingles."""
     cid = caso["case_id"]
-    cola = (seccion_de_linea(caso) + seccion_de_rezago(con, caso)
+    cola = (seccion_de_linea(caso) + seccion_de_verificado(con, caso)
+            + seccion_de_rezago(con, caso)
             + seccion_de_pregunta(con, caso) + seccion_de_bloqueo(con, caso)
             + historia_del_caso(con, caso)
             + instrucciones_primer_mensaje(con, caso, "agente")) + [
+        "", "## Your reply",
+        "Write it as AGENTS.md \"How a reply reads\" says: the answer or the next step first, "
+        "one topic, to one person, short, no internal names, quotes or notes. The plugin "
+        "holds a reply that breaks it and gives it back to you.",
         "", "## The whole record, if you need it",
         f"{ruta_wa_scope()} caso ver {cid} --json",
     ]
@@ -17893,6 +18021,12 @@ def main():
     c.add_argument("--respuesta", help="the reply text (required for responder)")
     c.add_argument("--instrucciones", help="the work to do (required for trabajar)")
     c.add_argument("--repo", help="where the work happens")
+    c.add_argument("--nuevo", metavar="TEXT",
+                   help="with trabajar: what is new to verify when this chat's project agent "
+                        "already verified the topic in the last 24 h (the case file lists it "
+                        "under \"Already verified\"). Without it, such a dispatch is refused "
+                        "(exit 2, E_KNOWN): reply with what is verified instead. The owner's own "
+                        "order and an operator's case are never refused")
     c.add_argument("--evidencia", help="when the reply says work was done: what proves it (a "
                                        "link, a file, a commit). The plugin's review reads it "
                                        "with the reply, so a status it backs is not held")
