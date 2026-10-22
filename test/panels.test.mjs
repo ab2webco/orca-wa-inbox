@@ -2219,7 +2219,7 @@ titulo('config.html: el clic contra el cupo del host')
   window.dispatchEvent(new window.Event('focus'))
   await espera()
   doc.getElementById('sync-retry').click()
-  await new Promise((r) => setTimeout(r, 400))
+  await espera()
   ok('el primer clic deja el pedido escrito, no rechazado',
     !!storage.syncRequest, JSON.stringify(storage.syncRequest))
   ok('y no le dice al usuario que Orca se cerro',
@@ -2245,7 +2245,7 @@ titulo('config.html: un rechazo del host se reintenta, no se reporta')
   })
   await espera()
   doc.getElementById('sync-retry').click()
-  await new Promise((r) => setTimeout(r, 300))
+  await espera()
   ok('el primer rechazo no se pinta como una falla',
     !/error/.test(doc.getElementById('said-sync').textContent),
     doc.getElementById('said-sync').textContent.slice(0, 140))
@@ -3611,7 +3611,7 @@ titulo('config.html — skills-globales: la pestana Skills instala, actualiza y 
   await espera()
   ok('abrir la pestana pide al worker el estado de las skills',
     pedidos.some((p) => p.action === 'skills-estado'), JSON.stringify(pedidos))
-  await new Promise((r) => setTimeout(r, 400))
+  await espera()
   const caja = doc.getElementById('skills-wrap')
   const filaDe = (clave) => caja.querySelector(`[data-sk-target="${clave}"]`)
   const botones = (clave) => [...(filaDe(clave)?.querySelectorAll('button') || [])]
@@ -3644,7 +3644,7 @@ titulo('config.html — skills-globales: la pestana Skills instala, actualiza y 
     /\.gitignore/.test(doc.getElementById('view-skills').textContent))
 
   filaDe('global').querySelector('[data-sk-act="install"]').click()
-  await new Promise((r) => setTimeout(r, 400))
+  await espera()
   const inst = pedidos.find((p) => p.action === 'skill-instalar')
   ok('Instalar globalmente manda solo la skill y el destino, sin rutas',
     inst && inst.skill === 'whatsapp-avisos' && inst.target === 'global' &&
@@ -3656,14 +3656,14 @@ titulo('config.html — skills-globales: la pestana Skills instala, actualiza y 
     filaDe('global')?.textContent + ' | ' + doc.getElementById('said-skills').textContent)
 
   filaDe('project:beta-demo').querySelector('[data-sk-act="update"]').click()
-  await new Promise((r) => setTimeout(r, 400))
+  await espera()
   const upd = pedidos.filter((p) => p.action === 'skill-instalar').pop()
   ok('Actualizar pide instalar sobre ese proyecto, por su id',
     upd && upd.project === 'beta-demo' && !('path' in upd) &&
     /Instalada/.test(filaDe('project:beta-demo')?.textContent), JSON.stringify(upd))
 
   filaDe('project:alfa-demo').querySelector('[data-sk-act="remove"]').click()
-  await new Promise((r) => setTimeout(r, 400))
+  await espera()
   const q1 = pedidos.filter((p) => p.action === 'skill-quitar').pop()
   ok('Quitar pide sin forzar', q1 && q1.project === 'alfa-demo' && q1.force !== true,
     JSON.stringify(q1))
@@ -3673,7 +3673,7 @@ titulo('config.html — skills-globales: la pestana Skills instala, actualiza y 
     JSON.stringify(botones('project:alfa-demo')) === '["force","cancel"]',
     filaDe('project:alfa-demo')?.textContent)
   filaDe('project:alfa-demo').querySelector('[data-sk-act="force"]').click()
-  await new Promise((r) => setTimeout(r, 400))
+  await espera()
   const q2 = pedidos.filter((p) => p.action === 'skill-quitar').pop()
   ok('confirmar manda force y la fila queda sin instalar',
     q2 && q2.force === true && q2.project === 'alfa-demo' &&
@@ -9104,7 +9104,7 @@ titulo('config.html — L4: Conversaciones se ven y se guardan por linea')
   ok('muestra lo autorizado en la principal y nada de la otra',
     /Soporte Principal/.test(lista()) && !/Soporte Segunda/.test(lista()), lista())
   elegirSeg(doc, 'linea-vista', L_B)
-  await new Promise((r) => setTimeout(r, 300))
+  await espera()
   ok('elegir la otra linea muestra lo autorizado en ESA',
     /Soporte Segunda/.test(lista()) && !/Soporte Principal/.test(lista()), lista())
 
@@ -9112,7 +9112,7 @@ titulo('config.html — L4: Conversaciones se ven y se guardan por linea')
   await espera()
   elegirSeg(doc, 'mode', 'borrador')
   doc.getElementById('save-scope').click()
-  await new Promise((r) => setTimeout(r, 500))
+  await espera()
   ok('guardar en la otra linea escribe en SU alcance',
     storage.alcancePorLinea[L_B][G1].mode === 'borrador' &&
     storage.alcancePorLinea[L_B][G1].account === L_B, JSON.stringify(storage.alcancePorLinea))
@@ -9146,7 +9146,7 @@ titulo('config.html — L4: si la otra linea no contesta, no se ve la lista de l
   await espera()
   const lista = () => doc.getElementById('scope-wrap').textContent
   elegirSeg(doc, 'linea-vista', L_B)
-  await new Promise((r) => setTimeout(r, 300))
+  await espera()
   ok('mirando la otra linea, nunca queda la lista de la principal',
     !/Soporte Principal/.test(lista()), lista())
   ok('y dice que la esta leyendo', /Leyendo/.test(lista()), lista())
@@ -9176,7 +9176,7 @@ titulo('activity.html — L4: el tablero se filtra por linea')
     doc.getElementById('linea-vista-fila').outerHTML.slice(0, 300))
   ok('muestra solo los casos de la principal', visibles(doc).join() === '1', visibles(doc).join())
   selector.querySelector(`button[data-value="${L_B}"]`).click()
-  await new Promise((r) => setTimeout(r, 300))
+  await espera()
   ok('elegir la otra muestra solo los suyos', visibles(doc).join() === '2', visibles(doc).join())
   ok('y el estado de ESA linea, con su numero',
     doc.getElementById('linea').textContent.includes('+573000000011'),
@@ -9191,7 +9191,7 @@ titulo('activity.html — L4: el tablero se filtra por linea')
   storage.porLinea[L_B].board = tablero([tarjeta({ case_id: 2, account: L_B })],
     { held_drafts: [retenido] })
   doc.getElementById('refresh').click()
-  await new Promise((r) => setTimeout(r, 300))
+  await espera()
   const tarjetaRetenido = doc.querySelector('#board-held .card[data-req="sesion-otra-1"]')
   ok('un retenido de la otra linea dice en su tarjeta de que linea es',
     !!tarjetaRetenido && tarjetaRetenido.textContent.includes('+573000000011'),
@@ -9241,7 +9241,7 @@ titulo('config.html — lineas claras: que es de cada linea y que es del equipo'
       doc.defaultView.Node.DOCUMENT_POSITION_FOLLOWING) && seVeN(fila), fila.outerHTML.slice(0, 200))
   ok('dice que linea se esta viendo', textoDe(doc, '#linea-vista-actual') === 'Viendo la linea +573000000001')
   elegirSeg(doc, 'linea-vista', L_B)
-  await new Promise((r) => setTimeout(r, 300))
+  await espera()
   ok('y despues de elegir la otra nombra la otra, tambien en el aviso de los casos',
     textoDe(doc, '#linea-vista-actual') === 'Viendo la linea +573000000011' &&
     /\+573000000011/.test(textoDe(doc, '#approval-main-line')) &&
@@ -9319,7 +9319,7 @@ titulo('config.html — A5: cada linea muestra y guarda sus propios ajustes')
     campo('agent') === 'Agente Principal' && campo('tone') === 'Tono de la principal' &&
     campo('owner') === 'Ana', `${campo('agent')} / ${campo('tone')}`)
   elegirSeg(doc, 'linea-vista', L_B)
-  await new Promise((r) => setTimeout(r, 300))
+  await espera()
   ok('en la otra linea, Agente muestra lo de ESA linea',
     campo('agent') === 'Agente Segunda' && campo('tone') === 'Tono de la segunda' &&
     campo('owner') === 'Berta', `${campo('agent')} / ${campo('tone')} / ${campo('owner')}`)
@@ -9331,7 +9331,7 @@ titulo('config.html — A5: cada linea muestra y guarda sus propios ajustes')
     `${valorSeg(doc, 'inbox-days')} ${valorSeg(doc, 'lang')} ${valorSeg(doc, 'sync-minutes')}`)
   elegirSeg(doc, 'sync-minutes', '2')
   doc.getElementById('save-reading').click()
-  await new Promise((r) => setTimeout(r, 500))
+  await espera()
   ok('P5: guardar el ritmo en la otra linea lo guarda en ESA, y la principal sigue con el suyo',
     storage.ajustesPorLinea[L_B].syncMinutes === '2' && storage.syncMinutes === '10' &&
     storage.ajustesPorLinea[L_B].inboxDays === '1',
@@ -9341,7 +9341,7 @@ titulo('config.html — A5: cada linea muestra y guarda sus propios ajustes')
   await espera()
   escribir(doc, 'agent', 'Agente Nuevo')
   doc.getElementById('save-agent').click()
-  await new Promise((r) => setTimeout(r, 500))
+  await espera()
   const propios = () => storage.ajustesPorLinea[L_B]
   ok('guardar el agente en la otra linea escribe solo en lo de ESA linea',
     propios().agentName === 'Agente Nuevo' && propios().tone === 'Tono de la segunda' &&
@@ -9355,7 +9355,7 @@ titulo('config.html — A5: cada linea muestra y guarda sus propios ajustes')
     /Guardado/.test(textoDe(doc, '#said-agent')), textoDe(doc, '#said-agent'))
 
   doc.getElementById('tab-aprobacion').click()
-  await new Promise((r) => setTimeout(r, 300))
+  await espera()
   ok('Su aprobacion en la otra linea: sus numeros y su numero de aprobacion',
     /Dueno Segunda/.test(textoDe(doc, '#owners-wrap')) && !/Dueno Principal/.test(textoDe(doc, '#owners-wrap')) &&
     valorSeg(doc, 'approval-number') === DUENO_B.id, textoDe(doc, '#owners-wrap'))
@@ -9370,13 +9370,13 @@ titulo('config.html — A5: cada linea muestra y guarda sus propios ajustes')
   doc.getElementById('ack-text').value = 'Texto nuevo de la segunda'
   doc.getElementById('ack-text').dispatchEvent(evento(doc, 'input'))
   doc.getElementById('save-auto').click()
-  await new Promise((r) => setTimeout(r, 500))
+  await espera()
   ok('guardar las respuestas automaticas en la otra linea no toca las de la principal',
     propios().ackText === 'Texto nuevo de la segunda' && storage.ackText === 'Recibido en la principal' &&
     propios().agentName === 'Agente Nuevo', JSON.stringify(propios()))
   doc.querySelector(`#owners-wrap [data-orm="${DUENO_B.id}"]`).click()
   doc.getElementById('save-owners').click()
-  await new Promise((r) => setTimeout(r, 500))
+  await espera()
   ok('guardar los numeros en la otra linea los guarda en ESA, con su idioma',
     JSON.stringify(propios().owners) === '[]' && propios().approvalNumber === '' &&
     propios().approvalLang === 'es' && storage.owners[0].id === DUENO_A.id &&
@@ -9385,13 +9385,13 @@ titulo('config.html — A5: cada linea muestra y guarda sus propios ajustes')
   doc.getElementById('tab-chats').click()
   await espera()
   doc.querySelector(`#scope-wrap [data-edit="${G_LINEAS}"]`).click()
-  await new Promise((r) => setTimeout(r, 300))
+  await espera()
   const gente = textoDe(doc, '#people-list')
   ok('las personas de un grupo son las de ESA linea', /Miembro Segunda/.test(gente) &&
     !/Miembro Principal/.test(gente), gente)
 
   elegirSeg(doc, 'linea-vista', L_A)
-  await new Promise((r) => setTimeout(r, 300))
+  await espera()
   doc.getElementById('tab-agente').click()
   await espera()
   ok('volver a la principal muestra otra vez lo de la raiz',
@@ -9412,7 +9412,7 @@ titulo('config.html — P5: con varias lineas, el triage corre al ritmo de la ma
     /corre cada 2 min, el ritmo de la linea mas frecuente/.test(ritmo()) && !/Ajustando/.test(ritmo()),
     ritmo())
   elegirSeg(doc, 'linea-vista', L_B)
-  await new Promise((r) => setTimeout(r, 300))
+  await espera()
   doc.getElementById('tab-avanzado').click()
   await espera()
   ok('la otra linea muestra SU ritmo, y lo mismo del triage',
@@ -9449,7 +9449,7 @@ titulo('config.html — P6: Jev se enciende y se apaga en cada linea, con una so
   ok('en la principal, el Jev de la principal: encendido',
     sw() === 'true' && /Encendido/.test(estado()), `${sw()} ${estado()}`)
   elegirSeg(doc, 'linea-vista', L_B)
-  await new Promise((r) => setTimeout(r, 300))
+  await espera()
   ok('en la otra linea, el de ESA linea: apagado, con la misma llave guardada',
     sw() === 'false' && /Apagado.*llave guardada/.test(estado()), `${sw()} ${estado()}`)
   doc.getElementById('jev-enabled').click()
@@ -9462,7 +9462,7 @@ titulo('config.html — P6: Jev se enciende y se apaga en cada linea, con una so
     sw() === 'true' && storage.jevStatus.lines[L_B] === true && storage.jevStatus.enabled === true,
     `${sw()} ${JSON.stringify(storage.jevStatus)}`)
   elegirSeg(doc, 'linea-vista', L_A)
-  await new Promise((r) => setTimeout(r, 300))
+  await espera()
   doc.getElementById('jev-enabled').click()
   await new Promise((r) => setTimeout(r, 3500))
   ok('en la principal el pedido no nombra linea, como siempre',
@@ -9485,7 +9485,7 @@ titulo('config.html — P7: las skills se instalan en el equipo y avisan por la 
   const { doc } = await montar('config.html', storage, 'es-419')
   await espera()
   doc.getElementById('tab-skills').click()
-  await new Promise((r) => setTimeout(r, 500))
+  await espera()
   const sw = doc.getElementById('skills-line')
   const fila = doc.getElementById('skills-line-row')
   const dice = () => textoDe(doc, '#skills-line-text')
@@ -9496,21 +9496,21 @@ titulo('config.html — P7: las skills se instalan en el equipo y avisan por la 
     !fila.hidden && sw.getAttribute('aria-checked') === 'true' && sw.disabled &&
     /por la linea \+573000000001/.test(dice()), `${fila.hidden} ${sw.getAttribute('aria-checked')} ${dice()}`)
   elegirSeg(doc, 'linea-vista', L_B)
-  await new Promise((r) => setTimeout(r, 300))
+  await espera()
   ok('en la otra linea, apagado y se puede encender',
     sw.getAttribute('aria-checked') === 'false' && !sw.disabled, sw.getAttribute('aria-checked'))
   sw.click()
-  await new Promise((r) => setTimeout(r, 500))
+  await espera()
   ok('encenderlo ahi guarda esa linea para las skills, en la raiz',
     storage.skillsLine === L_B && sw.getAttribute('aria-checked') === 'true' &&
     /por la linea \+573000000011/.test(dice()), `${JSON.stringify(storage.skillsLine)} ${dice()}`)
   elegirSeg(doc, 'linea-vista', L_A)
-  await new Promise((r) => setTimeout(r, 300))
+  await espera()
   ok('y en la principal queda apagado, y se puede volver a elegir',
     sw.getAttribute('aria-checked') === 'false' && !sw.disabled && /\+573000000011/.test(dice()),
     `${sw.getAttribute('aria-checked')} ${dice()}`)
   sw.click()
-  await new Promise((r) => setTimeout(r, 500))
+  await espera()
   ok('elegir la principal la deja sin linea aparte (null), como de fabrica',
     storage.skillsLine === null && sw.getAttribute('aria-checked') === 'true',
     JSON.stringify(storage.skillsLine))
@@ -9537,7 +9537,7 @@ titulo('config.html — A5: si la otra linea no contesta, no se ven los ajustes 
   await espera()
   ok('en la principal se ve lo de la raiz', doc.getElementById('agent').value === 'Agente Principal')
   elegirSeg(doc, 'linea-vista', L_B)
-  await new Promise((r) => setTimeout(r, 300))
+  await espera()
   const tarjeta = doc.getElementById('agent-card')
   ok('mirando la otra linea sin respuesta: la tarjeta dice que esta leyendo',
     tarjeta.classList.contains('sin-leer') && /Leyendo/i.test(textoDe(doc, '#agent-card .leyendo')),
@@ -9568,13 +9568,13 @@ titulo('config.html — P1: los avisos de Orca de cada linea')
   const { doc } = await montar('config.html', storage, 'es-419')
   await espera()
   doc.getElementById('tab-aprobacion').click()
-  await new Promise((r) => setTimeout(r, 300))
+  await espera()
   const encendido = (id) => doc.getElementById(id).getAttribute('aria-checked') === 'true'
   ok('en la principal, la tarjeta muestra los avisos de la raiz',
     encendido('orca-waiting') && encendido('orca-finished') &&
     doc.getElementById('orca-cap').value === '4', doc.getElementById('orca-cap').value)
   elegirSeg(doc, 'linea-vista', L_B)
-  await new Promise((r) => setTimeout(r, 400))
+  await espera()
   ok('en otra linea sin avisos propios: todo apagado, no los de la principal',
     !encendido('orca-waiting') && !encendido('orca-finished') &&
     doc.getElementById('orca-cap').value === '6' &&
@@ -9582,7 +9582,7 @@ titulo('config.html — P1: los avisos de Orca de cada linea')
     `${encendido('orca-waiting')} ${encendido('orca-finished')} ${doc.getElementById('orca-cap').value}`)
   doc.getElementById('orca-waiting').click()
   doc.getElementById('save-orca').click()
-  await new Promise((r) => setTimeout(r, 500))
+  await espera()
   const propios = storage.ajustesPorLinea[L_B]
   ok('guardar en la otra linea escribe los avisos en lo de ESA linea',
     propios.orcaNotices && propios.orcaNotices.waiting === 'on' &&
@@ -9593,7 +9593,7 @@ titulo('config.html — P1: los avisos de Orca de cada linea')
   ok('y la tarjeta queda mostrando lo guardado', encendido('orca-waiting') && !encendido('orca-finished') &&
     /Guardado/.test(textoDe(doc, '#said-orca')), textoDe(doc, '#said-orca'))
   elegirSeg(doc, 'linea-vista', L_A)
-  await new Promise((r) => setTimeout(r, 400))
+  await espera()
   ok('volver a la principal muestra otra vez los de la raiz',
     encendido('orca-waiting') && encendido('orca-finished') &&
     doc.getElementById('orca-cap').value === '4', doc.getElementById('orca-cap').value)
@@ -9610,7 +9610,7 @@ titulo('config.html — P2: la firma de cada linea')
   const { doc } = await montar('config.html', storage, 'es-419')
   await espera()
   doc.getElementById('tab-agente').click()
-  await new Promise((r) => setTimeout(r, 300))
+  await espera()
   const firma = doc.getElementById('sign-messages')
   const encendida = () => firma.getAttribute('aria-checked') === 'true'
   const agente = () => doc.querySelector('#checklist [data-item="agente"]')?.getAttribute('data-ok')
@@ -9622,19 +9622,19 @@ titulo('config.html — P2: la firma de cada linea')
     textoDe(doc, '#sign-messages-label'))
   ok('con la firma encendida, sin nombre la lista de lo que falta lo pide', agente() === 'false', agente())
   doc.getElementById('save-agent').click()
-  await new Promise((r) => setTimeout(r, 300))
+  await espera()
   ok('y sin nombre no se guarda', textoDe(doc, '#said-agent') === 'Ponga un nombre.' &&
     !('signMessages' in storage), textoDe(doc, '#said-agent'))
 
   elegirSeg(doc, 'linea-vista', L_B)
-  await new Promise((r) => setTimeout(r, 400))
+  await espera()
   ok('en la otra linea, sin firma propia, encendida', encendida())
   firma.click()
   ok('apagarla dice que los mensajes salen como suyos',
     !encendida() && /como si los escribiera usted/.test(textoDe(doc, '#sign-help')),
     textoDe(doc, '#sign-help'))
   doc.getElementById('save-agent').click()
-  await new Promise((r) => setTimeout(r, 500))
+  await espera()
   const propios = storage.ajustesPorLinea[L_B]
   ok('con la firma apagada se guarda sin nombre, en lo de ESA linea',
     propios.signMessages === 'off' && propios.agentName === '' && !('signMessages' in storage) &&
@@ -9642,12 +9642,12 @@ titulo('config.html — P2: la firma de cada linea')
   ok('y la lista de lo que falta ya no pide el nombre', agente() === 'true', agente())
   firma.click()
   doc.getElementById('save-agent').click()
-  await new Promise((r) => setTimeout(r, 300))
+  await espera()
   ok('volver a encenderla sin nombre no se guarda', propios.signMessages === 'off' &&
     textoDe(doc, '#said-agent') === 'Ponga un nombre.', textoDe(doc, '#said-agent'))
 
   elegirSeg(doc, 'linea-vista', L_A)
-  await new Promise((r) => setTimeout(r, 400))
+  await espera()
   ok('la principal sigue firmando', encendida() && agente() === 'false', agente())
   const S = doc.defaultView.STRINGS
   ok('las frases existen en los tres idiomas, el portugues propio',
@@ -9686,7 +9686,7 @@ titulo('config.html — P3: la cuenta de Claude del bot de cada linea')
     valorSeg(doc, 'bot-account'))
   elegirSeg(doc, 'bot-account', 'auto')
   doc.getElementById('save-bot-account').click()
-  await new Promise((r) => setTimeout(r, 500))
+  await espera()
   ok('guardar en la otra linea la guarda en lo de ESA linea, sin tocar la raiz',
     storage.ajustesPorLinea[L_B].botClaudeAccount === 'auto' && storage.botClaudeAccount === 'cuenta-bot',
     JSON.stringify({ b: storage.ajustesPorLinea[L_B].botClaudeAccount, raiz: storage.botClaudeAccount }))
@@ -9712,13 +9712,13 @@ titulo('config.html — P4: la transcripcion de cada linea')
     valorSeg(doc, 'transcribe') === 'local' && valorSeg(doc, 'quality') === 'optima',
     `${valorSeg(doc, 'transcribe')} ${valorSeg(doc, 'quality')}`)
   elegirSeg(doc, 'linea-vista', L_B)
-  await new Promise((r) => setTimeout(r, 400))
+  await espera()
   ok('en la otra linea, la de ESA linea',
     valorSeg(doc, 'transcribe') === 'off' && valorSeg(doc, 'quality') === 'minima',
     `${valorSeg(doc, 'transcribe')} ${valorSeg(doc, 'quality')}`)
   elegirSeg(doc, 'quality', 'optima')
   doc.getElementById('save-voice').click()
-  await new Promise((r) => setTimeout(r, 500))
+  await espera()
   const propios = storage.ajustesPorLinea[L_B]
   ok('guardar la voz en la otra linea la guarda en lo de ESA linea, sin tocar la raiz',
     propios.transcribe === 'off' && propios.transcribeQuality === 'optima' &&
@@ -9727,7 +9727,7 @@ titulo('config.html — P4: la transcripcion de cada linea')
   ok('y la tarjeta de voz ya no dice que vale para todas las lineas',
     doc.querySelectorAll('#voice-card .nota-maquina').length === 0)
   elegirSeg(doc, 'linea-vista', L_A)
-  await new Promise((r) => setTimeout(r, 400))
+  await espera()
   ok('volver a la principal muestra otra vez la suya',
     valorSeg(doc, 'transcribe') === 'local' && valorSeg(doc, 'quality') === 'optima')
 }
@@ -9763,7 +9763,7 @@ titulo('config.html — P9: cada linea muestra y guarda sus reglas y sus proyect
     /acme/.test(reglas()) && !/ventas/.test(reglas()) && /Alfa Demo/.test(catalogo()) &&
     !/Beta Demo/.test(catalogo()), `${reglas()} | ${catalogo()}`)
   elegirSeg(doc, 'linea-vista', L_B)
-  await new Promise((r) => setTimeout(r, 300))
+  await espera()
   ok('en la otra linea se ven las reglas y los proyectos de ESA linea',
     /ventas/.test(reglas()) && !/acme/.test(reglas()) && /Beta Demo/.test(catalogo()) &&
     !/Alfa Demo/.test(catalogo()), `${reglas()} | ${catalogo()}`)
@@ -9779,7 +9779,7 @@ titulo('config.html — P9: cada linea muestra y guarda sus reglas y sus proyect
   doc.getElementById('r-match').value = 'factura'
   elegirProyecto(doc, 'r-workspace', 'beta-demo')
   doc.getElementById('save-route').click()
-  await new Promise((r) => setTimeout(r, 300))
+  await espera()
   const propias = () => storage.ajustesPorLinea[L_B]
   ok('agregar una regla en la otra linea la guarda solo en lo de ESA linea',
     (propias().routes || []).map((r) => r.pattern).join() === 'factura,ventas' &&
@@ -9788,23 +9788,23 @@ titulo('config.html — P9: cada linea muestra y guarda sus reglas y sus proyect
   ok('y la tabla la muestra', /factura/.test(reglas()), reglas())
 
   doc.querySelector('#routes-wrap [data-rrm]').click()
-  await new Promise((r) => setTimeout(r, 300))
+  await espera()
   const quitar = pedidos.find((p) => p.action === 'regla-quitar')
   ok('quitar una regla en la otra linea se le pide al worker en ESA linea',
     quitar?.linea === L_B && quitar?.pattern === 'factura', JSON.stringify(quitar))
   doc.querySelector('#projects-wrap [data-prm="beta-demo"]').click()
-  await new Promise((r) => setTimeout(r, 300))
+  await espera()
   const sacar = pedidos.find((p) => p.action === 'proyectos-quitar')
   ok('y quitar un proyecto tambien', sacar?.linea === L_B && sacar?.project === 'beta-demo',
     JSON.stringify(sacar))
 
   elegirSeg(doc, 'linea-vista', L_A)
-  await new Promise((r) => setTimeout(r, 300))
+  await espera()
   ok('volver a la principal muestra otra vez las suyas',
     /acme/.test(reglas()) && !/ventas/.test(reglas()) && /Alfa Demo/.test(catalogo()),
     `${reglas()} | ${catalogo()}`)
   doc.querySelector('#projects-wrap [data-prm="alfa-demo"]').click()
-  await new Promise((r) => setTimeout(r, 300))
+  await espera()
   const enLaPrincipal = pedidos.filter((p) => p.action === 'proyectos-quitar').pop()
   ok('en la principal el pedido no nombra linea',
     enLaPrincipal?.project === 'alfa-demo' && !enLaPrincipal.linea, JSON.stringify(enLaPrincipal))

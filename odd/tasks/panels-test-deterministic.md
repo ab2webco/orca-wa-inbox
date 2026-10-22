@@ -20,7 +20,7 @@ the condition so the suite is deterministic.
   request in flight and has gone quiet, instead of a fixed 60 ms.
 - [x] T3 Replace the remaining fixed waits in the flaky regions with waits for
   the asserted condition.
-- [ ] T4 Prove it: 10 consecutive green runs of `node test/panels.test.mjs`,
+- [x] T4 Prove it: 10 consecutive green runs of `node test/panels.test.mjs`,
   plus runs under parallel load.
 
 ## Acceptance criteria
@@ -41,3 +41,7 @@ the condition so the suite is deterministic.
   every run, in config.html and activity.html alike. No panel was ever closed:
   hundreds of jsdom windows kept polling every 12 s for the whole run.
 - T2/T3 GREEN: the fixed file under the same load: 1785/1785.
+- First verification pass: 4 parallel green, then one sequential run failed in
+  a Jev case this change had converted (the tombstone is written after the
+  "did not answer" text). Fixed by waiting for both, then settling.
+- T4 GREEN at dae98da: 10 consecutive runs, all 1785/1785.
