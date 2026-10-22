@@ -414,6 +414,9 @@ const TABLERO_CASOS = [
         at: minutos(3) },
       { de: 'decision', a: 'decision', actor: 'automatizacion', que: 'held',
         args: ['money', 'states_status_not_verified'], at: minutos(2) },
+      // WAINBOX-63: el guardia de calidad devolvio la respuesta al agente.
+      { de: 'decision', a: 'decision', actor: 'automatizacion', que: 'held',
+        args: ['too_long', 'several_addressees'], at: minutos(2) },
       // T14: el aviso al numero de aprobacion del dueno.
       { de: 'decision', a: 'decision', actor: 'automatizacion', que: 'wa_notice',
         at: minutos(2) }] }),

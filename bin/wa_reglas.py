@@ -30,6 +30,7 @@ Spanish, English and Portuguese; accents and case do not matter. Python stdlib o
 import json
 import os
 import re
+import sqlite3
 import sys
 import unicodedata
 
@@ -525,6 +526,125 @@ def valor_de_credencial(texto):
     return False
 
 
+# ── The quality of what goes out (WAINBOX-63) ────────────────────────────────────────
+# The line speaks for the business: a reply must read like an expert of the support team
+# wrote it. These are the checks a pattern can make without a model. Unlike `excepciones`
+# they are never stored on a case: each text is judged as it is, so a rewrite clears them.
+# They go back to whoever wrote the reply (the chat's `quality` level), never to the owner
+# by default.
+CALIDAD = ("stray_quotes", "internal_marker", "internal_name", "too_long",
+           "several_addressees")
+# One WhatsApp message read at a glance: an answer, its next step, nothing else.
+LARGO_MAXIMO_RESPUESTA = 700
+# Comillas: un texto entero entre comillas es una cita pegada, no una respuesta ("Hola
+# Ana..." entre comillas), y una sin pareja quedo suelta. Las «» y las pareadas son de la
+# redaccion ("el boton "Guardar"").
+COMILLAS = "\"'“”‘’"
+NOTA_INTERNA = re.compile(
+    r"(?:^|[\s(\[*_-])(?:no verificado|verificado|not verified|unverified|verified|"
+    r"nao verificado|nota interna|internal note|nota para el dueno|"
+    r"note to self)\s*:", re.MULTILINE)
+# Lo que es del equipo y nunca del cliente: las herramientas y el numero de un caso.
+INTERNO_FIJO = re.compile(
+    r"(?<![\w-])(?:wa-scope|wa-send|wa-read|wa-transcribe|jev)(?![\w-])|"
+    r"\b(?:caso|case|ticket)\s*#\s*\d+")
+# Lo mas corto que se busca como nombre del registro: "ab" es parte de demasiadas palabras.
+NOMBRE_INTERNO_MIN = 4
+# Solo un nombre con forma de identificador es interno: con una cifra o un - _ . : @ /
+# ("srv-alfa-01", "alfa-demo", "web:123", un correo). "local", "Soporte" o "tienda" son
+# palabras que una respuesta dice sin nombrar nada del equipo.
+FORMA_DE_IDENTIFICADOR = re.compile(r"[\d\-_.:@/]")
+# A quien le habla: un saludo con nombre o una mencion. "Hola de nuevo" no nombra a nadie.
+SALUDO_CON_NOMBRE = re.compile(
+    r"\b(?:hola|buenos dias|buenas tardes|buenas noches|buen dia|hi|hello|hey|dear|"
+    r"estimad[oa]|ola|oi|bom dia|boa tarde|boa noite|prezad[oa])\s+"
+    r"(?!de\b|otra\b|again\b|a todos\b|todos\b|everyone\b|all\b|buen[oa]s?\b|bom\b|boa\b|"
+    r"good\b)([a-z][a-z]+)")
+MENCION = re.compile(r"(?<![\w@])@([\w.+-]+)")
+
+
+def _quedan_sueltas(texto):
+    """Si `texto` va entero entre comillas, o deja una sin pareja. Una comilla al principio
+    o al final que cierra su pareja ("haga clic en "Guardar"") es de la redaccion."""
+    limpio = texto.strip()
+    if len(limpio) > 1 and limpio[0] in COMILLAS and limpio[-1] in COMILLAS \
+            and not any(c in COMILLAS for c in limpio[1:-1]):
+        return True
+    if limpio.count('"') % 2:
+        return True
+    return limpio.count("“") != limpio.count("”")
+
+
+def _nombra_internos(t, internos):
+    """Si el texto normalizado `t` nombra algo del equipo: una herramienta, el numero de un
+    caso o un nombre del registro (`internos`: servidores, cuentas, proyectos)."""
+    if INTERNO_FIJO.search(t):
+        return True
+    for nombre in internos or ():
+        n = normaliza(str(nombre or "")).strip()
+        if len(n) < NOMBRE_INTERNO_MIN:
+            continue
+        if re.search(r"(?<![\w-])" + re.escape(n) + r"(?![\w-])", t):
+            return True
+    return False
+
+
+def _destinatarios(t):
+    """Los nombres a los que el texto le habla: los de un saludo y los mencionados."""
+    return ({m.group(1) for m in SALUDO_CON_NOMBRE.finditer(t)}
+            | {m.group(1) for m in MENCION.finditer(t)})
+
+
+def nombres_internos(con, cuenta):
+    """The registry names of a line that a customer must never read, from the plugin's own
+    database (`con`, scope.db): the line's accounts, the folders and ids of its projects,
+    the board targets of its chats and the Claude accounts its agents ran with, only when
+    shaped like an identifier (`FORMA_DE_IDENTIFICADOR`). A project's NAME is not one: it
+    is how the customer knows their own product. A table that is not there gives nothing."""
+    consultas = (
+        ("select id, label from wa_account", ()),
+        ("select id, path from project where account=?", (cuenta,)),
+        ("select target from chat_scope where account=?", (cuenta,)),
+        ("select d.cuenta_etiqueta from caso_despacho d join caso c on c.case_id=d.case_id "
+         "where c.account=?", (cuenta,)))
+    nombres = set()
+    for sql, params in consultas:
+        try:
+            filas = con.execute(sql, params).fetchall()
+        except sqlite3.Error:
+            continue
+        for fila in filas:
+            for valor in fila:
+                valor = str(valor or "").strip()
+                if "/" in valor:
+                    valor = valor.rstrip("/").rsplit("/", 1)[-1]
+                if len(valor) >= NOMBRE_INTERNO_MIN and FORMA_DE_IDENTIFICADOR.search(valor):
+                    nombres.add(valor)
+    return sorted(nombres)
+
+
+def calidad(texto, internos=()):
+    """The quality codes `texto` raises (a reply about to go out, without its signature), in
+    `CALIDAD` order. `internos` are the registry names a customer must never read: servers,
+    line accounts, project ids and folders. Never returns the matched text."""
+    original = texto or ""
+    if not original.strip():
+        return []
+    t = normaliza(original)
+    halladas = set()
+    if _quedan_sueltas(original):
+        halladas.add("stray_quotes")
+    if NOTA_INTERNA.search(t):
+        halladas.add("internal_marker")
+    if _nombra_internos(t, internos):
+        halladas.add("internal_name")
+    if len(original.strip()) > LARGO_MAXIMO_RESPUESTA:
+        halladas.add("too_long")
+    if len(_destinatarios(t)) > 1:
+        halladas.add("several_addressees")
+    return [c for c in CALIDAD if c in halladas]
+
+
 # ── The levels of each chat (T22.3) ──────────────────────────────────────────────────
 # Per chat, each rule has one of three levels: ask the owner, let the agent revise the
 # reply, or allow it. Defaults: money, credential and commitment ask; the quality of the
@@ -542,7 +662,8 @@ NIVELES_DEFECTO = {"money": PREGUNTAR, "credential": PREGUNTAR, "commitment": PR
 REGLA_DE_MOTIVO = {("rule", "money"): "money", ("rule", "credential"): "credential",
                    ("rule", "commitment"): "commitment",
                    ("jev", "promises_a_date"): "commitment",
-                   ("jev", "states_status_not_verified"): "quality"}
+                   ("jev", "states_status_not_verified"): "quality",
+                   **{("rule", c): "quality" for c in CALIDAD}}
 SECRETO = "secret"
 
 

@@ -575,18 +575,35 @@ def revision_jev(texto, tono=None, linea=None, evidencia=None, pregunta=None):
     return list(revision["flags"])
 
 
-def revision_piso(texto, niv=None):
+def revision_piso(texto, niv=None, internos=()):
     """Lo que frena el envio segun el piso fijo (`wa_reglas`): siempre corre, haya o no
     llave de Jev. Solo los NOMBRES de las excepciones, nunca el texto que las disparo.
 
     Con los niveles del chat (T22.3) lo que esta en Permitir no frena. Un valor con forma
-    de secreto frena siempre, como `secret`: es el control destructivo y no tiene nivel."""
+    de secreto frena siempre, como `secret`: es el control destructivo y no tiene nivel.
+    La calidad de la respuesta (WAINBOX-63) frena con el nivel `quality` del chat; `internos`
+    son los nombres del registro que un cliente nunca lee (`wa_reglas.nombres_internos`)."""
     niv = niv or wa_reglas.niveles(None)
     secreto = wa_reglas.secreto(texto)
     halladas = [e for e in wa_reglas.excepciones(texto, wa_reglas.SALIDA)
                 if not (e == "credential" and secreto)
                 and niv.get(e) != wa_reglas.PERMITIR]
+    if niv.get("quality") != wa_reglas.PERMITIR:
+        halladas += wa_reglas.calidad(texto, internos)
     return halladas + ([wa_reglas.SECRETO] if secreto else [])
+
+
+def internos_de(cuenta):
+    """Los nombres del registro de la linea, leidos de la base del plugin; [] si no se puede
+    abrir (el piso sigue con lo demas)."""
+    try:
+        con = sqlite3.connect(SCOPE_DB, timeout=10)
+    except sqlite3.Error:
+        return []
+    try:
+        return wa_reglas.nombres_internos(con, cuenta)
+    finally:
+        con.close()
 
 
 def jev_permitido(jev, niv):
@@ -999,7 +1016,7 @@ def main():
         piso = [wa_reglas.SECRETO] if wa_reglas.secreto(sin_firma) else []
         jev = None
     else:
-        piso = revision_piso(sin_firma, niv)
+        piso = revision_piso(sin_firma, niv, internos_de(fila["account"]))
         tono = (fila.get("tone") or "").strip() or ajuste("tone", linea=fila["account"])
         jev = jev_permitido(revision_jev(a.text, tono, fila["account"], a.evidence, a.answers)
                             if jev_hace_falta(niv) else None, niv)

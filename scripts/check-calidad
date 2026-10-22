@@ -1,0 +1,458 @@
+#!/usr/bin/env python3
+"""La calidad de lo que sale y lo que el equipo ya sabe (odd/tasks/calidad-respuestas.md).
+
+WAINBOX-63: el bot es la cara del negocio en WhatsApp. Lo que escribe tiene que leerse como
+lo escribiria una persona experta del equipo de soporte: sin comillas sueltas ni notas
+internas ("Verificado:"), sin nombres de servidores o cuentas, corto y a una sola persona.
+El piso fijo lo comprueba sin modelo, y cada regla tiene aca su prueba.
+
+WAINBOX-61: el mismo tema volvia a despachar el mismo `trabajar` de solo lectura tres veces en
+un dia. Lo verificado y fresco se contesta; solo lo nuevo se despacha.
+
+Todo corre con datos de mentira y un HOME propio, como scripts/check-casos.
+"""
+import importlib.machinery
+import importlib.util
+import json
+import os
+import pathlib
+import re
+import sqlite3
+import subprocess
+import sys
+import tempfile
+import time
+
+RAIZ = pathlib.Path(__file__).resolve().parent.parent
+BIN = RAIZ / "bin"
+WA_SCOPE = BIN / "wa-scope"
+SIN_ORCA = "/nonexistent/orca-no-existe"
+
+sys.dont_write_bytecode = True
+sys.path.insert(0, str(BIN))
+import wa_reglas  # noqa: E402
+
+fallos = []
+pruebas = 0
+
+
+def ok(nombre, condicion, detalle=""):
+    global pruebas
+    pruebas += 1
+    if condicion:
+        print(f"  ok    {nombre}")
+        return True
+    fallos.append(f"{nombre}{f' — {detalle}' if detalle else ''}")
+    print(f"  FALLA {nombre}{f' — {detalle}' if detalle else ''}")
+    return False
+
+
+def calidad(texto, internos=()):
+    return wa_reglas.calidad(texto, internos)
+
+
+# ── Q1. El guardia de calidad, una regla a la vez ─────────────────────────────────────
+print("\nQ1: el guardia de calidad de lo que sale")
+BUENA = ("Hola Ana, ya revisamos el acceso y está funcionando. ¿Puede intentar de nuevo y "
+         "nos confirma si entra?")
+ok("una respuesta buena pasa limpia", calidad(BUENA) == [], f"{calidad(BUENA)}")
+ok("los codigos son los del modulo, en su orden",
+   wa_reglas.CALIDAD == ("stray_quotes", "internal_marker", "internal_name", "too_long",
+                         "several_addressees"))
+
+print("\n  comillas sueltas")
+for texto, esperado in (
+        ('"Hola Ana, ya quedó listo."', True),
+        ("“Hola Ana, ya quedó listo.”", True),
+        ('Hola Ana, ya quedó listo."', True),
+        ("Hola Ana, ya quedó listo.”", True),
+        ("'Hola Ana, ya quedó listo.'", True),
+        ('Hola Ana, use el botón "Guardar y quedó listo.', True),
+        ('Hola Ana, use el botón "Guardar" y queda listo.', False),
+        ('Hola Ana, para terminar haga clic en "Guardar"', False),
+        ('"Guardar" es el botón que necesita, Ana.', False),
+        ("Hola Ana, use el botón «Guardar» y queda listo.", False),
+        ("Hola Ana, ya quedó listo. ¿Nos confirma?", False)):
+    ok(f"{texto[:44]!r} {'tiene' if esperado else 'no tiene'} comillas sueltas",
+       ("stray_quotes" in calidad(texto)) == esperado, f"{calidad(texto)}")
+
+print("\n  marcas de notas internas")
+for texto, esperado in (
+        ("Verificado: el sitio responde. Hola Ana, ya quedó.", True),
+        ("Hola Ana, ya quedó.\nNo verificado: el correo de respaldo.", True),
+        ("Hola Ana. Verified: login works.", True),
+        ("Hola Ana. Not verified: backups.", True),
+        ("Hola Ana. Unverified: backups.", True),
+        ("Hola Ana. Nota interna: revisar mañana.", True),
+        ("Hola Ana. Internal note: check tomorrow.", True),
+        ("Hola Ana, ya está verificado y funciona.", False),
+        ("Hola Ana, lo verificamos y funciona.", False)):
+    ok(f"{texto[:44]!r} {'lleva' if esperado else 'no lleva'} una marca interna",
+       ("internal_marker" in calidad(texto)) == esperado, f"{calidad(texto)}")
+
+print("\n  nombres internos")
+INTERNOS = ("srv-alfa-01", "Cuenta Bot Demo", "alfa-demo-repo", "ab")
+for texto, esperado in (
+        ("Hola Ana, ya reiniciamos srv-alfa-01 y responde.", True),
+        ("Hola Ana, ya reiniciamos SRV-ALFA-01 y responde.", True),
+        ("Hola Ana, desde cuenta bot demo le escribimos.", True),
+        ("Hola Ana, el cambio quedó en alfa-demo-repo.", True),
+        ("Hola Ana, lo revisó Jev y está bien.", True),
+        ("Hola Ana, lo mandamos con wa-send.", True),
+        ("Hola Ana, su caso #12 ya avanzó.", True),
+        ("Hola Ana, your case #12 moved on.", True),
+        ("Hola Ana, ya reiniciamos srv-alfa-012 y responde.", False),
+        ("Hola Ana, la absoluta mayoría ya entra.", False),
+        ("Hola Ana, ya quedó el servidor.", False)):
+    ok(f"{texto[:44]!r} {'nombra' if esperado else 'no nombra'} algo interno",
+       ("internal_name" in calidad(texto, INTERNOS)) == esperado,
+       f"{calidad(texto, INTERNOS)}")
+
+print("\n  largo")
+tope = wa_reglas.LARGO_MAXIMO_RESPUESTA
+base = "Hola Ana, ya quedó. "
+justo = (base * (tope // len(base) + 1))[:tope]
+ok(f"el tope es de un mensaje de WhatsApp que se lee de una vez ({tope})",
+   400 <= tope <= 800, f"{tope}")
+ok("justo en el tope pasa", "too_long" not in calidad(justo))
+ok("un caracter mas es largo", "too_long" in calidad(justo + "x"))
+
+print("\n  un solo destinatario")
+for texto, esperado in (
+        ("Hola Ana, ya quedó.\n\nHola Luis, lo suyo lo revisamos hoy.", True),
+        ("@Ana ya quedó. @Luis lo suyo lo revisamos hoy.", True),
+        ("@573000000001 ya quedó. @573000000002 lo suyo va hoy.", True),
+        ("Buenos días Ana, ya quedó. Buenas tardes Luis, lo suyo va hoy.", True),
+        ("Hola Ana, ya quedó. Hola de nuevo, ¿nos confirma?", False),
+        ("Hola Ana y Luis, ya quedó para los dos.", False),
+        ("Hola buenos días Ana, ya quedó.", False),
+        ("Hola buenas tardes Ana, ya quedó.", False),
+        ("@Ana ya quedó, @Ana confirme por favor.", False),
+        ("Hola Ana, ya quedó.", False)):
+    ok(f"{texto[:44]!r} {'le habla a varios' if esperado else 'le habla a uno'}",
+       ("several_addressees" in calidad(texto)) == esperado, f"{calidad(texto)}")
+
+ok("un texto vacio no tiene nada", calidad("") == [] and calidad(None) == [])
+ok("cada codigo es del nivel calidad del chat: vuelve al agente, no al dueno",
+   all(wa_reglas.nivel_de_motivo("rule", c, wa_reglas.niveles(None)) == wa_reglas.AGENTE
+       for c in wa_reglas.CALIDAD))
+
+
+# ── Q2. El guardia en cada camino de salida ───────────────────────────────────────────
+CHAT = "120363000000000001@g.us"
+CUENTA = "local"
+LARGA = "Hola Ana, ya quedó listo. " * 40
+
+
+def entorno(home):
+    return dict(os.environ, HOME=str(home), XDG_CONFIG_HOME=str(pathlib.Path(home) / ".config"),
+                APPDATA=str(pathlib.Path(home) / "AppData" / "Roaming"),
+                ORCA_CLI_COMMAND=SIN_ORCA)
+
+
+def js(home, *args):
+    p = subprocess.run([str(WA_SCOPE), *args, "--json"], capture_output=True, text=True,
+                       env=entorno(home), timeout=120)
+    if p.returncode != 0:
+        raise AssertionError(f"wa-scope {' '.join(args)} salio {p.returncode}: "
+                             f"{p.stderr.strip() or p.stdout.strip()}")
+    return json.loads(p.stdout or "[]")
+
+
+def falla(home, *args):
+    """(codigo de salida, el error) de un comando que se espera que falle."""
+    p = subprocess.run([str(WA_SCOPE), *args, "--json"], capture_output=True, text=True,
+                       env=entorno(home), timeout=120)
+    return p.returncode, (p.stderr + p.stdout)
+
+
+def db_de(home):
+    con = sqlite3.connect(pathlib.Path(home) / ".wa-inbox" / "scope.db")
+    con.row_factory = sqlite3.Row
+    return con
+
+
+def carga(nombre, ruta, home):
+    os.environ.update(HOME=str(home), XDG_CONFIG_HOME=str(pathlib.Path(home) / ".config"),
+                      APPDATA=str(pathlib.Path(home) / "AppData" / "Roaming"))
+    cargador = importlib.machinery.SourceFileLoader(nombre, str(ruta))
+    spec = importlib.util.spec_from_loader(nombre, cargador)
+    modulo = importlib.util.module_from_spec(spec)
+    cargador.exec_module(modulo)
+    return modulo
+
+
+def caso_con_respuesta(home, respuesta, chat=CHAT):
+    """Un caso clasificado del chat con su propuesta `responder`; su id."""
+    cid = js(home, "caso", "crear", "--chat", chat, "--titulo", "Acceso al panel",
+             "--actor", "agente")[0]["case_id"]
+    js(home, "caso", "clasificar", str(cid), "--clase", "card", "--prioridad", "medium",
+       "--actor", "agente")
+    js(home, "caso", "propuesta", str(cid), "--tipo", "responder", "--respuesta", respuesta,
+       "--actor", "agente")
+    return cid
+
+
+def con_proyecto(home, ident, ruta):
+    con = db_de(home)
+    con.execute("insert into project (account, id, name, path) values (?,?,?,?)",
+                (CUENTA, ident, "Alfa Demo", ruta))
+    con.commit()
+    con.close()
+
+
+print("\nQ2: la propuesta pasa por el guardia, con el nivel calidad del chat")
+antes = dict(os.environ)
+try:
+    with tempfile.TemporaryDirectory() as home:
+        js(home, "set", CHAT, "--provider", "ninguno", "--mode", "responder")
+        con_proyecto(home, "alfa-demo", "/srv/proyectos/srv-alfa-01")
+        ws = carga("wa_scope_calidad", WA_SCOPE, home)
+        con = ws.db()
+        larga = caso_con_respuesta(home, LARGA)
+        al_dueno, al_agente = ws.frenos_de_regla(con, ws.caso_de(con, larga))
+        ok("una respuesta larga vuelve al agente (calidad en agente, el defecto)",
+           "too_long" in al_agente and "too_long" not in al_dueno, f"{al_dueno} {al_agente}")
+        interna = caso_con_respuesta(home, "Hola Ana, ya reiniciamos srv-alfa-01 y responde.")
+        _, al_agente = ws.frenos_de_regla(con, ws.caso_de(con, interna))
+        ok("el nombre de una carpeta del registro vuelve al agente",
+           "internal_name" in al_agente, f"{al_agente}")
+        buena = caso_con_respuesta(home, BUENA)
+        ok("una respuesta buena no frena", ws.frenos_de_regla(con, ws.caso_de(con, buena))
+           == ([], []), f"{ws.frenos_de_regla(con, ws.caso_de(con, buena))}")
+        p = falla(home, "caso", "aprobar", str(larga), "--version",
+                  ws.caso_de(con, larga)["propuesta_version"], "--actor", "regla")
+        ok("la regla del dueno no la firma: E_REVISION con el codigo",
+           p[0] != 0 and "E_REVISION" in p[1] and "too_long" in p[1], p[1][-300:])
+        ok("y no queda pegado al caso como excepcion",
+           "too_long" not in (ws.caso_de(con, larga)["excepciones"] or ""))
+        con.close()
+        js(home, "set", CHAT, "--approval", "quality=ask")
+        con = ws.db()
+        al_dueno, al_agente = ws.frenos_de_regla(con, ws.caso_de(con, larga))
+        ok("con calidad en preguntar, va al dueno", "too_long" in al_dueno and not al_agente,
+           f"{al_dueno} {al_agente}")
+        con.close()
+        js(home, "set", CHAT, "--approval", "quality=allow")
+        con = ws.db()
+        ok("con calidad en permitir, no frena",
+           ws.frenos_de_regla(con, ws.caso_de(con, larga)) == ([], []))
+        con.execute("insert or replace into wa_account (id, label) values (?,?)",
+                    ("local", "Soporte"))
+        con.execute("update chat_scope set target='tienda' where chat_jid=?", (CHAT,))
+        con.commit()
+        nombres = wa_reglas.nombres_internos(con, CUENTA)
+        ok("solo cuentan los nombres con forma de identificador: local, Soporte o tienda no",
+           not {"local", "Soporte", "tienda"} & set(nombres), f"{nombres}")
+        ok("y una respuesta con esas palabras pasa",
+           "internal_name" not in calidad("Hola Ana, a la hora local de su tienda, soporte "
+                                          "ya lo dejó listo.", nombres))
+        ok("los nombres del registro: la carpeta y el id del proyecto, nunca su nombre",
+           {"srv-alfa-01", "alfa-demo"} <= set(wa_reglas.nombres_internos(con, CUENTA))
+           and "Alfa Demo" not in wa_reglas.nombres_internos(con, CUENTA),
+           f"{wa_reglas.nombres_internos(con, CUENTA)}")
+        con.close()
+
+    print("\nQ2: wa-send frena lo que sale con el mismo guardia")
+    with tempfile.TemporaryDirectory() as home:
+        envio = carga("wa_send_calidad", BIN / "wa-send", home)
+        niv = wa_reglas.niveles(None)
+        piso = envio.revision_piso(LARGA, niv, ())
+        ok("una respuesta larga frena", "too_long" in piso, f"{piso}")
+        ok("y vuelve a quien la escribio, no al dueno", envio.para_el_agente(piso, None, niv))
+        piso = envio.revision_piso("Hola Ana, quedó en srv-alfa-01.", niv, ("srv-alfa-01",))
+        ok("un nombre del registro frena", "internal_name" in piso, f"{piso}")
+        permitir = dict(niv, quality=wa_reglas.PERMITIR)
+        ok("con calidad en permitir, no frena", envio.revision_piso(LARGA, permitir, ()) == [])
+        ok("una respuesta buena no frena", envio.revision_piso(BUENA, niv, ()) == [])
+finally:
+    os.environ.clear()
+    os.environ.update(antes)
+
+
+# ── Q3. El tablero dice cada codigo en palabras ───────────────────────────────────────
+print("\nQ3: el tablero dice cada motivo de calidad, en sus tres idiomas")
+with tempfile.TemporaryDirectory() as home:
+    antes = dict(os.environ)
+    try:
+        ws = carga("wa_scope_eventos", WA_SCOPE, home)
+        ok("la revision que pidio la regla llega al tablero con sus codigos",
+           ws.que_del_evento(f"{ws.REVISION_REGLA} too_long, internal_name · abc")
+           == ("revision", ["too_long", "internal_name"]))
+        ok("y un envio frenado por calidad tambien",
+           ws.que_del_evento("envio frenado: Held this reply to 'X' (rule: stray_quotes): it "
+                             "was written and is waiting for you")
+           == ("held", ["stray_quotes"]))
+    finally:
+        os.environ.clear()
+        os.environ.update(antes)
+panel = (RAIZ / "activity.html").read_text(encoding="utf-8")
+claves = re.search(r"var MOTIVO_KEY = \{(.*?)\}", panel, re.S)
+mapa = dict(re.findall(r"(\w+): '(\w+)'", claves.group(1))) if claves else {}
+for codigo in wa_reglas.CALIDAD:
+    clave = mapa.get(codigo)
+    ok(f"{codigo} tiene su frase", bool(clave), f"{sorted(mapa)[:5]}")
+    if clave:
+        ok(f"  y {clave} esta en es, en y pt", panel.count(f'"{clave}":') == 3,
+           f"{panel.count(f'{chr(34)}{clave}{chr(34)}:')}")
+
+
+# ── Q4. Lo que el plugin mismo le escribe al cliente cumple el estandar ──────────────
+print("\nQ4: los textos del plugin al cliente pasan el guardia")
+with tempfile.TemporaryDirectory() as home:
+    antes = dict(os.environ)
+    try:
+        ws = carga("wa_scope_textos", WA_SCOPE, home)
+        muestra = {
+            "el acuse por defecto": ws.DEFAULT_CONFIG["ack_text"],
+            "el saludo por defecto": ws.DEFAULT_CONFIG["greeting_text"],
+            "el cierre de un resuelto": ws.closing_text("completed", "SOP-12", "Acceso al panel"),
+            "el cierre de un cancelado": ws.closing_text("cancelled", "SOP-12", "Acceso al panel"),
+            "el cierre sin titulo": ws.closing_text("completed", "SOP-12"),
+        }
+        for nombre, texto in muestra.items():
+            ok(f"{nombre} pasa limpio", calidad(texto) == [], f"{calidad(texto)}: {texto!r}")
+    finally:
+        os.environ.clear()
+        os.environ.update(antes)
+
+# ── K. Lo que el equipo ya verifico no se vuelve a despachar (WAINBOX-61) ─────────────
+def hace(horas):
+    return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(time.time() - horas * 3600))
+
+
+VERIFICADO = "El reporte de cierre fallaba por el total del pie; corregido en el commit abc1234"
+
+
+def caso_verificado(home, titulo, horas, estado="resuelto"):
+    """Un caso anterior del chat cuyo agente del proyecto reporto `estado` hace `horas`."""
+    cid = js(home, "caso", "crear", "--chat", CHAT, "--titulo", titulo,
+             "--actor", "agente")[0]["case_id"]
+    con = db_de(home)
+    informes = [{"estado": estado, "resumen": VERIFICADO, "at": hace(horas),
+                 "respuesta": "Hola Ana, ya quedó el reporte. ¿Nos confirma si lo ve bien?"}]
+    con.execute("insert into caso_despacho (case_id, evento_id, proyecto, estado, instrucciones, "
+                "resultado, informes, created_at, updated_at) values (?,?,?,?,?,?,?,?,?)",
+                (cid, 1, "Alfa Demo", "reportado", "> el reporte de cierre sale en blanco",
+                 estado, json.dumps(informes), hace(horas), hace(horas)))
+    con.commit()
+    con.close()
+    return cid
+
+
+def caso_nuevo(home, titulo):
+    cid = js(home, "caso", "crear", "--chat", CHAT, "--titulo", titulo,
+             "--actor", "agente")[0]["case_id"]
+    js(home, "caso", "clasificar", str(cid), "--clase", "card", "--prioridad", "medium",
+       "--actor", "agente")
+    return cid
+
+
+def trabajar(home, cid, *extra):
+    return falla(home, "caso", "propuesta", str(cid), "--tipo", "trabajar", "--instrucciones",
+                 "> el reporte de cierre sigue saliendo en blanco", "--actor", "agente", *extra)
+
+
+print("\nK2: un tema verificado y fresco se contesta, no se despacha otra vez")
+with tempfile.TemporaryDirectory() as home:
+    js(home, "set", CHAT, "--provider", "ninguno", "--mode", "responder")
+    caso_verificado(home, "El reporte de cierre sale en blanco", 2)
+    cid = caso_nuevo(home, "Reporte de cierre en blanco otra vez")
+    codigo, salida = trabajar(home, cid)
+    ok("el trabajar se niega con E_KNOWN", codigo == 2 and "E_KNOWN" in salida, salida[-300:])
+    ok("y dice lo verificado, con su hora, y que se conteste",
+       VERIFICADO[:30] in salida and hace(2)[:13] in salida and "responder" in salida,
+       salida[-400:])
+    ok("el caso no paso a decision con un trabajar",
+       db_de(home).execute("select propuesta from caso where case_id=?", (cid,)).fetchone()[0]
+       is None)
+    r = js(home, "caso", "propuesta", str(cid), "--tipo", "responder", "--respuesta",
+           "Hola Ana, ya quedó corregido. ¿Nos confirma si el reporte sale bien?",
+           "--actor", "agente")[0]
+    ok("la respuesta con lo ya verificado si se propone", r["etapa"] == "decision", f"{r}")
+    otro = caso_nuevo(home, "Reporte de cierre en blanco, ahora en pesos")
+    codigo, salida = trabajar(home, otro, "--nuevo", "si tambien falla con moneda pesos")
+    ok("con --nuevo despacha solo lo nuevo", codigo == 0, salida[-300:])
+    instr = json.loads(db_de(home).execute("select propuesta from caso where case_id=?",
+                                           (otro,)).fetchone()[0])["instrucciones"]
+    ok("y las instrucciones dicen que es lo nuevo",
+       "si tambien falla con moneda pesos" in instr and "New to verify" in instr, instr[:200])
+
+with tempfile.TemporaryDirectory() as home:
+    js(home, "set", CHAT, "--provider", "ninguno", "--mode", "responder")
+    caso_verificado(home, "El reporte de cierre sale en blanco", 30)
+    cid = caso_nuevo(home, "Reporte de cierre en blanco otra vez")
+    codigo, salida = trabajar(home, cid)
+    ok("lo verificado hace mas de un dia ya no frena: despacha", codigo == 0, salida[-300:])
+
+with tempfile.TemporaryDirectory() as home:
+    js(home, "set", CHAT, "--provider", "ninguno", "--mode", "responder")
+    caso_verificado(home, "El reporte de cierre sale en blanco", 2)
+    cid = caso_nuevo(home, "No llegan los correos de las facturas")
+    codigo, salida = falla(home, "caso", "propuesta", str(cid), "--tipo", "trabajar",
+                           "--instrucciones", "> no me llegan los correos de las facturas",
+                           "--actor", "agente")
+    ok("otro tema despacha aunque haya algo fresco", codigo == 0, salida[-300:])
+
+with tempfile.TemporaryDirectory() as home:
+    js(home, "set", CHAT, "--provider", "ninguno", "--mode", "responder")
+    caso_verificado(home, "El reporte de cierre sale en blanco", 2, estado="necesita")
+    cid = caso_nuevo(home, "Reporte de cierre en blanco otra vez")
+    codigo, salida = trabajar(home, cid)
+    ok("un reporte que no resolvio (necesita) no cuenta como verificado", codigo == 0,
+       salida[-300:])
+
+with tempfile.TemporaryDirectory() as home:
+    antes = dict(os.environ)
+    try:
+        js(home, "set", CHAT, "--provider", "ninguno", "--mode", "responder")
+        caso_verificado(home, "El reporte de cierre sale en blanco", 2)
+        cid = caso_nuevo(home, "Reporte de cierre en blanco otra vez")
+        ws = carga("wa_scope_dueno", WA_SCOPE, home)
+        ws.caso_del_dueno = lambda con, caso: True
+        con = ws.db()
+        import argparse
+        r = ws.cmd_caso_propuesta(con, argparse.Namespace(
+            id=cid, tipo="trabajar", respuesta=None, repo=None, evidencia=None, espera=None,
+            chat=None, nuevo=None, actor="agente",
+            instrucciones="> el reporte de cierre sigue saliendo en blanco"))[0]
+        ok("la orden del dueno no se niega: su orden es la decision", r["etapa"] == "decision",
+           f"{r.get('etapa')}")
+        con.close()
+    finally:
+        os.environ.clear()
+        os.environ.update(antes)
+
+print("\nK1: lo ya verificado, con su hora, en el archivo del caso y en el brief")
+with tempfile.TemporaryDirectory() as home:
+    antes = dict(os.environ)
+    try:
+        js(home, "set", CHAT, "--provider", "ninguno", "--mode", "responder")
+        previo = caso_verificado(home, "El reporte de cierre sale en blanco", 2)
+        viejo = caso_verificado(home, "Otro tema de hace dias", 50)
+        cid = caso_nuevo(home, "Reporte de cierre en blanco, ahora en pesos")
+        trabajar(home, cid, "--nuevo", "si tambien falla con moneda pesos")
+        ws = carga("wa_scope_brief", WA_SCOPE, home)
+        con = ws.db()
+        caso = ws.caso_de(con, cid)
+        archivo = ws.archivo_de_caso(con, caso)
+        ok("el archivo del caso tiene la seccion de lo ya verificado",
+           "## Already verified in this chat" in archivo, archivo[-600:])
+        ok("con el caso, la hora y lo que se verifico",
+           f"#{previo}" in archivo and hace(2)[:13] in archivo and VERIFICADO in archivo)
+        ok("lo de hace mas de un dia no esta como verificado",
+           f"#{viejo} " not in archivo.split("## Already verified in this chat")[1].split("##")[0])
+        ok("y recuerda como se lee una respuesta", "How a reply reads" in archivo)
+        brief = ws.brief_de_despacho(con, caso, {"name": "Alfa Demo", "path": "/tmp/alfa"},
+                                     json.loads(caso["propuesta"])["instrucciones"])
+        ok("el brief del despacho dice lo ya verificado, con su hora, para no repetirlo",
+           "## Already verified" in brief and hace(2)[:13] in brief and VERIFICADO in brief
+           and "do not repeat" in brief.lower(), brief[-800:])
+        con.close()
+    finally:
+        os.environ.clear()
+        os.environ.update(antes)
+
+print(f"\n{pruebas - len(fallos)}/{pruebas} en verde")
+if fallos:
+    sys.exit(1)
