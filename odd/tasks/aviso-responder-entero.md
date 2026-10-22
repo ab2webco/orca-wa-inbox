@@ -15,11 +15,11 @@ messages when long, and the approval stays bound to the version the notice showe
 
 ## Tasks
 
-- [ ] R1 Tests (RED): a held `responder` longer than 300 characters arrives whole in one
+- [x] R1 Tests (RED): a held `responder` longer than 300 characters arrives whole in one
   notice; a longer-than-one-message text arrives whole in parts with the question last;
   quoting a part approves and sends the text byte for byte; a stale version is refused.
-- [ ] R2 wa-scope: `texto_de_aviso` uses `partes_de_aviso` (GREEN).
-- [ ] R3 `npm run check` without shots, PR.
+- [x] R2 wa-scope: `texto_de_aviso` uses `partes_de_aviso` (GREEN).
+- [x] R3 `npm run check` without shots, PR.
 
 ## Acceptance
 
