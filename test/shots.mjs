@@ -425,7 +425,8 @@ const TABLERO_CASOS = [
     chat_name: 'Operaciones internas', updated_at: minutos(22),
     summary: 'Es una persona que no está en el equipo.',
     jev: { attention_class: 'access_or_credential', skip: false, flags: ['asks_for_credential'] },
-    proposal: { tipo: 'escalar', version: 'v2b71', texto: 'Escalar al responsable de accesos.' },
+    proposal: { tipo: 'escalar', version: 'v2b71', texto: null,
+      pregunta: 'Escalar al responsable de accesos.' },
     exceptions: ['credential', 'jev'] }),
   caso(3, 'decision', {
     title: 'Promete entrega el viernes', prioridad: 'medium', chat_name: 'Laura Méndez',
@@ -2019,6 +2020,24 @@ const PANELES = [
     ], { agent_waiting: 2 })),
     guion: ABRIR_TABLERO + `;
       document.querySelector('.card[data-case="42"]').click()`
+  },
+  {
+    // Un escalar con texto para el cliente (WAINBOX-57): el texto en la caja, la pregunta
+    // al dueno aparte, y Enviar.
+    nombre: 'tablero-escalar-texto', archivo: 'activity.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, espera: 400,
+    datos: conTablero(tableroDe([
+      caso(43, 'decision', { title: 'Confirmar el reporte publicado', exceptions: [],
+        summary: 'Pregunta si el reporte de ventas ya esta publicado.',
+        proposal: { tipo: 'escalar', version: 'v-esc-texto',
+          texto: 'Hola equipo, el reporte de ventas ya quedo publicado en el tablero. ' +
+            'Confirmen si lo ven bien.',
+          pregunta: 'Confirmar mensaje critico: lo envio tal cual? Verificado: el reporte ' +
+            'existe. No verificado: que el cliente lo vea.' },
+        actions: ['enviar', 'editar', 'reclasificar', 'cerrar', 'proyecto'] })
+    ], { agent_waiting: 0 })),
+    guion: ABRIR_TABLERO + `;
+      document.querySelector('.card[data-case="43"]').click()`
   },
   {
     // Corrido hasta las terminadas: Respondido y Cerrado con 20 tarjetas cada una.

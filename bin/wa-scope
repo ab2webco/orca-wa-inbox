@@ -139,6 +139,11 @@ ETAPAS_CON_MOTIVO = ("cerrado", "bloqueado")
 # a ejecutar (la respuesta, las instrucciones del agente); `escalar` y `descartar` solo
 # dicen lo que el dueno decide.
 TIPOS_PROPUESTA = ("responder", "trabajar", "escalar", "descartar")
+# Las propuestas que mandan su `respuesta` al cliente cuando el dueno las firma. Un
+# `escalar` puede traer el texto para el cliente en su propio campo (escalar-texto-cliente,
+# WAINBOX-57), aparte de la pregunta al dueno (`instrucciones`) y de lo verificado
+# (`evidencia`): firmarlo manda ESE campo, byte por byte. Sin el, no manda nada.
+TIPOS_CON_RESPUESTA = ("responder", "escalar")
 # Que campo exige cada tipo: una propuesta de responder sin respuesta es una tarjeta que
 # el dueno aprueba y que el ejecutor no sabe que enviar.
 CAMPO_DE_TIPO = {"responder": "respuesta", "trabajar": "instrucciones"}
@@ -9594,8 +9599,11 @@ def iso_caso(sello):
     return cuando.astimezone().isoformat(timespec="seconds")
 
 
-def acciones_de(etapa, tipo, con_excepciones=False, con_pregunta=False):
+def acciones_de(etapa, tipo, con_excepciones=False, con_pregunta=False, con_respuesta=False):
     acciones = ACCIONES_DE_ETAPA.get(etapa, ())
+    if tipo == "escalar" and con_respuesta:
+        # El escalar con texto para el cliente se envia como una respuesta (WAINBOX-57).
+        tipo = "responder"
     if etapa == "respondido" and con_pregunta:
         # La pregunta "A o B?" espera al que escribio: el dueno puede contestarla eligiendo
         # el proyecto desde la tarjeta (proyectos-por-chat, M5).
@@ -9690,9 +9698,16 @@ def tarjeta_de(caso, nombres, titulos, motivos, eventos=None, sin_agente=None,
         "title": caso["titulo"] or titulos.get(caso["case_id"]) or nombre,
         "summary": caso["resumen"], "clase": caso["clase"], "prioridad": caso["prioridad"],
         "jev": json.loads(caso["jev"]) if caso["jev"] else None,
+        # Un `escalar` muestra aparte el texto para el cliente (lo que saldria, y lo que
+        # el editor trae) y la pregunta al dueno: sus instrucciones nunca son texto para
+        # enviar (WAINBOX-57).
         "proposal": dict({"tipo": tipo,
-                          "texto": propuesta.get("respuesta") or propuesta.get("instrucciones"),
+                          "texto": (propuesta.get("respuesta") if tipo == "escalar"
+                                    else propuesta.get("respuesta")
+                                    or propuesta.get("instrucciones")),
                           "version": caso["propuesta_version"]},
+                         **({"pregunta": propuesta.get("instrucciones")}
+                            if tipo == "escalar" else {}),
                          # El otro chat al que va (respuesta-otro-chat): el dueno lo ve antes
                          # de firmar. Solo cuando no es el del caso.
                          **({"destino": {"chat_jid": propuesta["chat"],
@@ -9712,7 +9727,8 @@ def tarjeta_de(caso, nombres, titulos, motivos, eventos=None, sin_agente=None,
         "ticket": caso["plane_issue"] or None,
         "updated_at": iso_caso(caso["updated_at"]),
         "actions": acciones_de(caso["etapa"], tipo, bool(json.loads(caso["excepciones"] or "[]")),
-                               pregunta_al_que_escribio(ruta_del_caso(caso))),
+                               pregunta_al_que_escribio(ruta_del_caso(caso)),
+                               bool((propuesta or {}).get("respuesta"))),
         "project": ({"id": elegido["id"], "name": elegido["name"]}
                     if elegido["id"] and not elegido["quitado"] else None),
         "needs_agent": bool(caso["necesita_agente"]),
@@ -11633,6 +11649,13 @@ MODOS_CON_META = ("responder", "borrador")
 TOPE_AVISOS_FALLIDOS = 50
 LARGO_PIDE = 140
 LARGO_PROPUESTA = 300
+# Un aviso que no cabe en un mensaje sale en partes de hasta esto (WAINBOX-58), con lugar
+# para la firma del agente. Las partes viven en la misma fila del aviso, unidas por
+# SEPARA_PARTES; salen en orden, la parte i con el id `<aviso>-p<i>` y la ultima (la que
+# lleva la pregunta) con el id del aviso.
+LARGO_PARTE_AVISO = 3500
+SEPARA_PARTES = "\n\x1e\n"
+PARTE_DE_AVISO = re.compile(r"^(.+)-p\d+$")
 LARGO_CORRECCION = 1000
 TOPE_ESTADO = 15
 ETAPAS_ESTADO = ("recibido", "clasificado", "decision", "trabajo", "listo", "respondido",
@@ -11712,6 +11735,10 @@ TEXTOS_AVISO = {
            "bloqueo_como": "Conteste {n} 1 para seguir el trabajo con la opcion 1 (o con el "
                            "numero de otra), {n} enviar para mandarle el borrador al cliente, o "
                            "{n} y su respuesta.",
+           "escala_texto": "Caso {n} · {chat}: el agente propone este mensaje para el cliente:",
+           "escala_pregunta": "¿Lo envio tal cual? Responda si {n} para enviarlo, no {n} para "
+                              "cerrar, o {n} y su correccion.",
+           "parte": "Caso {n} · parte {i} de {k}:",
            "escala_contestada": "Caso {n}: su respuesta va al agente, que sigue con el caso.",
            "aprobado_sale": "Caso {n} aprobado: la respuesta salio.",
            "aprobado_destino": "Caso {n} aprobado: la respuesta salio a {chat}.",
@@ -11785,6 +11812,10 @@ TEXTOS_AVISO = {
            "bloqueo_como": "Answer {n} 1 to go on with the work with option 1 (or with the "
                            "number of another), {n} enviar to send the draft to the client, or "
                            "{n} and your answer.",
+           "escala_texto": "Case {n} · {chat}: the agent proposes this message for the client:",
+           "escala_pregunta": "Send it as is? Answer yes {n} to send it, no {n} to close, or "
+                              "{n} and your correction.",
+           "parte": "Case {n} · part {i} of {k}:",
            "escala_contestada": "Case {n}: your answer goes to the agent, which continues the case.",
            "aprobado_sale": "Case {n} approved: the reply went out.",
            "aprobado_destino": "Case {n} approved: the reply went out to {chat}.",
@@ -12118,10 +12149,11 @@ def texto_de_escalado(con, caso):
         propuesta = json.loads(caso.get("propuesta") or "null") or {}
     except (TypeError, ValueError):
         propuesta = {}
-    pregunta = (str(propuesta.get("instrucciones") or propuesta.get("respuesta") or "").strip()
-                or que_pide(con, caso))
+    respuesta = str(propuesta.get("respuesta") or "")
+    pregunta = str(propuesta.get("instrucciones") or "").strip() or que_pide(con, caso)
     chat = nombre_del_chat(con, caso["chat_jid"])
-    if lleva_credencial(con, caso, None) or wa_reglas.secreto(pregunta):
+    if (lleva_credencial(con, caso, None) or wa_reglas.secreto(pregunta)
+            or wa_reglas.secreto(respuesta)):
         return tx["escala"].format(n=n, chat=chat, x=tx["motivo_oculto"])
     if propuesta.get("opciones") and propuesta.get("borrador"):
         # La decision de un bloqueo (sin-silencio B1): las opciones numeradas y el borrador.
@@ -12130,8 +12162,48 @@ def texto_de_escalado(con, caso):
                           tx["borrador_cliente"].format(x=recorta(str(propuesta["borrador"]),
                                                                   LARGO_PROPUESTA)),
                           tx["bloqueo_como"].format(n=n)])
+    if respuesta.strip():
+        # Con texto para el cliente (WAINBOX-58): el texto ENTERO, tal cual saldria, y una
+        # sola pregunta del plugin en el idioma del dueno. Las instrucciones y lo verificado
+        # se quedan en el tablero. Si no cabe en un mensaje, va en partes.
+        return partes_de_aviso(tx["escala_texto"].format(n=n, chat=chat), respuesta,
+                               tx["escala_pregunta"].format(n=n), tx["parte"], n)
     return "\n".join([tx["escala"].format(n=n, chat=chat, x=recorta(pregunta, LARGO_PROPUESTA)),
                       tx["escala_como"].format(n=n)])
+
+
+def corta_texto(texto, largo):
+    """El texto en pedazos de hasta `largo`, cortados despues de un salto de parrafo, de
+    linea o un espacio (en ese orden), y a la fuerza solo si no hay ninguno en la segunda
+    mitad del pedazo. Unidos dan el texto exacto."""
+    pedazos = []
+    while len(texto) > largo:
+        ventana = texto[:largo]
+        # El corte mas natural que no deje un pedazo de menos de la mitad.
+        corte = next((ventana.rfind(sep) + len(sep) for sep in ("\n\n", "\n", " ")
+                      if ventana.rfind(sep) > largo // 2), largo)
+        pedazos.append(texto[:corte])
+        texto = texto[corte:]
+    return pedazos + [texto]
+
+
+def partes_de_aviso(cabeza, cuerpo, pie, rotulo, n):
+    """El aviso `cabeza` + `cuerpo` + `pie` en uno o varios mensajes de hasta
+    LARGO_PARTE_AVISO, unidos por SEPARA_PARTES (`envia_avisos` los manda en orden). El
+    cuerpo nunca se recorta: se reparte entero, y el pie (la pregunta) va en el ultimo."""
+    entero = "\n".join([cabeza, cuerpo, pie])
+    if len(entero) <= LARGO_PARTE_AVISO:
+        return entero
+    margen = max(len(cabeza), len(pie)) + len(rotulo) + 16
+    pedazos = corta_texto(cuerpo, LARGO_PARTE_AVISO - margen)
+    total = len(pedazos)
+    partes = []
+    for i, pedazo in enumerate(pedazos, 1):
+        lineas = [cabeza if i == 1 else rotulo.format(n=n, i=i, k=total), pedazo]
+        if i == total:
+            lineas.append(pie)
+        partes.append("\n".join(lineas))
+    return SEPARA_PARTES.join(partes)
 
 
 def modo_en_linea(con, jid, linea):
@@ -12356,8 +12428,7 @@ def envia_avisos(con, resumen=None, inicio=None):
         if inicio is not None and time.time() - inicio > PRESUPUESTO_TICK_S:
             resumen["pospuestos"] += 1
             continue
-        codigo, detalle = tick_envia({"account": sale, "chat_jid": f["chat_jid"]},
-                                     f["texto"], f["req_id"])
+        codigo, detalle = envia_partes(sale, f)
         if codigo in AVISO_REINTENTA + AVISO_ESPERA_PERMISO:
             if codigo in (ENVIO_SIN_LINEA, "send-no-signature") + AVISO_ESPERA_PERMISO:
                 break
@@ -12383,6 +12454,21 @@ def envia_avisos(con, resumen=None, inicio=None):
             resumen["avisos_error"] += 1
             print(f"wa-scope: notice {f['req_id']} not sent: {codigo}", file=sys.stderr)
         con.commit()
+
+
+def envia_partes(sale, aviso):
+    """Las partes del aviso (SEPARA_PARTES), en orden y por la linea `sale`: la parte i con
+    el id `<aviso>-p<i>` y la ultima con el del aviso. Para en la primera que no sale y
+    devuelve su (codigo, detalle); (None, "") si salieron todas. Reintentar es seguro: un
+    id que ya salio devuelve el veredicto del primero y no se manda otra vez."""
+    partes = aviso["texto"].split(SEPARA_PARTES)
+    for i, parte in enumerate(partes, 1):
+        req = aviso["req_id"] if i == len(partes) else f"{aviso['req_id']}-p{i}"
+        codigo, detalle = tick_envia({"account": sale, "chat_jid": aviso["chat_jid"]}, parte,
+                                     req)
+        if codigo is not None:
+            return codigo, detalle
+    return None, ""
 
 
 def avisos_vigentes(con):
@@ -12574,10 +12660,12 @@ def aviso_citado(con, m, tipo="aprobacion"):
         fuente.close()
     if fila is None:
         return None
+    # Citar cualquier parte de un aviso largo (`<aviso>-p<i>`) contesta ese aviso.
+    parte = PARTE_DE_AVISO.match(fila["req_id"] or "")
     return con.execute("select * from aviso where req_id=? and tipo=? and "
                        "(account=? or sale_por=?) and chat_jid=?",
-                       (fila["req_id"], tipo, cuenta_activa(), cuenta_activa(),
-                        m.get("chat_jid"))).fetchone()
+                       (parte.group(1) if parte else fila["req_id"], tipo, cuenta_activa(),
+                        cuenta_activa(), m.get("chat_jid"))).fetchone()
 
 
 def releva_respuesta(con, m, aviso):
@@ -12904,7 +12992,7 @@ def aplica_respuesta(con, aviso, r, tx):
                                                  via=POR_WHATSAPP))
         aviso_contestado(con, aviso)
         caso = caso_de(con, n)
-        if propuesta_tipo(caso) != "responder":
+        if propuesta_tipo(caso) not in TIPOS_CON_RESPUESTA or not respuesta_de_propuesta(caso):
             return tx["aprobado_trabajo"].format(n=n)
         return entrega_del_dueno(con, caso, tx)
     caso_toma(con)
@@ -12994,11 +13082,12 @@ def aplica_decision_de_bloqueo(con, aviso, texto, tx):
 
 
 def es_pregunta_del_agente(con, aviso):
-    """Si el aviso es el de un `escalar` (la pregunta del agente) y el caso sigue en esa
-    version."""
+    """Si el aviso es el de un `escalar` sin texto para el cliente (la pregunta del agente)
+    y el caso sigue en esa version. El que trae ese texto se aprueba como una respuesta: el
+    `si` manda su `respuesta` (WAINBOX-57)."""
     caso = caso_de(con, aviso["case_id"])
     return bool(caso and caso.get("propuesta_version") == aviso["version"]
-                and propuesta_tipo(caso) == "escalar")
+                and propuesta_tipo(caso) == "escalar" and not respuesta_de_propuesta(caso))
 
 
 def aviso_contestado(con, aviso):

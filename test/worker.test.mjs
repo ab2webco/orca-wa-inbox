@@ -4125,6 +4125,42 @@ const verbo = (llamada) => llamada[1]
 }
 
 {
+  // WAINBOX-57: un `escalar` con texto para el cliente lo lleva en su propio campo
+  // (`respuesta`). Enviar manda ESE campo, byte por byte: ni la pregunta al dueno ni lo
+  // verificado viajan. Las dos formas que se vieron en vivo, con datos falsos.
+  const respuestas = ["Hola equipo, el reporte ya quedo publicado. Confirmen si lo ven bien.",
+    "Buen dia, el acceso de 'Ana' ya esta activo."]
+  for (const [i, respuesta] of respuestas.entries()) {
+    const f = herramientasCaso(`caso-enviar-escalar-${i}`, { casos: { 7: casoDe({ propuesta: {
+      tipo: 'escalar', respuesta,
+      instrucciones: `Confirmar mensaje critico: lo envio? Texto: '${respuesta}'. ` +
+        'Verificado: el reporte existe. No verificado: que el cliente lo vea.' } }) } })
+    const orca = hostFalso(f.dir, { chats: [] })
+    const { apagar } = await arranca(orca)
+    const v = await pideCaso(orca, { action: 'enviar', caseId: 7, version: V1 })
+    ok(`Enviar un escalar con texto para el cliente se acepta (${i + 1})`,
+      v && v.ok === true && v.code === 'enviado', JSON.stringify(v))
+    const [borrador] = f.send()
+    ok(`y lo que sale es la respuesta, byte por byte (${i + 1})`,
+      borrador && borrador[borrador.length - 1] === respuesta &&
+      !borrador.some((x) => /Verificado|Confirmar mensaje/.test(x)), JSON.stringify(borrador))
+    apagar()
+  }
+  // Uno sin texto para el cliente (la forma vieja: todo en las instrucciones) no manda nada.
+  const f = herramientasCaso('caso-enviar-escalar-sin', { casos: { 7: casoDe({ propuesta: {
+    tipo: 'escalar',
+    instrucciones: "Confirmar mensaje critico: Texto: 'Hola'. Verificado: algo." } }) } })
+  const orca = hostFalso(f.dir, { chats: [] })
+  const { apagar } = await arranca(orca)
+  const v = await pideCaso(orca, { action: 'enviar', caseId: 7, version: V1 })
+  ok('Enviar un escalar sin texto para el cliente se rechaza', v && v.ok === false &&
+    v.code === 'accion-invalida', JSON.stringify(v))
+  ok('y no se firma ni se manda nada', f.send().length === 0 &&
+    !f.scope().some((a) => ['aprobar', 'mover'].includes(verbo(a))), JSON.stringify(f.scope()))
+  apagar()
+}
+
+{
   // Cada motivo por el que wa-send no manda llega con su codigo y deja el caso donde
   // estaba: decir "enviado" de lo que no salio es lo peor que puede hacer este panel.
   for (const [codigo, salida] of [['send-timeout', 1], ['send-rejected', 1], ['send-no-transport', 4],
