@@ -4497,6 +4497,10 @@ if nombre.startswith("falla"):
     sys.exit(1)
 # Un fallo pasajero del motor: "inestable" falla solo la primera vez, "caido" siempre.
 veces = open(os.environ["FAKE_LOG"]).read().splitlines().count(nombre)
+if nombre.startswith("ruido"):
+    print(json.dumps({"ok": False, "codigo": "transcribe_failed",
+                      "razon": "decoder said:\\n  bad frame " + "x" * 400}))
+    sys.exit(1)
 if nombre.startswith("caido") or (nombre.startswith("inestable") and veces == 1):
     print(json.dumps({"ok": False, "codigo": "transcribe_failed", "razon": "engine error"}))
     sys.exit(1)
@@ -4606,8 +4610,8 @@ else:
         listo_persona(home)
         ingiere_con(home, env)
         x = hilo_de(home, "F1")
-        ok("si no se pudo, el hilo lo dice con el codigo",
-           x and x["text"] == "audio sin transcribir: sin_motor"
+        ok("si no se pudo, el hilo lo dice con el codigo y el mensaje del motor",
+           x and x["text"] == "audio sin transcribir: sin_motor (no engine)"
            and x["transcripcion"] is False, f"{x}")
         c = caso_de_stanza(home, "F1")
         ok("y el caso queda como dudoso, sin adivinar",
@@ -4746,7 +4750,7 @@ if NODE:
             ok("y Jev no juzga un mensaje vacio", "" not in falso.textos(), f"{falso.textos()}")
             x = hilo_de(home, "GF1")
             ok("el hilo dice que el audio no se transcribio",
-               x and x["text"] == "audio sin transcribir: transcribe_failed"
+               x and x["text"] == "audio sin transcribir: transcribe_failed (engine error)"
                and x["transcripcion"] is False, f"{x}")
 
         # 2. El fallo pasajero se reintenta despues de su espera, y el texto llega al caso.
@@ -4809,6 +4813,113 @@ if NODE:
             c = caso_de_stanza(home, "GC1")
             ok("el chat directo sigue abriendo su caso dudoso",
                c is not None and c["clase"] == "doubtful", f"{c}")
+    finally:
+        falso.cerrar()
+        os.environ.clear()
+        os.environ.update(antes)
+
+
+# Caso 186 (WAINBOX-56): una nota de voz reenviada no se transcribia en Linux y nadie sabia
+# por que. El plugin guardaba solo el codigo (`transcribe_failed`) y tiraba el mensaje del
+# motor de Orca. Ademas la fila fallida era final para siempre: la escribio una version sin
+# reintentos, y la migracion de WAINBOX-67 le puso `reintento_ts` null. Ahora el mensaje se
+# guarda, se ve en el hilo y queda en la bitacora en disco; y al actualizar, cada fallo
+# pasajero final recibe UN intento mas, este o no abierto su caso.
+def bitacoras(home):
+    carpeta = pathlib.Path(home) / ".wa-inbox" / "logs"
+    lineas = []
+    for archivo in sorted(carpeta.glob("worker-*.log")) if carpeta.is_dir() else []:
+        lineas += [json.loads(l) for l in archivo.read_text(encoding="utf-8").splitlines()
+                   if l.strip()]
+    return lineas
+
+
+def transcripcion_detalle(home, stanza):
+    fila = db_de(home).execute("select ok, texto, razon, detalle, intentos, reintento_ts "
+                               "from transcripcion where stanza_id=?", (stanza,)).fetchone()
+    return dict(fila) if fila else None
+
+
+def como_antes_de_los_reintentos(home):
+    """La base como la dejo 4.30.11: la fila fallida sin intentos, sin reintento agendado y
+    sin detalle, y los casos ya cerrados."""
+    con = db_de(home)
+    con.execute("update caso set etapa='cerrado'")
+    for columna in ("detalle", "reintento_ts", "intentos"):
+        con.execute(f"alter table transcripcion drop column {columna}")
+    con.commit()
+    con.close()
+
+
+print("\nel fallo del motor guarda su mensaje y al actualizar se reintenta una vez (caso 186)")
+if NODE:
+    falso = JevFalso(jev_segun_texto)
+    antes = dict(os.environ)
+    os.environ["WA_INBOX_JEV_ENDPOINT"] = falso.url
+    try:
+        # 1. El mensaje del motor: guardado, en el hilo y en la bitacora; Jev ve el codigo.
+        with tempfile.TemporaryDirectory() as home:
+            env, registro = prepara_transcriptor(home)
+            pon_llave(home)
+            llegan(home, A, [audio(home, "MD1", "caido5.ogg", 5),
+                             audio(home, "MD2", "ruido5.ogg", 4)])
+            linea_lista(home, modo_soporte="responder")
+            ingiere_con(home, env)
+            fila = transcripcion_detalle(home, "MD1")
+            ok("la fila guarda el mensaje del motor junto al codigo",
+               fila and fila["razon"] == "transcribe_failed"
+               and fila["detalle"] == "engine error", f"{fila}")
+            x = hilo_de(home, "MD1")
+            ok("el hilo muestra el codigo y el mensaje del motor",
+               x and x["text"] == "audio sin transcribir: transcribe_failed (engine error)"
+               and x["transcripcion"] is False, f"{x}")
+            c = caso_de_stanza(home, "MD1")
+            ok("lo que se clasifica sigue siendo solo el codigo",
+               c is not None and "engine error" not in evento(c, "clasificado")["detalle"]
+               and "engine error" not in " ".join(falso.textos()), f"{c}")
+            fila = transcripcion_detalle(home, "MD2")
+            ok("un mensaje largo o con saltos se guarda en una linea y con tope",
+               fila and "\n" not in fila["detalle"]
+               and fila["detalle"].startswith("decoder said: bad frame xxx")
+               and len(fila["detalle"]) <= 300, f"{fila}")
+            log = [r for r in bitacoras(home) if r.get("que") == "transcripcion"]
+            ok("cada fallo queda en la bitacora en disco con su mensaje",
+               any(r.get("codigo") == "transcribe_failed" and r.get("detalle") == "engine error"
+                   and r.get("at") and r.get("cuenta") for r in log), f"{log}")
+
+        # 2. Una instalacion que viene de 4.30.11: el fallo pasajero final se reintenta UNA
+        # vez, aunque su caso este cerrado; un codigo permanente no.
+        falso.pedidos.clear()
+        with tempfile.TemporaryDirectory() as home:
+            env, registro = prepara_transcriptor(home)
+            pon_llave(home)
+            llegan(home, A, [audio(home, "UP1", "inestable6.ogg", 6),
+                             audio(home, "UP2", "caido6.ogg", 5),
+                             audio(home, "UP3", "falla6.ogg", 4)])
+            linea_lista(home, modo_soporte="responder")
+            ingiere_con(home, env)
+            como_antes_de_los_reintentos(home)
+            tick_env(home, env)
+            ok("al actualizar, el fallo pasajero final se vuelve a transcribir",
+               llamadas(registro).count("inestable6.ogg") == 2
+               and llamadas(registro).count("caido6.ogg") == 2, f"{llamadas(registro)}")
+            fila = transcripcion_detalle(home, "UP1")
+            ok("y si ahora sale, la fila queda con el texto",
+               fila and fila["ok"] == 1 and fila["texto"] == "revisa este caso: dijo inestable6.ogg"
+               and fila["reintento_ts"] is None, f"{fila}")
+            fila = transcripcion_detalle(home, "UP2")
+            ok("si vuelve a fallar queda final, ahora con el mensaje del motor",
+               fila and fila["ok"] == 0 and fila["detalle"] == "engine error"
+               and fila["reintento_ts"] is None, f"{fila}")
+            ok("un codigo permanente no se reintenta",
+               llamadas(registro).count("falla6.ogg") == 1, f"{llamadas(registro)}")
+            ok("el caso cerrado sigue cerrado",
+               cuenta(home, "select count(*) from caso where etapa <> 'cerrado'") == 0)
+            reintento_vencido(home, "UP2")
+            tick_env(home, env)
+            ok("y es una sola vez: otro tick no vuelve a pedir nada",
+               llamadas(registro).count("caido6.ogg") == 2
+               and llamadas(registro).count("inestable6.ogg") == 2, f"{llamadas(registro)}")
     finally:
         falso.cerrar()
         os.environ.clear()
