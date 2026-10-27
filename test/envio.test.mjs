@@ -1312,7 +1312,7 @@ console.log('\nwa-send --file: al dueno sale, a cualquier otro espera su visto')
     '--send', '--id', 'REQ-DOC'], { almacen, socket })
   ok('a un cliente NO sale sin el dueno, aunque el chat este en responder',
     socket.enviados.length === 1 && aOtro.primera === 'wa-send: send-needs-approval' &&
-    aOtro.stderr.includes('diferencias.xlsx'), aOtro.stderr)
+    aOtro.stderr.includes('rule: file'), aOtro.stderr)
   const borradores = await correrEnvio(home, ['--drafts', '--json'], { almacen })
   ok('el borrador muestra el archivo que espera',
     JSON.parse(borradores.stdout)[0]?.file?.name === 'diferencias.xlsx', borradores.stdout)

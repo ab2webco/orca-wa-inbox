@@ -4991,6 +4991,27 @@ titulo('activity.html — retenidos fuera de un caso: el dueno los aprueba o los
   const vacio = await abrirConWorker([tarjeta()], conWorker(responde), conRetenido([tarjeta()], []))
   ok('sin retenidos no hay seccion', vacio.doc.getElementById('board-held').hidden)
 
+  // send-files: un archivo no lo lee nadie mas que el dueno, asi que la tarjeta dice cual es,
+  // cuanto pesa y que espera por eso. Sin pie, no queda una caja de texto vacia.
+  const conArchivo = Object.assign({}, retenido, { req_id: 'archivo-1', text: '',
+    file: { name: 'informe-ejemplo.pdf', bytes: 2560 }, reasons: ['file'] })
+  const fa = await abrirConWorker([tarjeta()], conWorker(responde), conRetenido([tarjeta()], [conArchivo]))
+  const itemArchivo = fa.doc.querySelector('#board-held [data-req="archivo-1"]')
+  ok('un archivo retenido dice cual es, su tamano y por que espera', itemArchivo &&
+    /Archivo: informe-ejemplo\.pdf \(3 KB\)/.test(itemArchivo.textContent) &&
+    /Retenido por: archivo/.test(itemArchivo.textContent),
+  itemArchivo && itemArchivo.textContent)
+  ok('sin pie no deja una caja de texto vacia', itemArchivo && !itemArchivo.querySelector('.card-prop'),
+    itemArchivo && itemArchivo.innerHTML.slice(0, 300))
+
+  for (const [idioma, archivo, motivo] of [['en-US', /File: informe-ejemplo\.pdf/, /Held for: file/],
+    ['pt-BR', /Arquivo: informe-ejemplo\.pdf/, /Retida por: arquivo/]]) {
+    const x = await abrirConWorker([tarjeta()], conWorker(responde), conRetenido([tarjeta()], [conArchivo]), idioma)
+    const h = x.doc.getElementById('board-held')
+    ok(`${idioma}: el archivo y su motivo en su idioma`, archivo.test(h.textContent) &&
+      motivo.test(h.textContent), h.textContent.slice(0, 300))
+  }
+
   for (const [idioma, titulo, boton, motivo] of [['en-US', /Held messages/, 'Approve', /Held for: money/],
     ['pt-BR', /Mensagens retidas/, 'Aprovar', /Retida por: dinheiro/]]) {
     const x = await abrirConWorker([tarjeta()], conWorker(responde), conRetenido([tarjeta()]), idioma)

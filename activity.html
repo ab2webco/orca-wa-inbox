@@ -1081,6 +1081,7 @@
               "heldTitle": "Mensajes retenidos",
               "heldLead": "Estos mensajes no son de ningun caso y esperan su aprobacion. Lea el texto antes de aprobarlo.",
               "heldReason": "Retenido por: {x}",
+              "heldFile": "Archivo: {x}",
               "heldApprove": "Aprobar",
               "heldCancel": "Cancelar",
               "heldSent": "Enviado a {chat}.",
@@ -1097,6 +1098,7 @@
               "excCredential": "credencial",
               "excCommitment": "compromiso",
               "excJev": "aviso de Jev",
+              "excFile": "archivo",
               "propLead": "Propuesta",
               "propResponder": "responder",
               "propTrabajar": "trabajar",
@@ -1470,6 +1472,7 @@
               "heldTitle": "Held messages",
               "heldLead": "These messages belong to no case and wait for your approval. Read the text before you approve it.",
               "heldReason": "Held for: {x}",
+              "heldFile": "File: {x}",
               "heldApprove": "Approve",
               "heldCancel": "Cancel",
               "heldSent": "Sent to {chat}.",
@@ -1486,6 +1489,7 @@
               "excCredential": "credential",
               "excCommitment": "commitment",
               "excJev": "flagged by Jev",
+              "excFile": "file",
               "propLead": "Proposal",
               "propResponder": "reply",
               "propTrabajar": "work on it",
@@ -1859,6 +1863,7 @@
               "heldTitle": "Mensagens retidas",
               "heldLead": "Estas mensagens nao sao de nenhum caso e aguardam sua aprovacao. Leia o texto antes de aprovar.",
               "heldReason": "Retida por: {x}",
+              "heldFile": "Arquivo: {x}",
               "heldApprove": "Aprovar",
               "heldCancel": "Cancelar",
               "heldSent": "Enviada para {chat}.",
@@ -1875,6 +1880,7 @@
               "excCredential": "credencial",
               "excCommitment": "compromisso",
               "excJev": "aviso do Jev",
+              "excFile": "arquivo",
               "propLead": "Proposta",
               "propResponder": "responder",
               "propTrabajar": "trabalhar",
@@ -2411,7 +2417,7 @@
       var ACTOR_KEY = { agente: 'actorAgente', jev: 'actorJev', dueno: 'actorDueno',
         automatizacion: 'actorAutomatizacion', trabajador: 'actorTrabajador', regla: 'actorRegla' }
       var EXC_KEY = { money: 'excMoney', credential: 'excCredential',
-        commitment: 'excCommitment', jev: 'excJev' }
+        commitment: 'excCommitment', jev: 'excJev', file: 'excFile' }
       var PROP_KEY = { responder: 'propResponder', trabajar: 'propTrabajar',
         escalar: 'propEscalar', descartar: 'propDescartar' }
       // Lo que paso en cada evento de la historia (T22), por el codigo `que` que deja
@@ -2433,7 +2439,7 @@
         follow_up_no_answer: 'histFollowUpNoAnswer', follow_up_attended: 'histFollowUpAttended' }
       // Los motivos y excepciones que viajan en `args`, en palabras.
       var MOTIVO_KEY = { money: 'excMoney', credential: 'excCredential',
-        commitment: 'excCommitment', jev: 'excJev', secret: 'motSecret',
+        commitment: 'excCommitment', jev: 'excJev', file: 'excFile', secret: 'motSecret',
         agent: 'histJevAgent', 'jev-unavailable': 'motJevDown',
         promises_a_date: 'flagPromisesDate', states_status_not_verified: 'flagStatusNotVerified',
         contains_credential: 'flagContainsCredential', delete: 'motDelete',
@@ -2959,7 +2965,14 @@
         if (motivos.length) {
           nodo.appendChild(crear('div', 'card-exc', fmt('heldReason', { x: frases(EXC_KEY, motivos, t('excOther')) })))
         }
-        nodo.appendChild(crear('div', 'card-prop', r.text))
+        // Un archivo (send-files) no lo lee nadie mas que el dueno: cual es y cuanto pesa.
+        var archivo = esObjeto(r.file) && typeof r.file.name === 'string' ? r.file : null
+        if (archivo) {
+          var peso = tamanoTexto(archivo.bytes)
+          nodo.appendChild(crear('div', 'card-meta', fmt('heldFile',
+            { x: archivo.name + (peso ? ' (' + peso + ')' : '') })))
+        }
+        if (r.text) nodo.appendChild(crear('div', 'card-prop', r.text))
         var acts = crear('div', 'card-acts')
         ;[['aprobar', 'heldApprove', ' primario'], ['cancelar', 'heldCancel', ' mute']].forEach(function (a) {
           var enVuelo = !!(enCurso && enCurso.id === 'held:' + id && enCurso.accion === a[0])

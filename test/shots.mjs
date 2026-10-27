@@ -384,7 +384,11 @@ const RETENIDOS = [
     text: 'Aviso del proyecto Alfa Demo: la renovacion queda en $1.400 y la publicamos el viernes a las 10:00.',
     at: minutos(25), reasons: ['money', 'commitment'] },
   { req_id: 'b7c1e0aa42', chat_jid: '120363000000000009@g.us', chat: 'Comite - Cliente - Sur',
-    text: 'Listo: el informe quedo publicado.', at: minutos(7), reasons: ['jev'] }
+    text: 'Listo: el informe quedo publicado.', at: minutos(7), reasons: ['jev'] },
+  // send-files: un archivo espera siempre al dueno; la tarjeta dice cual y cuanto pesa.
+  { req_id: 'archivo-informe-1', chat_jid: '573000000001@s.whatsapp.net', chat: 'Laura Ejemplo',
+    text: 'Va el informe de octubre.', file: { name: 'informe-octubre.pdf', bytes: 248320 },
+    at: minutos(3), reasons: ['file'] }
 ]
 const TABLERO_CASOS = [
   caso(1, 'decision', {

@@ -1127,9 +1127,10 @@ def main():
     # sacar datos, y quien decide que datos salen es el dueno.
     if adjunto and not wa_store.chat_del_dueno(con, fila["account"], fila["chat_jid"],
                                                duenos_linea):
+        # `rule: file`, con la forma de los otros motivos: el tablero y el aviso lo traducen,
+        # y la bitacora no lleva el nombre del archivo (va el id, no el contenido).
         deja_borrador(con, fila, a.text, req_id, a.json, pedia_envio=True,
-                      frenado=[f"a file ({adjunto['nombre']}, {tamano(adjunto['bytes'])})"],
-                      adjunto=adjunto)
+                      frenado=["rule: file"], adjunto=adjunto)
 
     encolar(con, fila, a.text, req_id, PENDIENTE, adjunto)
     veredicto(con, req_id, a.timeout, a.json, fila.get("account"))

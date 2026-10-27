@@ -10254,8 +10254,9 @@ def retenidos_del_tablero(con, cuenta):
     try:
         fuente = sqlite3.connect(f"file:{ruta}?mode=ro", uri=True, timeout=10)
         fuente.row_factory = sqlite3.Row
+        # `select *`: la columna `adjunto` falta en un almacen de antes de los archivos.
         filas = fuente.execute(
-            "select req_id, chat_jid, chat_name, body, created_at from envio where "
+            "select * from envio where "
             "estado='borrador' and account=? and req_id not like 'caso-%' and req_id not like "
             "'aviso-%' order by created_at, rowid limit ?", (cuenta, TOPE_RETENIDOS)).fetchall()
         fuente.close()
@@ -10266,8 +10267,12 @@ def retenidos_del_tablero(con, cuenta):
         nota = con.execute("select detail from agent_action where action='draft' and "
                            "instr(detail, ?) > 0 order by id desc limit 1",
                            (f" · {f['req_id']} · ",)).fetchone()
+        # El archivo va con nombre y tamano: el dueno aprueba algo que nadie mas pudo leer.
+        archivo = adjunto_del_envio(dict(f))
         salida.append({"req_id": f["req_id"], "chat_jid": f["chat_jid"], "account": cuenta,
                        "chat": f["chat_name"] or f["chat_jid"], "text": f["body"] or "",
+                       "file": ({"name": str(archivo.get("nombre") or "?"),
+                                 "bytes": int(archivo.get("bytes") or 0)} if archivo else None),
                        "at": datetime.datetime.fromtimestamp(int(f["created_at"] or 0))
                        .astimezone().isoformat(timespec="seconds"),
                        "reasons": motivos_de_retenido(nota["detail"] if nota else "")})
@@ -11808,7 +11813,8 @@ MOTIVOS_AVISO = {
            "mode": "el chat no responde solo", "stale": "la propuesta tiene mas de un dia",
            "exceptions": "el caso trae excepciones", "no_instructions": "no trae instrucciones",
            "other_chat": "va a otro chat y lo aprueba usted",
-           "catch_up": "retoma temas pendientes de antes y lo aprueba usted"},
+           "catch_up": "retoma temas pendientes de antes y lo aprueba usted",
+           "file": "envia un archivo"},
     "en": {"money": "it mentions money", "credential": "it names a credential",
            "commitment": "it commits to a date", "jev": "Jev held it",
            "jev-unavailable": "Jev did not answer", "secret": "it carries a secret",
@@ -11826,7 +11832,8 @@ MOTIVOS_AVISO = {
            "stale": "the proposal is more than a day old",
            "exceptions": "the case carries exceptions", "no_instructions": "it has no instructions",
            "other_chat": "it goes to another chat and you approve it",
-           "catch_up": "it picks up earlier pending topics and you approve it"},
+           "catch_up": "it picks up earlier pending topics and you approve it",
+           "file": "it sends a file"},
 }
 # Lo que dice cada aviso, en el tono del panel (de usted). `{n}` es el numero del caso.
 TEXTOS_AVISO = {
@@ -12969,9 +12976,11 @@ def texto_de_borrador(con, fila, codigo):
     archivo = adjunto_del_envio(fila)
     if archivo:
         lineas.append(tx["borrador_archivo"].format(
-            x=f"{archivo.get('nombre')} ({int(archivo.get('bytes') or 0) // 1024} KB)"))
-    return "\n".join(lineas + [tx["borrador_texto"].format(x=cuerpo),
-                               tx["borrador_como"].format(c=codigo)])
+            x=f"{archivo.get('nombre')} ({tamano_de_archivo(archivo.get('bytes'))})"))
+    # Un archivo puede ir sin pie: entonces no hay "Texto:" que mostrar.
+    if cuerpo.strip():
+        lineas.append(tx["borrador_texto"].format(x=cuerpo))
+    return "\n".join(lineas + [tx["borrador_como"].format(c=codigo)])
 
 
 def adjunto_del_envio(fila):
@@ -12980,6 +12989,14 @@ def adjunto_del_envio(fila):
         return json.loads(fila.get("adjunto") or "null")
     except ValueError:
         return {"nombre": "?", "bytes": 0}
+
+
+def tamano_de_archivo(n):
+    """Bytes en palabras, como `tamano` de `wa-send`: 10 B, 2.5 KB, 3.1 MB."""
+    n = int(n or 0)
+    if n < 1024:
+        return f"{n} B"
+    return f"{n / 1024:.1f} KB" if n < 1024 * 1024 else f"{n / 1024 / 1024:.1f} MB"
 
 
 def cmd_aviso_borrador(con, a):

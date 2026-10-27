@@ -14087,6 +14087,69 @@ if NODE:
             sidecar.cerrar()
 
 
+# ── send-files: un archivo retenido dice que es un archivo (odd/tasks/send-files.md) ────
+# `wa-send --file` a un cliente siempre espera al dueno. Lo que el dueno mira para decidir
+# (el tablero y el aviso por WhatsApp) tiene que decir que va un archivo, cual y de que
+# tamano, y por que espera; la bitacora, en cambio, no lleva el nombre: va el id y no el texto.
+print("\nsend-files: un archivo retenido se ve como archivo en el tablero y en el aviso")
+if NODE:
+    with tempfile.TemporaryDirectory() as home:
+        linea_lista(home)
+        js(home, "config", "ack", "off")
+        sidecar = SidecarFalso(home)
+        antes_archivo = dict(os.environ)
+        try:
+            env = dict(os.environ, HOME=str(home),
+                       XDG_CONFIG_HOME=str(pathlib.Path(home) / ".config"),
+                       APPDATA=str(pathlib.Path(home) / "AppData" / "Roaming"),
+                       ORCA_CLI_COMMAND=SIN_ORCA)
+            env.pop("WA_INBOX_APPROVER", None)
+            archivo = pathlib.Path(home) / "docs" / "informe-ejemplo.pdf"
+            archivo.parent.mkdir(parents=True)
+            archivo.write_bytes(b"%PDF-falso")
+            p = subprocess.run([str(RAIZ / "bin" / "wa-send"), PERSONA, "va el informe",
+                                "--file", str(archivo), "--send", "--id", "archivo-1",
+                                "--json", "--timeout=3"],
+                               capture_output=True, text=True, env=env, timeout=60)
+            ok("un archivo a un cliente queda retenido aunque el chat responda solo",
+               p.returncode == 3 and "send-needs-approval" in p.stderr, p.stderr[:200])
+            sc = sqlite3.connect(pathlib.Path(home) / ".wa-inbox" / "scope.db")
+            nota = (sc.execute("select detail from agent_action where action='draft' "
+                               "order by id desc limit 1").fetchone() or [""])[0]
+            sc.close()
+            ok("la bitacora dice el motivo en codigo y no nombra el archivo",
+               nota.startswith("held by rule: file · archivo-1 · ")
+               and "informe-ejemplo" not in nota, nota)
+            tick(home)
+            retenidos = tablero(home).get("board", {}).get("held_drafts") or []
+            uno = (retenidos or [{}])[0]
+            ok("el tablero lo lista con el archivo, su tamano y el motivo",
+               uno.get("req_id") == "archivo-1"
+               and uno.get("file") == {"name": "informe-ejemplo.pdf", "bytes": 10}
+               and uno.get("reasons") == ["file"], f"{retenidos}")
+            ws = carga_wa_scope(home)
+            con = ws.db()
+            aviso = ws.texto_de_borrador(con, ws.envio_de("archivo-1"), "ABC")
+            con.close()
+            ok("el aviso al dueno dice que espera por el archivo, cual y cuanto pesa",
+               "Waiting because: it sends a file" in aviso
+               and "File: informe-ejemplo.pdf (10 B)" in aviso
+               and "Text:\nva el informe" in aviso, aviso)
+            con = ws.db()
+            fila = dict(ws.envio_de("archivo-1"), body="")
+            sin_pie = ws.texto_de_borrador(con, fila, "ABC")
+            con.close()
+            ok("sin pie, el aviso no muestra un Texto vacio",
+               "Text:" not in sin_pie and "informe-ejemplo.pdf" in sin_pie, sin_pie)
+            a = aprobar_borrador(home, "archivo-1")
+            ok("el dueno lo aprueba desde el tablero y sale",
+               a.returncode == 0 and "archivo-1" in sidecar.entregados, a.stderr[:200])
+        finally:
+            sidecar.cerrar()
+            os.environ.clear()
+            os.environ.update(antes_archivo)
+
+
 # ── avisos-orca: los avisos de Orca por WhatsApp (odd/tasks/avisos-orca.md, O3-O6) ───────
 # Un agente de otro proyecto que espera, uno que termino y una automatizacion que fallo, al
 # numero de aprobacion, con texto fijo. Apagados de fabrica; con horas de silencio que se
