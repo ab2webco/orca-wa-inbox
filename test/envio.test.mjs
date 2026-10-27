@@ -28,7 +28,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { fileURLToPath } from 'node:url'
 
 import { abrirAlmacen, ENVIANDO_VENCE_S, rutaAlmacen } from '../sidecar/src/almacen.js'
-import { atenderSalida, ENVIO, LATIDO_VENCE_MS, mensajeDeEnvio } from '../sidecar/src/envio.js'
+import { atenderSalida, contenidoDe, ENVIO, LATIDO_VENCE_MS, mensajeDeEnvio } from '../sidecar/src/envio.js'
 
 const RAIZ = join(dirname(fileURLToPath(import.meta.url)), '..')
 const WA_SEND = join(RAIZ, 'bin', 'wa-send')
@@ -1218,6 +1218,130 @@ console.log('\naprobador.mjs: la llave del plugin, una sola y solo para su usuar
   const nueva2 = llaveDelPlugin(home)
   ok('un archivo que no es una llave se reemplaza por una nueva',
     /^[0-9a-f]{64}$/.test(nueva2 ?? '') && nueva2 !== primera, String(nueva2))
+}
+
+// ── Archivos (--file) ────────────────────────────────────────────────────────────────
+/** Un socket que guarda el contenido entero, no solo el texto: un documento no tiene. */
+function socketDeArchivos () {
+  const enviados = []
+  return {
+    enviados,
+    async enviar (jid, contenido) {
+      enviados.push({ jid, contenido })
+      return { key: { id: `STANZA-DOC-${enviados.length}` } }
+    }
+  }
+}
+
+function archivoEn (home, nombre, contenido) {
+  const ruta = join(home, 'docs', nombre)
+  mkdirSync(dirname(ruta), { recursive: true })
+  writeFileSync(ruta, contenido)
+  return ruta
+}
+
+console.log('\nsidecar: un adjunto sale como documento, y solo si sigue siendo el que se pidio')
+{
+  const datos = Buffer.from('a,b\n1,2\n')
+  const sha = (await import('node:crypto')).createHash('sha256').update(datos).digest('hex')
+  const meta = { ruta: '/x/informe.csv', nombre: 'informe.csv', mimetype: 'text/csv',
+    bytes: datos.length, sha256: sha }
+  const fila = { body: 'el detalle', adjunto: JSON.stringify(meta) }
+  const c = contenidoDe(fila, () => datos)
+  ok('documento con nombre, tipo y el cuerpo de pie',
+    c.document === datos && c.fileName === 'informe.csv' && c.mimetype === 'text/csv' &&
+    c.caption === 'el detalle' && !('text' in c), JSON.stringify({ ...c, document: undefined }))
+  ok('sin adjunto sigue siendo texto', contenidoDe({ body: 'hola', adjunto: null }).text === 'hola')
+  let error = ''
+  try { contenidoDe(fila, () => Buffer.from('a,b\n9,9\n')) } catch (e) { error = e.message }
+  ok('si el archivo cambio desde que se pidio, no sale', error.includes('cambio'), error)
+  try { contenidoDe(fila, () => { throw new Error("ENOENT open '/home/x/secreto.csv'") }) } catch (e) { error = e.message }
+  ok('un archivo que no se puede leer falla sin nombrar la ruta',
+    error === 'el adjunto no se pudo leer', error)
+
+  const home = nueva()
+  const almacen = abrirAlmacen(rutaAlmacen({ HOME: home }))
+  almacen.registrarLinea({ cuenta: CUENTA, lid: 'x@lid', pn: 'y@s.whatsapp.net' })
+  almacen.encolarEnvio({ reqId: 'D-1', cuenta: CUENTA, chatJid: LAURA, cuerpo: 'va el archivo',
+    estado: ENVIO.PENDIENTE })
+  const con = new DatabaseSync(rutaAlmacen({ HOME: home }))
+  con.prepare('update envio set adjunto=? where req_id=?').run(JSON.stringify(meta), 'D-1')
+  con.close()
+  const socket = socketDeArchivos()
+  await atenderSalida({ almacen, enviar: socket.enviar, leer: () => datos })
+  ok('la fila con adjunto sale como documento y queda enviada',
+    socket.enviados[0]?.contenido?.fileName === 'informe.csv' &&
+    filasEnvio(home)[0].estado === ENVIO.ENVIADO, JSON.stringify(filasEnvio(home)[0]))
+  ok('getMessage no inventa un reenvio de un documento',
+    mensajeDeEnvio({ almacen, cuenta: CUENTA, key: { id: 'STANZA-DOC-1' } }) === undefined)
+  almacen.encolarEnvio({ reqId: 'D-2', cuenta: CUENTA, chatJid: LAURA, cuerpo: 'otro',
+    estado: ENVIO.PENDIENTE })
+  const con2 = new DatabaseSync(rutaAlmacen({ HOME: home }))
+  con2.prepare('update envio set adjunto=? where req_id=?').run(JSON.stringify(meta), 'D-2')
+  con2.close()
+  await atenderSalida({ almacen, enviar: socket.enviar, leer: () => Buffer.from('otro') })
+  const d2 = filasEnvio(home).find((f) => f.req_id === 'D-2')
+  ok('un adjunto cambiado se cierra rechazado y no sale', socket.enviados.length === 1 &&
+    d2.estado === ENVIO.RECHAZADO && d2.motivo.includes('cambio'), JSON.stringify(d2))
+  almacen.cerrar()
+}
+
+console.log('\nwa-send --file: al dueno sale, a cualquier otro espera su visto')
+{
+  const home = nueva()
+  firmar(home, 'Agente De Ejemplo')
+  const almacen = abrirAlmacen(rutaAlmacen({ HOME: home }))
+  almacen.registrarLinea({ cuenta: CUENTA, lid: 'x@lid', pn: 'y@s.whatsapp.net' })
+  // El chat de la linea consigo misma es del dueno sin depender de la ruta del panel.
+  autorizar(home, { jid: 'x@lid', nombre: 'Dueno Directo', modo: 'responder' })
+  autorizar(home, { jid: LAURA, nombre: 'Laura Mendez', modo: 'responder' })
+  const ruta = archivoEn(home, 'diferencias.xlsx', 'PK-falso-xlsx')
+  const socket = socketDeArchivos()
+
+  const alDueno = await correrEnvio(home, ['Dueno Directo', 'el informe', '--file', ruta,
+    '--send'], { almacen, socket })
+  const doc = socket.enviados[0]?.contenido
+  ok('al chat del dueno el archivo sale de una', alDueno.code === 0 &&
+    doc?.fileName === 'diferencias.xlsx' && String(doc?.document) === 'PK-falso-xlsx' &&
+    doc?.caption?.startsWith('el informe'), alDueno.stderr)
+  ok('con el tipo que le corresponde',
+    doc?.mimetype === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    doc?.mimetype)
+
+  const aOtro = await correrEnvio(home, ['Laura Mendez', 'te mando el informe', '--file', ruta,
+    '--send', '--id', 'REQ-DOC'], { almacen, socket })
+  ok('a un cliente NO sale sin el dueno, aunque el chat este en responder',
+    socket.enviados.length === 1 && aOtro.primera === 'wa-send: send-needs-approval' &&
+    aOtro.stderr.includes('diferencias.xlsx'), aOtro.stderr)
+  const borradores = await correrEnvio(home, ['--drafts', '--json'], { almacen })
+  ok('el borrador muestra el archivo que espera',
+    JSON.parse(borradores.stdout)[0]?.file?.name === 'diferencias.xlsx', borradores.stdout)
+  const aprobado = await aprobar(home, 'REQ-DOC', { almacen, socket })
+  ok('con el visto del dueno sale el documento', aprobado.code === 0 &&
+    socket.enviados.length === 2 && socket.enviados[1].contenido.fileName === 'diferencias.xlsx',
+  aprobado.stderr)
+
+  const env = archivoEn(home, '.env', 'CLAVE=1')
+  const conEnv = await correrEnvio(home, ['Dueno Directo', 'x', '--file', env, '--send'],
+    { almacen, socket })
+  ok('un .env nunca sale, ni al dueno', conEnv.primera === 'wa-send: send-bad-file' &&
+    socket.enviados.length === 2, conEnv.stderr)
+  const llave = archivoEn(home, 'servidor.pem', 'x')
+  const conPem = await correrEnvio(home, ['Dueno Directo', 'x', '--file', llave, '--send'],
+    { almacen, socket })
+  ok('una llave tampoco', conPem.primera === 'wa-send: send-bad-file', conPem.stderr)
+  const vedado = join(home, '.wa-inbox', 'capturas.txt')
+  writeFileSync(vedado, 'x')
+  const delPlugin = await correrEnvio(home, ['Dueno Directo', 'x', '--file', vedado, '--send'],
+    { almacen, socket })
+  ok('ni nada del directorio del plugin', delPlugin.primera === 'wa-send: send-bad-file',
+    delPlugin.stderr)
+  const falta = await correrEnvio(home, ['Dueno Directo', 'x', '--file', join(home, 'no.pdf'),
+    '--send'], { almacen, socket })
+  ok('un archivo que no existe se niega sin encolar nada',
+    falta.primera === 'wa-send: send-bad-file' &&
+    !filasEnvio(home).some((f) => f.body?.startsWith('x')), falta.stderr)
+  almacen.cerrar()
 }
 
 console.log('\nel latido tiene un plazo, y es el mismo de los dos lados')

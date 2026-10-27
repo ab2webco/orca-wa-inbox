@@ -11886,6 +11886,7 @@ TEXTOS_AVISO = {
            "recuerda": "Recordatorio: el caso {n} sigue esperando su decision.",
            "borrador": "Mensaje retenido para {chat}",
            "borrador_texto": "Texto:\n{x}",
+           "borrador_archivo": "Archivo: {x}",
            "borrador_como": "Responda si {c} para enviarlo tal cual, o no {c} para retirarlo.",
            "borrador_oculto": "Lleva una credencial: reviselo en el tablero, no por aqui.",
            "borrador_sale": "Enviado a {chat}: el mensaje salio.",
@@ -11962,6 +11963,7 @@ TEXTOS_AVISO = {
            "recuerda": "Reminder: case {n} is still waiting for your decision.",
            "borrador": "Message held for {chat}",
            "borrador_texto": "Text:\n{x}",
+           "borrador_archivo": "File: {x}",
            "borrador_como": "Answer yes {c} to send it as is, or no {c} to withdraw it.",
            "borrador_oculto": "It carries a credential: review it on the board, not here.",
            "borrador_sale": "Sent to {chat}: the message went out.",
@@ -12909,8 +12911,8 @@ def envio_de(req):
     except wa_store.SinFuente:
         return None
     try:
-        fila = fuente.execute("select req_id, account, chat_jid, chat_name, body, estado from "
-                              "envio where req_id=?", (req,)).fetchone()
+        # `select *`: la columna `adjunto` falta en un almacen de antes de los archivos.
+        fila = fuente.execute("select * from envio where req_id=?", (req,)).fetchone()
     except sqlite3.Error:
         fila = None
     finally:
@@ -12964,8 +12966,20 @@ def texto_de_borrador(con, fila, codigo):
               tx["espera"].format(x=motivos_en_palabras(motivos_del_borrador(con, fila)))]
     if lleva_secreto(cuerpo):
         return "\n".join(lineas + [tx["borrador_oculto"]])
+    archivo = adjunto_del_envio(fila)
+    if archivo:
+        lineas.append(tx["borrador_archivo"].format(
+            x=f"{archivo.get('nombre')} ({int(archivo.get('bytes') or 0) // 1024} KB)"))
     return "\n".join(lineas + [tx["borrador_texto"].format(x=cuerpo),
                                tx["borrador_como"].format(c=codigo)])
+
+
+def adjunto_del_envio(fila):
+    """El archivo de un borrador (dict con nombre y bytes), o None si es solo texto."""
+    try:
+        return json.loads(fila.get("adjunto") or "null")
+    except ValueError:
+        return {"nombre": "?", "bytes": 0}
 
 
 def cmd_aviso_borrador(con, a):
