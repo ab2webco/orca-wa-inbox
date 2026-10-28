@@ -14356,6 +14356,22 @@ if NODE:
             ok("adjuntos: el tablero lo muestra con el archivo, su tamano y el motivo",
                uno.get("file") == {"name": "informe-ejemplo.pdf", "bytes": 10}
                and uno.get("reasons") == ["file"], f"{retenidos}")
+            ok("adjuntos: sin numero de aprobacion no se encola ningun aviso por WhatsApp",
+               cuenta(home, "select count(*) from aviso where req_id like 'aviso-d-caso-%'") == 0)
+            # Un avance de solo texto que quedo de borrador (la revision lo freno y retirarlo
+            # fallo) no va al dueno: los retenidos traen solo los avances con archivo.
+            cap = sqlite3.connect(pathlib.Path(home) / ".wa-inbox" / "capture.db")
+            cap.execute("insert into envio (req_id, account, chat_jid, chat_name, body, estado, "
+                        "created_at) select ?, account, chat_jid, chat_name, 'Texto retenido', "
+                        "'borrador', created_at from envio where req_id=?",
+                        (f"caso-{cid}-avance-9", req))
+            cap.commit()
+            cap.close()
+            tick(home)
+            ids = [r.get("req_id") for r in
+                   tablero(home).get("board", {}).get("held_drafts") or []]
+            ok("adjuntos: un avance de solo texto nunca aparece entre los retenidos",
+               req in ids and f"caso-{cid}-avance-9" not in ids, f"{ids}")
             ok("adjuntos: el tick no lo manda ni lo retira",
                (fila_envio(home, req) or {}).get("estado") == "borrador"
                and req not in sidecar.entregados)
@@ -14450,6 +14466,28 @@ if NODE:
                and fila_caso(home, tid)["etapa"] == "respondido",
                f"{sidecar.entregados} {fila_envio(home, req)}")
 
+            # La firma del dueno (`caso aprobar --actor dueno`) sin su entrega (el clic fallo a
+            # mitad): el tick la manda como el tablero, borrador y `--approve`, con el archivo.
+            fid, _ = caso_en_trabajo(home, "AF9", chat=PERSONA)
+            rf = json.loads(resultado_con_archivo(home, fid, ruta).stdout or "[{}]")[0]
+            js(home, "caso", "aprobar", fid, "--version", rf["propuesta_version"],
+               "--actor", "dueno")
+            tick(home)
+            time.sleep(0.3)
+            reqf = f"caso-{fid}-{rf['propuesta_version'][:12]}"
+            ok("adjuntos: lo que el dueno firmo sale con el tick una vez, con su archivo",
+               sidecar.entregados.count(reqf) == 1
+               and meta_de_envio(home, reqf).get("sha256") == sha
+               and fila_caso(home, fid)["etapa"] == "respondido",
+               f"{sidecar.entregados} {fila_envio(home, reqf)} {fila_caso(home, fid)['etapa']}")
+            # Con numero de aprobacion, el avance con archivo le llega al dueno por WhatsApp.
+            pon_duenos(home, DUENO_LID)
+            pon_aprobacion(home, DUENO_DM, "en")
+            aid = caso_para_avance(home, "AF10")
+            avance(home, aid, CON_ARCHIVO, "--file", str(ruta))
+            ok("adjuntos: con numero de aprobacion se encola UN aviso del borrador con archivo",
+               cuenta(home, "select count(*) from aviso where req_id=?",
+                      f"aviso-d-caso-{aid}-avance-1") == 1)
             # El chat del dueno no se salta el visto: el archivo es lo que mas facil saca datos.
             pon_duenos(home, PERSONA)
             cid = caso_para_avance(home, "AF5")

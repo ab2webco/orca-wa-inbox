@@ -10446,6 +10446,10 @@ def retenidos_del_tablero(con, cuenta):
         return []
     salida = []
     for f in filas:
+        # De un caso, solo el avance con ARCHIVO: uno de solo texto que la revision freno no
+        # va nunca al dueno (se retira; si retirarlo fallo, tampoco se lista).
+        if f["req_id"].startswith("caso-") and not adjunto_del_envio(dict(f)):
+            continue
         nota = con.execute("select detail from agent_action where action='draft' and "
                            "instr(detail, ?) > 0 order by id desc limit 1",
                            (f" · {f['req_id']} · ",)).fetchone()
