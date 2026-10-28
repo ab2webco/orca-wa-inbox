@@ -7862,6 +7862,68 @@ await seccion(async () => {
     guardada.doc.getElementById('pq-hours').value)
 })
 
+const textoArchivos = (doc, sel) => (doc.querySelector(sel)?.textContent || '').trim()
+titulo('config.html — caso-adjuntos: si el agente puede adjuntar archivos, global y por chat')
+await seccion(async () => {
+  const { doc, storage } = await montar('config.html', {
+    chats: [{ jid: '1@g.us', name: 'Soporte Norte', kind: 'grupo' }] }, 'es-419')
+  await espera()
+  doc.getElementById('tab-aprobacion').click()
+  await espera(); await espera()
+  const grupo = doc.getElementById('send-files')
+  ok('el interruptor vive en Su aprobacion, con botones y no con un select',
+    !!grupo && !!grupo.closest('#view-aprobacion') && !doc.querySelector('select') &&
+    [...doc.querySelectorAll('#send-files button')].map((b) => b.dataset.value).join() === 'on,off',
+    String(!!grupo))
+  ok('de fabrica esta apagado', valorSeg(doc, 'send-files') === 'off', valorSeg(doc, 'send-files'))
+  ok('la pista dice que cada archivo espera aprobacion, tambien en el chat del dueno',
+    /aprobacion/i.test(textoArchivos(doc, '#send-files-help')) &&
+    /chat del dueno/i.test(textoArchivos(doc, '#send-files-help')), textoArchivos(doc, '#send-files-help'))
+  elegirSeg(doc, 'send-files', 'on')
+  doc.getElementById('save-files').click()
+  await espera(); await espera()
+  ok('guardar escribe la clave plana', storage.sendFiles === 'on', String(storage.sendFiles))
+  ok('y lo confirma', /✓/.test(doc.getElementById('said-files').textContent))
+
+  doc.getElementById('tab-chats').click()
+  elegirChat(doc, '1@g.us')
+  await espera()
+  ok('en la conversacion: usar el general, encendido o apagado',
+    [...doc.querySelectorAll('#chat-send-files button')].map((b) => b.dataset.value).join() ===
+      'default,on,off' && valorSeg(doc, 'chat-send-files') === 'default')
+  elegirSeg(doc, 'chat-send-files', 'off')
+  doc.getElementById('save-scope').click()
+  await espera(); await espera()
+  const e = (storage.scope || {})['1@g.us']
+  ok('la conversacion guarda su eleccion', e && e.sendFiles === 'off', JSON.stringify(e))
+  doc.querySelector('#scope-wrap [data-edit]')?.click()
+  await espera()
+  ok('al editarla vuelve a mostrarla', valorSeg(doc, 'chat-send-files') === 'off')
+  elegirSeg(doc, 'chat-send-files', 'default')
+  doc.getElementById('save-scope').click()
+  await espera(); await espera()
+  ok('usar el general guarda null', (storage.scope || {})['1@g.us'].sendFiles === null,
+    JSON.stringify((storage.scope || {})['1@g.us']))
+
+  const guardada = await montar('config.html', { sendFiles: 'on' }, 'es-419')
+  await espera()
+  guardada.doc.getElementById('tab-aprobacion').click()
+  await espera(); await espera()
+  ok('al abrir la pestana pinta lo guardado', valorSeg(guardada.doc, 'send-files') === 'on' &&
+    !guardada.doc.getElementById('files-card').classList.contains('sin-leer'),
+    valorSeg(guardada.doc, 'send-files'))
+})
+for (const [idioma, nombre, pista] of [['es-419', 'ES', /aprobacion/i], ['en', 'EN', /approval/i],
+  ['pt-BR', 'PT', /aprovacao/i]]) {
+  const { doc } = await montar('config.html', {}, idioma)
+  await espera()
+  const ids = ['files-legend', 'send-files-label', 'chat-send-files-label']
+  ok(`${nombre}: los textos de los archivos del agente existen y estan pintados`,
+    ids.every((i) => (doc.getElementById(i)?.textContent || '').trim().length > 3) &&
+    pista.test(textoArchivos(doc, '#send-files-help')) && pista.test(textoArchivos(doc, '#chat-send-files-help')),
+    ids.map((i) => doc.getElementById(i)?.textContent).join('|'))
+}
+
 titulo('config.html — seguimiento-casos S5: los plazos del seguimiento')
 await seccion(async () => {
   const { doc, storage } = await montar('config.html', {}, 'es-419')

@@ -346,6 +346,7 @@ AJUSTES_DE_LINEA = ("agentName", "ownerName", "tone", "owners", "approvalNumber"
                     "inboxDays", "transcribeLang",
                     "orcaNotices",
                     "signMessages",
+                    "sendFiles",
                     "botClaudeAccount",
                     "transcribe",
                     "transcribeQuality",
@@ -527,7 +528,10 @@ PANEL_SETTINGS = {"tone": "tone", "agentName": "agent_name",
                   "projectQuestionHours": "project_question_hours",
                   # Si los mensajes de la linea salen firmados con el nombre del agente
                   # (todo-por-linea, P2). Apagado, salen como del dueno y el nombre sobra.
-                  "signMessages": "sign_messages"}
+                  "signMessages": "sign_messages",
+                  # Si el agente del caso puede adjuntar un archivo (caso-adjuntos). Cada chat
+                  # lo pisa con su `sendFiles`; cada archivo igual espera al dueno.
+                  "sendFiles": "send_files"}
 
 # El primer mensaje (Beta): quien lo escribe y el ritmo de los avances del agente. Viaja en
 # UNA clave del panel con sus cuatro valores, y no en cuatro claves planas: el host admite
@@ -583,6 +587,7 @@ CONFIG_OPCIONES = {
     "orca_notice_automation": ("on", "off"),
     "orca_claude_recap": ("on", "off"),
     "sign_messages": ("on", "off"),
+    "send_files": ("on", "off"),
 }
 CONFIG_NUMERICOS = ("inbox_days", "lock_ttl_s", "sync_minutes",
                     "capture_max", "capture_days", "case_window_hours", "approval_hours",

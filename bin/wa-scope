@@ -315,6 +315,9 @@ create table if not exists chat_scope (
   -- quien escribe el primer mensaje en ESTA conversacion (Beta): ack | model |
   -- model_with_ack_fallback | null (= el ajuste global `first_reply_mode`)
   primer_mensaje text,
+  -- si el agente del caso puede adjuntar un archivo en ESTA conversacion (caso-adjuntos):
+  -- on | off | null (= el ajuste global `send_files`). Cada archivo espera al dueno igual
+  enviar_archivos text,
   aprobacion    text,                -- los niveles de cada regla en ESTE chat (T22.3), JSON
   -- a quien se le pregunta "A o B?" cuando el caso no tiene proyecto (proyectos-por-chat,
   -- M5): auto | writer | owner; null = auto
@@ -1207,6 +1210,7 @@ def alcance_al_panel(con, grupos=None):
                       "ack": r.get("acuse"), "ackText": r.get("acuse_texto"),
                       "greeting": r.get("saludo"), "greetingText": r.get("saludo_texto"),
                       "firstReply": r.get("primer_mensaje"),
+                      "sendFiles": r.get("enviar_archivos"),
                       "approval": r["niveles"],
                       "projectQuestion": r.get("pregunta_proyecto") or PREGUNTA_AUTO,
                       "members": members_al_panel(
@@ -1516,10 +1520,10 @@ def build_health():
 # Lo que el panel guarda por conversacion para las respuestas automaticas, y la columna.
 AUTO_PANEL = (("ack", "acuse"), ("ackText", "acuse_texto"),
               ("greeting", "saludo"), ("greetingText", "saludo_texto"),
-              ("firstReply", "primer_mensaje"))
+              ("firstReply", "primer_mensaje"), ("sendFiles", "enviar_archivos"))
 # Las columnas de AUTO_PANEL que son una eleccion entre valores fijos: lo demas es null.
 AUTO_VALORES = {"acuse": ("on", "off"), "saludo": ("on", "off"),
-                "primer_mensaje": MODOS_PRIMER}
+                "primer_mensaje": MODOS_PRIMER, "enviar_archivos": ("on", "off")}
 
 
 def auto_del_panel(columna, valor):
@@ -1576,7 +1580,8 @@ def merged_scope(con, cuenta=None):
     rows = {r["chat_jid"]: dict(r) for r in con.execute(
         "select account, chat_jid, chat_name, provider, target, workspace, workspaces, mode, "
         "initial_state, hours, tone, instructions, acuse, acuse_texto, saludo, "
-        "saludo_texto, primer_mensaje, aprobacion, pregunta_proyecto, miembros, timezone, "
+        "saludo_texto, primer_mensaje, enviar_archivos, aprobacion, pregunta_proyecto, "
+        "miembros, timezone, "
         "notes, updated_at from chat_scope "
         "where account=?", (cuenta,))}
     for row in rows.values():
@@ -1888,7 +1893,7 @@ def migrate(con):
     if "instructions" not in cols:
         con.execute("alter table chat_scope add column instructions text")
     for columna in ("acuse", "acuse_texto", "saludo", "saludo_texto", "aprobacion",
-                    "primer_mensaje", "pregunta_proyecto", "miembros"):
+                    "primer_mensaje", "pregunta_proyecto", "miembros", "enviar_archivos"):
         if columna not in cols:
             con.execute(f"alter table chat_scope add column {columna} text")
     if "target" not in cols:
@@ -2316,6 +2321,7 @@ def cmd_set(con, a):
         "saludo": auto_valor(a.greeting, cur.get("saludo")),
         "saludo_texto": auto_texto(a.greeting_text, cur.get("saludo_texto")),
         "primer_mensaje": auto_valor(a.first_reply, cur.get("primer_mensaje")),
+        "enviar_archivos": auto_valor(a.send_files, cur.get("enviar_archivos")),
         "aprobacion": niveles_pedidos(a.approval, cur.get("aprobacion")),
         "pregunta_proyecto": (a.project_question if a.project_question is not None
                               else cur.get("pregunta_proyecto")),
@@ -2362,7 +2368,8 @@ def cmd_set(con, a):
         for flat, columna in AUTO_PANEL:
             if getattr(a, {"ack": "ack", "ackText": "ack_text", "greeting": "greeting",
                            "greetingText": "greeting_text",
-                           "firstReply": "first_reply"}[flat]) is not None:
+                           "firstReply": "first_reply",
+                           "sendFiles": "send_files"}[flat]) is not None:
                 cambios[flat] = vals[columna]
         if cambios:
             store[jid] = dict(store[jid], **cambios)
@@ -2616,6 +2623,10 @@ DEFAULT_CONFIG = {
     # Si los mensajes de la linea salen firmados con el nombre del agente (todo-por-linea,
     # P2). `off`: salen como del dueno, sin firma, y el nombre del agente no hace falta.
     "sign_messages": "on",
+    # Si el agente del caso puede adjuntar un archivo a lo que le manda al cliente
+    # (caso-adjuntos): apagado de fabrica, y cada chat lo puede pisar. Encendido, cada
+    # archivo igual espera el visto del dueno, tambien en su propio chat.
+    "send_files": "off",
     "transcribe": "local",   # local | off | api. Local no manda el audio a ningun lado.
     "transcribe_model": "",   # vacio = lo decide la calidad; fijarlo pisa la calidad
     "transcribe_lang": "auto",    # los audios mezclan espanol e ingles
@@ -3340,7 +3351,10 @@ def cmd_voice(con, a):
              # A quien se pregunta "A o B?" en este chat (proyectos-por-chat, M5).
              "project_question": row.get("pregunta_proyecto") or PREGUNTA_AUTO,
              # Quien escribe el primer mensaje aca (Beta), resuelto: chat > global > fabrica.
-             "first_reply": primer_mensaje_de(row, merged_settings(con))}]
+             "first_reply": primer_mensaje_de(row, merged_settings(con)),
+             # Si el agente puede adjuntar un archivo aca (caso-adjuntos), resuelto igual.
+             "send_files": dict(zip(("on", "source"),
+                                    envia_archivos(row, merged_settings(con))))}]
 
 
 def cmd_config(con, a):
@@ -7294,6 +7308,18 @@ def primer_modo(fila, ajustes):
         return propio, "conversacion"
     general = (ajustes or {}).get("first_reply_mode")
     return (general if general in MODOS_PRIMER else DEFAULT_CONFIG["first_reply_mode"]), "global"
+
+
+def envia_archivos(fila, ajustes):
+    """(encendido, origen) del envio de archivos del agente del caso en una conversacion
+    (caso-adjuntos): lo del chat pisa lo global, y lo que no es on u off cae al de fabrica
+    (apagado)."""
+    propio = (fila or {}).get("enviar_archivos")
+    if propio in ("on", "off"):
+        return propio == "on", "conversacion"
+    general = (ajustes or {}).get("send_files")
+    return (general if general in ("on", "off") else DEFAULT_CONFIG["send_files"]) == "on", \
+        "global"
 
 
 def primer_numero(ajustes, clave):
@@ -17951,6 +17977,10 @@ def main():
                         "fixed acknowledgement; model = the agent; model_with_ack_fallback = "
                         "the agent, and the fixed acknowledgement if nothing went out in "
                         "ack_fallback_minutes; default = the global first_reply_mode")
+    s.add_argument("--send-files", choices=["on", "off", "default"],
+                   help="whether the case agent may attach a file here (`caso avance` / "
+                        "`caso resultado --file`); every file still waits for the owner's "
+                        "approval. default = the global send_files setting")
     s.add_argument("--approval", action="append", metavar="RULE=LEVEL",
                    help="the level of one approval rule here (T22.3): rule money, credential, "
                         "commitment or quality; level ask, agent or allow. Repeatable")
