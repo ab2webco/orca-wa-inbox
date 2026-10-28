@@ -14150,6 +14150,362 @@ if NODE:
             os.environ.update(antes_archivo)
 
 
+# ── caso-adjuntos: el agente del caso manda un archivo, siempre con el visto del dueno ───
+# (odd/tasks/caso-adjuntos.md). `caso avance --file` y `caso resultado --file`: un ajuste
+# (`send_files`, global y por chat, apagado de fabrica) lo permite, y cada archivo espera al
+# dueno como un borrador, tambien en su propio chat. Lo que el dueno aprueba son esos bytes:
+# si el archivo cambia, no sale.
+print("\ncaso-adjuntos: un archivo del caso espera siempre el visto del dueno")
+CON_ARCHIVO = "Le comparto el informe del mes."
+
+
+def informe_de_caso(home, nombre="informe-ejemplo.pdf", contenido=b"%PDF-falso"):
+    ruta = pathlib.Path(home) / "docs" / nombre
+    ruta.parent.mkdir(parents=True, exist_ok=True)
+    ruta.write_bytes(contenido)
+    return ruta
+
+
+def fila_envio(home, req):
+    ruta = pathlib.Path(home) / ".wa-inbox" / "capture.db"
+    if not ruta.exists():
+        return None
+    con = sqlite3.connect(ruta)
+    con.row_factory = sqlite3.Row
+    fila = con.execute("select * from envio where req_id=?", (req,)).fetchone()
+    con.close()
+    return dict(fila) if fila else None
+
+
+def meta_de_envio(home, req):
+    try:
+        return json.loads((fila_envio(home, req) or {}).get("adjunto") or "null") or {}
+    except ValueError:
+        return {}
+
+
+def caso_para_avance(home, stanza, chat=PERSONA):
+    cid = str(js(home, "caso", "crear", "--chat", chat, "--stanza", stanza,
+                 "--actor", "agente")[0]["case_id"])
+    js(home, "caso", "clasificar", cid, "--clase", "card", "--prioridad", "none",
+       "--actor", "agente")
+    return cid
+
+
+def resultado_con_archivo(home, cid, ruta, *extra):
+    return corre(home, "caso", "resultado", str(cid), "--estado", "resuelto", "--respuesta",
+                 CON_ARCHIVO, "--resumen", "Se armo el informe del mes.", "--file", str(ruta),
+                 *extra, "--actor", "trabajador")
+
+
+def wa_send_archivo(home, *args):
+    """`wa-send` como lo corre el plugin (con su marca) para dejar el borrador del dueno."""
+    env = dict(os.environ, HOME=str(home), XDG_CONFIG_HOME=str(pathlib.Path(home) / ".config"),
+               APPDATA=str(pathlib.Path(home) / "AppData" / "Roaming"),
+               ORCA_CLI_COMMAND=SIN_ORCA, WA_INBOX_PLUGIN_SEND="1")
+    env.pop("WA_INBOX_APPROVER", None)
+    return subprocess.run([str(RAIZ / "bin" / "wa-send"), *args], capture_output=True,
+                          text=True, env=env, timeout=60)
+
+
+def avance_de(home, cid, n):
+    con = db_de(home)
+    fila = con.execute("select * from caso_avance where case_id=? and n=?",
+                       (int(cid), n)).fetchone()
+    con.close()
+    return dict(fila) if fila else {}
+
+
+def ultima_nota_borrador(home):
+    con = db_de(home)
+    fila = con.execute("select detail from agent_action where action='draft' "
+                       "order by id desc limit 1").fetchone()
+    con.close()
+    return fila[0] if fila else ""
+
+
+# El ajuste: global y por chat, de fabrica apagado; el panel y la terminal dicen lo mismo.
+with tempfile.TemporaryDirectory() as home:
+    js(home, "set", PERSONA, "--provider", "ninguno", "--mode", "responder")
+    js(home, "set", SOPORTE, "--provider", "ninguno", "--mode", "responder")
+    ok("adjuntos: de fabrica el envio de archivos esta apagado",
+       js(home, "config", "send_files")[0]["value"] == "off")
+    v = js(home, "voice", PERSONA)[0].get("send_files")
+    ok("adjuntos: y el chat lo hereda del general", v == {"on": False, "source": "global"}, f"{v}")
+    ok("adjuntos: un valor que no es on u off no se guarda",
+       corre(home, "config", "send_files", "a veces").returncode != 0
+       and corre(home, "set", PERSONA, "--send-files", "a veces").returncode != 0)
+    js(home, "set", PERSONA, "--send-files", "on")
+    v = js(home, "voice", PERSONA)[0].get("send_files")
+    ok("adjuntos: el chat pisa al general", v == {"on": True, "source": "conversacion"}, f"{v}")
+    fila = next(r for r in js(home, "list") if r["chat_jid"] == PERSONA)
+    ok("adjuntos: el registro guarda la eleccion del chat", fila.get("enviar_archivos") == "on",
+       f"{fila}")
+    js(home, "set", PERSONA, "--send-files", "default")
+    ok("adjuntos: default vuelve al general",
+       js(home, "voice", PERSONA)[0].get("send_files") == {"on": False, "source": "global"})
+    ruta_storage = storage_de(home)
+    datos = json.loads(ruta_storage.read_text(encoding="utf-8")) if ruta_storage.exists() else {}
+    datos["sendFiles"] = "on"
+    datos["scope"] = {
+        PERSONA: {"chatName": "Cliente Uno", "provider": "ninguno", "mode": "responder",
+                  "sendFiles": "off"},
+        SOPORTE: {"chatName": "Soporte Norte", "provider": "ninguno", "mode": "responder",
+                  "sendFiles": "magia"}}
+    ruta_storage.parent.mkdir(parents=True, exist_ok=True)
+    ruta_storage.write_text(json.dumps(datos), encoding="utf-8")
+    ok("adjuntos: el general del panel llega a la terminal",
+       js(home, "config", "send_files")[0]["value"] == "on")
+    ok("adjuntos: lo que el panel guardo en el chat manda",
+       js(home, "voice", PERSONA)[0].get("send_files") == {"on": False, "source": "conversacion"})
+    ok("adjuntos: un valor sucio del panel no es una eleccion",
+       js(home, "voice", SOPORTE)[0].get("send_files") == {"on": True, "source": "global"})
+    js(home, "set", SOPORTE, "--send-files", "off")
+    entrada = json.loads(ruta_storage.read_text(encoding="utf-8"))["scope"].get(SOPORTE) or {}
+    ok("adjuntos: lo dicho por terminal corrige la entrada del panel",
+       entrada.get("sendFiles") == "off", f"{entrada}")
+
+if NODE:
+    # Apagado: ni el avance ni el resultado aceptan un archivo, y no queda nada a medias.
+    with tempfile.TemporaryDirectory() as home:
+        linea_lista(home)
+        js(home, "config", "ack", "off")
+        js(home, "set", PERSONA, "--first-reply", "model")
+        sidecar = SidecarFalso(home)
+        try:
+            ruta = informe_de_caso(home)
+            cid = caso_para_avance(home, "AF1")
+            p = avance(home, cid, CON_ARCHIVO, "--file", str(ruta))
+            ok("adjuntos: apagado, un avance con archivo se rechaza con su codigo",
+               error_de(p) == "E_FILES_OFF", f"{error_de(p)}")
+            ok("adjuntos: y no deja ni el avance ni un envio",
+               cuenta(home, "select count(*) from caso_avance") == 0 and not envios(home),
+               f"{envios(home)}")
+            tid, _ = caso_en_trabajo(home, "AF2", chat=PERSONA)
+            p = resultado_con_archivo(home, tid, ruta)
+            ok("adjuntos: apagado, un resultado con archivo tambien",
+               error_de(p) == "E_FILES_OFF" and fila_caso(home, tid)["etapa"] == "trabajo",
+               f"{error_de(p)}")
+            js(home, "set", PERSONA, "--send-files", "on")
+            p = avance(home, cid, "Un archivo que no existe.", "--file",
+                       str(pathlib.Path(home) / "docs" / "no-existe.pdf"))
+            ok("adjuntos: un archivo que no existe se rechaza con E_BAD_FILE",
+               error_de(p) == "E_BAD_FILE", f"{error_de(p)}")
+            llave = informe_de_caso(home, "id_rsa", b"-----BEGIN-----")
+            p = avance(home, cid, "Una llave.", "--file", str(llave))
+            ok("adjuntos: ni uno con forma de llave", error_de(p) == "E_BAD_FILE",
+               f"{error_de(p)}")
+            p = avance(home, cid, CON_ARCHIVO, "--file", str(ruta))
+            ok("adjuntos: encendido en el chat, el avance con archivo se acepta",
+               p.returncode == 0, p.stderr[-300:])
+            js(home, "config", "send_files", "on")
+            js(home, "set", PERSONA, "--send-files", "off")
+            p = resultado_con_archivo(home, tid, ruta)
+            ok("adjuntos: apagado en el chat pisa al general encendido",
+               error_de(p) == "E_FILES_OFF", f"{error_de(p)}")
+        finally:
+            sidecar.cerrar()
+
+    # Encendido: el avance con archivo es un borrador que espera al dueno; con su visto sale
+    # una vez, y si el archivo cambio, no sale.
+    with tempfile.TemporaryDirectory() as home:
+        linea_lista(home)
+        js(home, "config", "ack", "off")
+        js(home, "set", PERSONA, "--first-reply", "model")
+        js(home, "config", "send_files", "on")
+        sidecar = SidecarFalso(home)
+        try:
+            ruta = informe_de_caso(home)
+            sha = hashlib.sha256(ruta.read_bytes()).hexdigest()
+            cid = caso_para_avance(home, "AF3")
+            p = avance(home, cid, CON_ARCHIVO, "--file", str(ruta))
+            e = envio_de_avance(p) or {}
+            req = f"caso-{cid}-avance-1"
+            time.sleep(0.3)
+            fila = fila_envio(home, req) or {}
+            ok("adjuntos: el avance con archivo queda esperando al dueno y no sale",
+               p.returncode == 0 and e.get("estado") == "espera" and e.get("req_id") == req
+               and fila.get("estado") == "borrador" and req not in sidecar.entregados,
+               f"{p.stdout[-300:]} {p.stderr[-300:]} {fila.get('estado')}")
+            meta = meta_de_envio(home, req)
+            ok("adjuntos: el borrador lleva el archivo, su tamano y su sha256",
+               meta.get("nombre") == "informe-ejemplo.pdf" and meta.get("bytes") == 10
+               and meta.get("sha256") == sha, f"{meta}")
+            pista = e.get("hint") or ""
+            ok("adjuntos: la pista dice que espera la aprobacion y que no se reenvie",
+               "approval" in pista and "do not send it again" in pista
+               and "rewrite" not in pista.lower(), pista)
+            ok("adjuntos: el motivo en la bitacora es rule: file, sin el nombre del archivo",
+               ultima_nota_borrador(home).startswith(f"held by rule: file · {req} · ")
+               and "informe-ejemplo" not in ultima_nota_borrador(home),
+               ultima_nota_borrador(home))
+            ok("adjuntos: el caso guarda el avance que espera con su archivo",
+               avance_de(home, cid, 1).get("estado") == "espera"
+               and json.loads(avance_de(home, cid, 1).get("adjunto") or "{}").get("sha256") == sha,
+               f"{avance_de(home, cid, 1)}")
+            ver = js(home, "caso", "ver", cid)[0]
+            ok("adjuntos: el avance que espera ocupa su lugar en updates_max",
+               ver["primer_mensaje"]["updates_sent"] == 1, f"{ver['primer_mensaje']}")
+            p = avance(home, cid, CON_ARCHIVO, "--file", str(ruta))
+            ok("adjuntos: el mismo avance otra vez no deja otro",
+               p.returncode == 0 and (envio_de_avance(p) or {}).get("req_id") == req
+               and cuenta(home, "select count(*) from caso_avance") == 1, p.stdout[-300:])
+            tick(home)
+            retenidos = tablero(home).get("board", {}).get("held_drafts") or []
+            uno = next((r for r in retenidos if r.get("req_id") == req), {})
+            ok("adjuntos: el tablero lo muestra con el archivo, su tamano y el motivo",
+               uno.get("file") == {"name": "informe-ejemplo.pdf", "bytes": 10}
+               and uno.get("reasons") == ["file"], f"{retenidos}")
+            ok("adjuntos: el tick no lo manda ni lo retira",
+               (fila_envio(home, req) or {}).get("estado") == "borrador"
+               and req not in sidecar.entregados)
+            a = aprobar_borrador(home, req)
+            time.sleep(0.3)
+            ok("adjuntos: con el visto del dueno sale una vez, con su archivo",
+               a.returncode == 0 and sidecar.entregados.count(req) == 1
+               and meta_de_envio(home, req).get("sha256") == sha, a.stderr[-300:])
+            aprobar_borrador(home, req)
+            ok("adjuntos: aprobarlo otra vez no lo manda de nuevo",
+               sidecar.entregados.count(req) == 1)
+            tick(home)
+            ok("adjuntos: y el caso lo anota como enviado",
+               avance_de(home, cid, 1).get("estado") == "enviado", f"{avance_de(home, cid, 1)}")
+
+            avances_atras(home, cid, 11)
+            ruta2 = informe_de_caso(home, "resumen-ejemplo.pdf", b"%PDF-otro")
+            p = avance(home, cid, "Y el resumen del mes.", "--file", str(ruta2))
+            req2 = f"caso-{cid}-avance-2"
+            ruta2.write_bytes(b"%PDF-cambiado")
+            a = aprobar_borrador(home, req2)
+            time.sleep(0.3)
+            ok("adjuntos: si el archivo cambio desde que se pidio, el visto se niega y no sale",
+               a.returncode != 0 and "send-file-changed" in a.stderr
+               and req2 not in sidecar.entregados
+               and (fila_envio(home, req2) or {}).get("estado") == "cancelado",
+               f"{a.returncode} {a.stderr[-300:]} {fila_envio(home, req2)}")
+            tick(home)
+            ok("adjuntos: y el caso deja de contarlo",
+               avance_de(home, cid, 2).get("estado") == "omitido", f"{avance_de(home, cid, 2)}")
+        finally:
+            sidecar.cerrar()
+
+    # El resultado con archivo: la regla nunca lo firma; la firma del dueno deja el borrador
+    # con esos bytes y lo aprueba. En el chat del dueno tambien espera.
+    with tempfile.TemporaryDirectory() as home:
+        linea_lista(home)
+        js(home, "config", "ack", "off")
+        js(home, "set", PERSONA, "--first-reply", "model")
+        js(home, "config", "send_files", "on")
+        sidecar = SidecarFalso(home)
+        antes_adjuntos = dict(os.environ)
+        try:
+            ruta = informe_de_caso(home)
+            sha = hashlib.sha256(ruta.read_bytes()).hexdigest()
+            tid, _ = caso_en_trabajo(home, "AF4", chat=PERSONA)
+            p = resultado_con_archivo(home, tid, ruta)
+            r = (json.loads(p.stdout or "[{}]") or [{}])[0]
+            archivo = (r.get("propuesta") or {}).get("archivo") or {}
+            ok("adjuntos: el resultado lleva el archivo en la propuesta, con su sha256",
+               p.returncode == 0 and archivo.get("sha256") == sha
+               and archivo.get("nombre") == "informe-ejemplo.pdf"
+               and archivo.get("ruta") == str(ruta.resolve()), f"{p.stderr[-300:]} {archivo}")
+            envio = r.get("envio") or {}
+            ok("adjuntos: y espera al dueno, con la pista de no reenviarlo",
+               envio.get("estado") == "retenido" and "approval" in (envio.get("hint") or "")
+               and not any(x.startswith(f"caso-{tid}-") for x in sidecar.entregados), f"{envio}")
+            p = corre(home, "caso", "aprobar", tid, "--version", r["propuesta_version"],
+                      "--actor", "regla")
+            ok("adjuntos: la regla no firma un archivo, aunque el chat responda solo",
+               error_de(p) == "E_EXCEPTION" and "file" in p.stderr, p.stderr[-300:])
+            tick(home)
+            ok("adjuntos: ni el tick lo manda",
+               fila_caso(home, tid)["etapa"] == "listo"
+               and not any(x.startswith(f"caso-{tid}-") for x in sidecar.entregados))
+            t = tarjeta(home, tid) or {}
+            ok("adjuntos: la tarjeta muestra el archivo y su tamano, sin la ruta",
+               (t.get("proposal") or {}).get("file") == {"name": "informe-ejemplo.pdf",
+                                                         "bytes": 10}
+               and str(ruta) not in json.dumps(t), f"{t.get('proposal')}")
+            req = f"caso-{tid}-{r['propuesta_version'][:12]}"
+            ruta.write_bytes(b"%PDF-cambiado")
+            p = wa_send_archivo(home, f"--id={req}", f"--file={ruta}", f"--file-sha256={sha}",
+                                "--json", "--", PERSONA, CON_ARCHIVO)
+            ok("adjuntos: si el archivo cambio desde la propuesta, no queda ni el borrador",
+               p.returncode != 0 and "send-file-changed" in p.stderr
+               and fila_envio(home, req) is None, f"{p.returncode} {p.stderr[-300:]}")
+            ruta.write_bytes(b"%PDF-falso")
+            # La firma del dueno por WhatsApp (`si N`) entrega como el tablero: el borrador
+            # con el archivo y `--approve`.
+            ws = carga_wa_scope(home)
+            con = ws.db()
+            caso = dict(ws.caso_de(con, int(tid)))
+            ws.cmd_caso_aprobar(con, argparse.Namespace(id=int(tid),
+                                                        version=caso["propuesta_version"],
+                                                        actor="dueno"))
+            ws.entrega_del_dueno(con, dict(ws.caso_de(con, int(tid))), ws.TEXTOS_AVISO["en"])
+            con.close()
+            time.sleep(0.3)
+            ok("adjuntos: la firma del dueno manda el archivo una vez",
+               sidecar.entregados.count(req) == 1 and meta_de_envio(home, req).get("sha256") == sha
+               and fila_caso(home, tid)["etapa"] == "respondido",
+               f"{sidecar.entregados} {fila_envio(home, req)}")
+
+            # El chat del dueno no se salta el visto: el archivo es lo que mas facil saca datos.
+            pon_duenos(home, PERSONA)
+            cid = caso_para_avance(home, "AF5")
+            p = avance(home, cid, CON_ARCHIVO, "--file", str(ruta))
+            reqd = f"caso-{cid}-avance-1"
+            time.sleep(0.3)
+            ok("adjuntos: en el chat del dueno el avance con archivo tambien espera",
+               (envio_de_avance(p) or {}).get("estado") == "espera"
+               and (fila_envio(home, reqd) or {}).get("estado") == "borrador"
+               and reqd not in sidecar.entregados, f"{p.stdout[-300:]} {p.stderr[-300:]}")
+            did, _ = caso_en_trabajo(home, "AF6", chat=PERSONA)
+            p = resultado_con_archivo(home, did, ruta)
+            tick(home)
+            ok("adjuntos: y el resultado con archivo del dueno no sale sin su visto",
+               p.returncode == 0 and fila_caso(home, did)["etapa"] == "listo"
+               and not any(x.startswith(f"caso-{did}-") for x in sidecar.entregados),
+               f"{p.stderr[-300:]} {sidecar.entregados}")
+            # A otro chat: lo que manda es el ajuste del chat que lo recibe.
+            js(home, "config", "send_files", "off")
+            js(home, "set", PERSONA, "--send-files", "on")
+            oid, _ = caso_en_trabajo(home, "AF7", chat=PERSONA)
+            p = resultado_con_archivo(home, oid, ruta, "--chat", SOPORTE)
+            ok("adjuntos: a otro chat, el ajuste que cuenta es el del destino",
+               error_de(p) == "E_FILES_OFF", f"{error_de(p)}")
+            js(home, "set", SOPORTE, "--send-files", "on")
+            p = resultado_con_archivo(home, oid, ruta, "--chat", SOPORTE)
+            ok("adjuntos: con el destino encendido se acepta",
+               p.returncode == 0 and ((json.loads(p.stdout or "[{}]")[0].get("propuesta") or {})
+                                      .get("chat")) == SOPORTE, p.stderr[-300:])
+        finally:
+            sidecar.cerrar()
+            os.environ.clear()
+            os.environ.update(antes_adjuntos)
+
+    # El archivo de un caso le dice al agente que puede adjuntar solo si el chat lo deja.
+    with tempfile.TemporaryDirectory() as home:
+        linea_lista(home)
+        cid = caso_para_avance(home, "AF8")
+        ws = carga_wa_scope(home)
+        con = ws.db()
+        sin = "\n".join(ws.archivo_de_caso(con, ws.caso_de(con, int(cid))))
+        con.close()
+        js(home, "set", PERSONA, "--send-files", "on")
+        con = ws.db()
+        con_archivo = "\n".join(ws.archivo_de_caso(con, ws.caso_de(con, int(cid))))
+        con.close()
+        ok("adjuntos: con el ajuste apagado, el archivo del caso no menciona --file",
+           "--file" not in sin)
+        ok("adjuntos: encendido, dice como adjuntar y que espera al dueno",
+           "--file" in con_archivo and "approval" in con_archivo, con_archivo[-1500:])
+
+ok("adjuntos: validar_adjunto vive en wa_store y wa-send ya no tiene el suyo",
+   "def validar_adjunto" in (RAIZ / "bin" / "wa_store.py").read_text(encoding="utf-8")
+   and "def validar_adjunto" not in (RAIZ / "bin" / "wa-send").read_text(encoding="utf-8"))
+
+
 # ── avisos-orca: los avisos de Orca por WhatsApp (odd/tasks/avisos-orca.md, O3-O6) ───────
 # Un agente de otro proyecto que espera, uno que termino y una automatizacion que fallo, al
 # numero de aprobacion, con texto fijo. Apagados de fabrica; con horas de silencio que se
