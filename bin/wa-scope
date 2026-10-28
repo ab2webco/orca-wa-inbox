@@ -16240,6 +16240,14 @@ def cabeza_del_caso(con, caso, del_dueno=None, operador=None, de_casos=True):
     else:
         lineas.append("- Reply to another chat: no (a customer's case: the reply goes to "
                       "this chat only)")
+    if envia_archivos(chat, merged_settings(con, linea_del_caso(caso)))[0]:
+        # Solo si el chat lo deja (caso-adjuntos): sin el ajuste, el agente ni sabe de --file.
+        lineas.append("- Files: allowed in this chat. Attach one file you made (a report, a PDF) "
+                      "with `--file <absolute path>` on `caso avance`, `caso resultado` or a "
+                      "`responder` proposal. Every file waits for the owner's approval, in every "
+                      "chat, his own included: it is not sent until he approves it, so never "
+                      "send it again or another way. Never attach keys, credentials or the "
+                      "plugin's data (E_BAD_FILE)")
     modo = primer_modo(chat, merged_settings(con, linea_del_caso(caso)))[0]
     if es_rezago(con, cid):
         lineas.append("- First message: none on this case: it picks up earlier pending topics "

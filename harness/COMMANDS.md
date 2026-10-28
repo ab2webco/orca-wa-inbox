@@ -80,6 +80,16 @@ is held too, drop it. It answers exit 2 with `E_FIRST_REPLY_MODE`, `E_CHAT_MODE`
 After `E_EXCEPTION` with nothing sent yet, the plugin sends the fixed acknowledgement in its
 place: the customer is never left in silence.
 
+Files, only where the chat that receives it has `send_files` on (`send_files.on` in `voice`;
+the case file says so): `--file <absolute path>` attaches one file you made (a report, a PDF)
+to `caso avance`, to `caso resultado --estado resuelto|necesita` or to a `responder` proposal,
+with the text as its caption. Every file waits for the owner's approval, in every chat, his
+own included: an update comes back with `estado` `espera` and a `hint`, a result or a proposal
+waits on its card. It reached nobody yet: never send it again or another way. A waiting update
+counts toward `updates_max` and the pacing. `E_FILES_OFF` (exit 2): the chat does not allow
+files, so send the message without it. `E_BAD_FILE` (exit 2): the file is missing, empty, a
+link, over 64 MB, or looks like a key, a credential or the plugin's own data; it never goes out.
+
 To wait for an answer, `"$WA/wa-read" wait --chat "<chat_jid>" --after <stanza_id> --timeout
 <S> --json` blocks until the other side writes in that chat, and prints what arrived (each
 message with its `stanza_id`, for the next `--after`). A case run never needs it: a new
@@ -149,6 +159,7 @@ chat and the client cannot see it. Say it is a proposal waiting for approval.
 | `5` | `wa-read wait` | `wait-timeout` on the first stderr line: nobody wrote before `--timeout`. |
 | `3` | `wa-send --approve` | `send-approve-not-owner`: only the owner approves a held message. Never retry it. |
 | `2` | `wa-scope caso aprobar --actor dueno` | `E_NOT_OWNER`: only the owner signs as `dueno`, from the board. Never retry it. |
+| `2` | `wa-scope caso avance` / `caso resultado` / `caso propuesta` with `--file` | `E_FILES_OFF`: the chat that receives it does not allow files (`send_files`); send the message without the file. `E_BAD_FILE`: that file can never go out. |
 
 An **empty list is not `no-transport`**: once a line is linked, every read answers with
 exit 0 and `[]` means the inbox really is quiet.

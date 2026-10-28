@@ -74,6 +74,12 @@ Beta, only where `voice` says `first_reply_mode` is `model` or `model_with_ack_f
 
     "$WA/wa-scope" caso avance <id> "<text>" --actor agente
 
+Only where the chat allows files (`send_files.on` in `voice`), `--file <absolute path>`
+attaches one file to `caso avance`, `caso resultado` or a `responder` proposal. It always
+waits for the owner's approval, in every chat: never send it again or another way.
+`E_FILES_OFF` means the chat does not allow files; `E_BAD_FILE`, that file can never go out
+(see the `whatsapp-soporte` skill).
+
 The same proposal twice changes nothing. A different proposal on a case in `listo` (the
 result of a job) sends it back to `decision`, to be approved again. A stage that is not
 allowed fails without writing; read the error instead of retrying.

@@ -4934,6 +4934,27 @@ titulo('activity.html — tablero: Enviar, de punta a punta')
     /Enviado/.test(n.doc.querySelector('#board-detail .card-msg')?.textContent || '')))
 }
 
+titulo('activity.html — caso-adjuntos: la respuesta con archivo dice cual es y cuanto pesa')
+{
+  // La respuesta de un caso con archivo la aprueba el dueno en su tarjeta: lo que firma es un
+  // archivo que nadie mas pudo leer, asi que la tarjeta y el detalle dicen cual y cuanto pesa.
+  const conArchivo = tarjeta({ stage: 'listo', exceptions: ['file'],
+    proposal: { tipo: 'responder', texto: 'Le comparto el informe.', version: 'abc',
+      file: { name: 'informe-ejemplo.pdf', bytes: 2560 } } })
+  const m = await abrirConWorker([conArchivo], conWorker({ ok: true, code: 'enviado' }))
+  const card = m.doc.querySelector('[data-case="1"]') || m.doc.getElementById('board-body')
+  ok('adjuntos: la tarjeta dice el archivo y su tamano',
+    /Archivo: informe-ejemplo\.pdf \(3 KB\)/.test(card.textContent), card.textContent.slice(0, 400))
+  const sinArchivo = await abrirConWorker([tarjeta()], conWorker({ ok: true, code: 'enviado' }))
+  ok('adjuntos: sin archivo no dice nada de archivos',
+    !/Archivo:/.test(sinArchivo.doc.getElementById('board-body').textContent))
+  const en = await abrirConWorker([conArchivo], conWorker({ ok: true, code: 'enviado' }), {}, 'en-US')
+  ok('adjuntos: en ingles tambien', /File: informe-ejemplo\.pdf/.test(en.doc.getElementById('board-body').textContent))
+  ok('adjuntos: la lista de retenidos dice que trae los archivos de un caso',
+    /archivos/i.test(m.doc.documentElement.innerHTML.match(/"heldLead": "[^"]*"/)?.[0] || ''),
+    m.doc.documentElement.innerHTML.match(/"heldLead": "[^"]*"/)?.[0])
+}
+
 titulo('activity.html — retenidos fuera de un caso: el dueno los aprueba o los cancela')
 {
   // approve-solo-dueno: el aviso de la sesion de un proyecto que el piso freno no es de
