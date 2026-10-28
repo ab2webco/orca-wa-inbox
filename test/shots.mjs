@@ -1156,6 +1156,21 @@ const PANELES = [
     datos: conTablero(tableroDe(TABLERO_CASOS, { held_drafts: RETENIDOS }))
   },
   {
+    // caso-adjuntos: la respuesta de un caso con archivo espera la firma del dueno en su
+    // tarjeta, que dice cual archivo y cuanto pesa; el avance con archivo, en los retenidos.
+    nombre: 'tablero-caso-archivo', archivo: 'activity.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, guion: ABRIR_TABLERO, espera: 400,
+    datos: conTablero(tableroDe([caso(21, 'listo', {
+      title: 'Piden el informe de octubre', chat_name: 'Laura Ejemplo', prioridad: 'medium',
+      summary: 'El agente del proyecto armo el informe del mes.', exceptions: ['file'],
+      proposal: { tipo: 'responder', version: 'v21a',
+        texto: 'Hola, le comparto el informe de octubre. Revise si le sirve.',
+        file: { name: 'informe-octubre.pdf', bytes: 248320 } } })], { held_drafts: [
+      { req_id: 'caso-21-avance-2', chat_jid: '573000000001@s.whatsapp.net', chat: 'Laura Ejemplo',
+        text: 'Le adelanto el borrador del informe.', file: { name: 'borrador-informe.pdf',
+          bytes: 91200 }, at: minutos(2), reasons: ['file'] }] }))
+  },
+  {
     // Aprobar no pudo confirmar que viene del tablero: el error en su tarjeta.
     nombre: 'tablero-retenidos-error', archivo: 'activity.html', anchos: ANCHOS,
     enTodosLosAnchos: true, espera: 1500,
