@@ -2935,7 +2935,8 @@
       var heldHechos = {}
       var heldMsgs = {}
       var heldAviso = null
-      var ID_RETENIDO = /^(?!caso-|aviso-)[A-Za-z0-9_][^\s]{0,199}$/
+      // La misma forma que acciones.mjs: el avance con archivo de un caso (caso-adjuntos) si.
+      var ID_RETENIDO = /^(?!aviso-)(?!caso-(?!\d+-avance-\d+$))[A-Za-z0-9_][^\s]{0,199}$/
 
       function retenidosDe (board) {
         var lista = esObjeto(board) && Array.isArray(board.held_drafts) ? board.held_drafts : []

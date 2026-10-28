@@ -4950,6 +4950,16 @@ titulo('activity.html — caso-adjuntos: la respuesta con archivo dice cual es y
     !/Archivo:/.test(sinArchivo.doc.getElementById('board-body').textContent))
   const en = await abrirConWorker([conArchivo], conWorker({ ok: true, code: 'enviado' }), {}, 'en-US')
   ok('adjuntos: en ingles tambien', /File: informe-ejemplo\.pdf/.test(en.doc.getElementById('board-body').textContent))
+  const avance = { req_id: 'caso-21-avance-2', chat_jid: '573000000001@s.whatsapp.net',
+    chat: 'Laura Ejemplo', text: 'Le adelanto el borrador.', at: hace(60000), reasons: ['file'],
+    file: { name: 'borrador-informe.pdf', bytes: 2048 } }
+  const conAvance = await abrirConWorker([conArchivo], conWorker({ ok: true, code: 'enviado' }),
+    { board: tablero([conArchivo], { held_drafts: [avance, Object.assign({}, avance,
+      { req_id: 'caso-21-a1a1a1a1a1a1' })] }) })
+  ok('adjuntos: el avance con archivo de un caso aparece en los retenidos, y la respuesta de un caso no',
+    !!conAvance.doc.querySelector('#board-held [data-req="caso-21-avance-2"]') &&
+    !conAvance.doc.querySelector('#board-held [data-req="caso-21-a1a1a1a1a1a1"]'),
+    conAvance.doc.getElementById('board-held')?.textContent)
   ok('adjuntos: la lista de retenidos dice que trae los archivos de un caso',
     /archivos/i.test(m.doc.documentElement.innerHTML.match(/"heldLead": "[^"]*"/)?.[0] || ''),
     m.doc.documentElement.innerHTML.match(/"heldLead": "[^"]*"/)?.[0])
