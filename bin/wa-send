@@ -97,7 +97,7 @@ through the same approval, and `no <code>` withdraws it. A secret-shaped value o
 credential never travels in that notice and is approved on the board only. The code is
 never printed here: only his reply from his phone counts.
 """
-import argparse, hashlib, json, mimetypes, os, re, sqlite3, stat, subprocess, sys, time, uuid
+import argparse, json, os, sqlite3, subprocess, sys, time, uuid
 
 # Sin esto Python deja un __pycache__ DENTRO de bin/, y el directorio del plugin
 # instalado esta direccionado por hash.
@@ -203,21 +203,15 @@ ID_EN_USO = "send-id-conflict"
 JEV_NO_CONTESTA = "jev-unavailable"
 
 # El archivo de `--file` que no puede salir: no existe, no es un archivo comun, es un
-# enlace, esta vacio, pasa el tope, o tiene forma de secreto. No se encola nada.
+# enlace, esta vacio, pasa el tope, o tiene forma de secreto (`wa_store.validar_adjunto`, la
+# misma regla que `wa-scope caso ... --file`). No se encola nada.
 ADJUNTO_INVALIDO = "send-bad-file"
 # El almacen es de un sidecar de antes de los adjuntos (sin la columna `adjunto`): mandar
 # el texto solo seria mandar otra cosa que la pedida.
 ADJUNTO_SIN_SOPORTE = "send-file-unsupported"
-# El MISMO numero que ADJUNTO_MAX_BYTES en `sidecar/src/envio.js`.
-ADJUNTO_MAX_BYTES = 64 * 1024 * 1024
-# Lo que nunca sale como adjunto, por nombre: llaves, certificados, env y bases de claves.
-ADJUNTO_SECRETO = re.compile(
-    r"(^\.env(\..*)?$|^\.netrc$|^\.npmrc$|^\.pypirc$|^id_(rsa|dsa|ecdsa|ed25519)(\.pub)?$|"
-    r"\.(pem|key|p12|pfx|jks|keystore|kdbx|ovpn|gpg|asc)$|credential|secret|token|password|"
-    r"approver\.key$|\.db$|\.sqlite3?$)", re.IGNORECASE)
-# Directorios de los que nunca sale nada: llaves, nubes y el propio plugin.
-ADJUNTO_DIRS_VEDADOS = (".ssh", ".gnupg", ".aws", ".azure", ".kube", ".docker",
-                        ".config/gcloud", ".wa-inbox", ".config/orca-ide")
+# El archivo ya no es el que se pidio (`--file-sha256`) o el que espera el visto del dueno
+# (`--approve`): lo aprobado son esos bytes, no lo que haya hoy en esa ruta. No sale nada.
+ADJUNTO_CAMBIO = "send-file-changed"
 
 # Salidas. `3` es la misma que la compuerta `wa-scope check`: denegado, se anota y se
 # sigue. `4` es la misma que `wa-read` sin linea enlazada: no hay de donde, y no hay
@@ -484,47 +478,18 @@ def con_transporte(cuenta=None):
     return con
 
 
-def tamano(n):
-    """Bytes en palabras, para el aviso del dueno y el listado de borradores."""
-    for unidad in ("B", "KB", "MB"):
-        if n < 1024 or unidad == "MB":
-            return f"{n:.0f} {unidad}" if unidad == "B" else f"{n:.1f} {unidad}"
-        n /= 1024
-
-
-def validar_adjunto(ruta):
-    """El adjunto de `--file`, como lo guarda la bandeja (dict), o la negativa.
-
-    Falla cerrada: solo un archivo comun, no un enlace (lo que se aprueba tiene que ser lo
-    que sale), fuera de los directorios de llaves y del plugin, y sin nombre de secreto. El
-    contenido no se revisa —es binario—: por eso todo adjunto a alguien que no es el dueno
-    espera su visto (`main`)."""
-    absoluta = os.path.abspath(os.path.expanduser(ruta))
+def adjunto_pedido(ruta, sha_esperado=None):
+    """El adjunto de `--file`, como lo guarda la bandeja (dict), o la negativa. La regla es
+    la de `wa_store.validar_adjunto`. Con `sha_esperado` (`--file-sha256`, lo que el dueno
+    firmo en el caso) el archivo tiene que ser exactamente ese."""
     try:
-        info = os.lstat(absoluta)
-    except OSError:
-        niega(ADJUNTO_INVALIDO, f"{ruta!r} does not exist or cannot be read. Nothing was sent.")
-    if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
-        niega(ADJUNTO_INVALIDO, f"{ruta!r} is not a regular file (links are refused). "
-                                "Nothing was sent.")
-    if info.st_size == 0 or info.st_size > ADJUNTO_MAX_BYTES:
-        niega(ADJUNTO_INVALIDO, f"{ruta!r} is empty or over {tamano(ADJUNTO_MAX_BYTES)}. "
-                                "Nothing was sent.")
-    nombre = os.path.basename(absoluta)
-    casa = os.path.realpath(os.path.expanduser("~"))
-    real = os.path.realpath(absoluta)
-    vedado = any(real == os.path.join(casa, d) or real.startswith(os.path.join(casa, d) + os.sep)
-                 for d in ADJUNTO_DIRS_VEDADOS)
-    if vedado or ADJUNTO_SECRETO.search(nombre):
-        niega(ADJUNTO_INVALIDO, f"{nombre!r} looks like a key, a credential or the plugin's "
-                                "own data: it never goes out as a file. Nothing was sent.")
-    sha = hashlib.sha256()
-    with open(absoluta, "rb") as f:
-        for bloque in iter(lambda: f.read(1 << 20), b""):
-            sha.update(bloque)
-    tipo = mimetypes.guess_type(nombre)[0] or "application/octet-stream"
-    return {"ruta": real, "nombre": nombre, "mimetype": tipo, "bytes": info.st_size,
-            "sha256": sha.hexdigest()}
+        meta = wa_store.validar_adjunto(ruta)
+    except wa_store.AdjuntoInvalido as e:
+        niega(ADJUNTO_INVALIDO, f"{e} Nothing was sent.")
+    if sha_esperado and meta["sha256"] != sha_esperado.strip().lower():
+        niega(ADJUNTO_CAMBIO, f"{meta['nombre']!r} changed after it was requested: what the "
+                              "owner approves is that exact file. Nothing was sent.")
+    return meta
 
 
 def adjunto_de(fila):
@@ -831,7 +796,9 @@ def deja_borrador(con, fila, texto, req_id, salida_json, pedia_envio, frenado=No
                   reescribir=False, adjunto=None):
     """Escribe el borrador y dice como se aprueba. No manda nada."""
     encolar(con, fila, texto, req_id, BORRADOR, adjunto)
-    anotar_borrador(fila, req_id, frenado)
+    # Un borrador con archivo espera por el archivo aunque nadie pidiera `--send`: el tablero
+    # y el aviso dicen por que (`rule: file`), tambien en el chat del dueno.
+    anotar_borrador(fila, req_id, frenado or (["rule: file"] if adjunto else None))
     # Lo que el chat deja al agente (reescribir) es de quien lo escribio, no del dueno.
     avisado = not reescribir and pide_aviso_al_dueno(fila, req_id)
     if frenado:
@@ -892,7 +859,8 @@ def listar_borradores(salida_json):
         for renglon in (f["body"] or "").splitlines():
             print(f"    {renglon}")
         if adjunto_de(f):
-            print(f"    [file] {adjunto_de(f)['nombre']} ({tamano(adjunto_de(f)['bytes'])})")
+            print(f"    [file] {adjunto_de(f)['nombre']} "
+                  f"({wa_store.tamano(adjunto_de(f)['bytes'])})")
         print(f"    -> {ESPERA_AL_DUENO}")
     sys.exit(0)
 
@@ -934,6 +902,17 @@ def aprobar(req_id, plazo_s, salida_json, por):
     # una peticion que nadie va a mandar, y el borrador sigue esperando el visto.
     if fila["estado"] == BORRADOR and not sidecar_vivo(con, fila["account"]):
         niega(SIN_TRANSPORTE, SIN_TRANSPORTE_DETALLE)
+    # Lo que el dueno aprueba son los bytes que se pidieron: si el archivo cambio (o ya no
+    # esta), el borrador se retira y no sale. El sidecar lo vuelve a mirar al mandar.
+    if fila["estado"] == BORRADOR and adjunto_de(fila) \
+            and wa_store.adjunto_cambio(adjunto_de(fila)):
+        con.execute("update envio set estado=?, motivo=?, settled_at=? where req_id=? and "
+                    "estado=?", (CANCELADO_, "the file changed after it was requested",
+                                 int(time.time()), req_id, BORRADOR))
+        con.commit()
+        niega(ADJUNTO_CAMBIO, f"the file of {req_id!r} changed after it was requested: what "
+                              "the owner approves is that exact file. It was withdrawn and "
+                              "nothing was sent.")
     cur = con.execute("update envio set estado=? where req_id=? and estado=?",
                       (PENDIENTE, req_id, BORRADOR))
     con.commit()
@@ -1003,6 +982,9 @@ def main():
     ap.add_argument("--file", metavar="PATH", dest="archivo",
                     help="send this file as a document, with the text as its caption. "
                          "To anyone but the owner it always waits for his approval")
+    ap.add_argument("--file-sha256", metavar="HEX", dest="archivo_sha",
+                    help="with --file: the sha256 the file must still have (what the owner "
+                         "approved); otherwise nothing is drafted (send-file-changed)")
     ap.add_argument("--json", action="store_true", help="machine-readable output")
     a = ap.parse_args()
 
@@ -1017,7 +999,9 @@ def main():
     if not a.chat or a.text is None:
         ap.error("the chat and the text are required (or use --drafts / --cancel)")
     # El archivo se mira antes que nada: lo que no puede salir no deja ni borrador.
-    adjunto = validar_adjunto(a.archivo) if a.archivo else None
+    if a.archivo_sha and not a.archivo:
+        ap.error("--file-sha256 goes with --file")
+    adjunto = adjunto_pedido(a.archivo, a.archivo_sha) if a.archivo else None
 
     # La linea se decide ANTES de tocar nada. El mismo grupo puede existir en dos
     # lineas, y elegir "la primera" ahi le escribe a la conversacion equivocada.
