@@ -14490,11 +14490,11 @@ if NODE:
         cid = caso_para_avance(home, "AF8")
         ws = carga_wa_scope(home)
         con = ws.db()
-        sin = "\n".join(ws.archivo_de_caso(con, ws.caso_de(con, int(cid))))
+        sin = str(ws.archivo_de_caso(con, ws.caso_de(con, int(cid))))
         con.close()
         js(home, "set", PERSONA, "--send-files", "on")
         con = ws.db()
-        con_archivo = "\n".join(ws.archivo_de_caso(con, ws.caso_de(con, int(cid))))
+        con_archivo = str(ws.archivo_de_caso(con, ws.caso_de(con, int(cid))))
         con.close()
         ok("adjuntos: con el ajuste apagado, el archivo del caso no menciona --file",
            "--file" not in sin)

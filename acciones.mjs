@@ -92,8 +92,15 @@ const MOTIVO_IGNORADO = 'ignored by the owner'
 const ID_PROYECTO = /^[a-z0-9][a-z0-9-]*$/
 // El id de un envio retenido fuera de los casos: lo eligio quien escribio (`--id`) o es un
 // uuid. Sin espacios ni guion inicial (seria otra bandera), y nunca uno de los del motor:
-// `caso-...` se aprueba en su tarjeta, con su version, y `aviso-...` es del plugin.
-const ID_RETENIDO = /^(?!caso-|aviso-)[A-Za-z0-9_][^\s]{0,199}$/
+// `caso-...` se aprueba en su tarjeta, con su version, y `aviso-...` es del plugin. La
+// excepcion es el avance con archivo de un caso (`caso-<id>-avance-<n>`, caso-adjuntos): no
+// tiene tarjeta propia y espera el visto del dueno como cualquier retenido.
+const ID_RETENIDO = /^(?!aviso-)(?!caso-(?!\d+-avance-\d+$))[A-Za-z0-9_][^\s]{0,199}$/
+// El archivo de una propuesta (caso-adjuntos): la ruta y el sha256 que el dueno firma. Lo que
+// no tiene esa forma no viaja: un archivo sin su sha256 saldria sin atar a lo aprobado.
+const SHA256 = /^[0-9a-f]{64}$/
+// Absoluta en macOS y Linux, o con su unidad en Windows: nunca algo que empiece con guion.
+const RUTA_ABSOLUTA = /^(\/|[A-Za-z]:[\\/])/
 const MOTIVO_RETIRO = 'cancelled by the owner'
 // Cuanto espera `wa-send` el veredicto del sidecar, y cuanto el proceso en total. Va por
 // debajo del tiempo que el panel espera su respuesta: un envio que tarda mas queda en
@@ -111,6 +118,12 @@ class Rechazo extends Error {
 }
 
 const esObjeto = (x) => x !== null && typeof x === 'object' && !Array.isArray(x)
+/** El archivo de la propuesta de un caso (caso-adjuntos), o null: con ruta absoluta y sha256. */
+const archivoDe = (c) => {
+  const a = esObjeto(c?.propuesta) && esObjeto(c.propuesta.archivo) ? c.propuesta.archivo : null
+  return a && typeof a.ruta === 'string' && RUTA_ABSOLUTA.test(a.ruta) && typeof a.sha256 === 'string' &&
+    SHA256.test(a.sha256) ? a : null
+}
 
 const primeraLinea = (texto) =>
   String(texto ?? '').split('\n').map((l) => l.trim()).find(Boolean) ?? ''
@@ -244,6 +257,10 @@ export function crearAccionesCaso ({ run, herramienta, motivoDe, lanzarTriage, l
    *  es una bandera. */
   async function entregar (c, version, texto) {
     const id = `caso-${c.case_id}-${version.slice(0, 12)}`
+    // Un archivo (caso-adjuntos) sale con la ruta y el sha256 que el dueno firmo: si cambio,
+    // `wa-send` lo niega (`send-file-changed`) y no sale nada.
+    const archivo = archivoDe(c)
+    const conArchivo = archivo ? [`--file=${archivo.ruta}`, `--file-sha256=${archivo.sha256}`] : []
     // Una respuesta a OTRO chat (respuesta-otro-chat) sale a ese chat con `--send`: el piso
     // y Jev la revisan con los niveles de alla, como cualquier respuesta a un cliente. Lo que
     // retengan queda de borrador (`destino.retenido`), y la siguiente firma del dueno lo
@@ -256,12 +273,14 @@ export function crearAccionesCaso ({ run, herramienta, motivoDe, lanzarTriage, l
     const porLinea = destino && typeof destino.linea === 'string' && destino.linea
       ? destino.linea : c.account
     const linea = porLinea ? [`--line=${porLinea}`] : []
-    if (destino && !destino.retenido && !destino.borrador) {
+    // Con un archivo nunca `--send`, tampoco a otro chat: la firma del dueno es la que lo
+    // manda, como borrador y `--approve`.
+    if (destino && !destino.retenido && !destino.borrador && !archivo) {
       await enviar([`--id=${id}`, ...linea, '--send', `--timeout=${ENVIO_PLAZO_S}`, '--json',
         '--', destino.chat_jid, texto])
     } else {
-      await enviar([`--id=${id}`, ...linea, `--timeout=${ENVIO_PLAZO_S}`, '--json', '--',
-        destino ? destino.chat_jid : c.chat_jid, texto])
+      await enviar([`--id=${id}`, ...linea, ...conArchivo, `--timeout=${ENVIO_PLAZO_S}`, '--json',
+        '--', destino ? destino.chat_jid : c.chat_jid, texto])
       // La aprobacion es del dueno y la dice el tablero: la llave del plugin va SOLO a este
       // hijo. Sin llave `wa-send` la niega (`send-approve-not-owner`) y el panel lo dice.
       await enviar(['--approve', id, '--by', 'board', `--timeout=${ENVIO_PLAZO_S}`, '--json'],
@@ -319,8 +338,12 @@ export function crearAccionesCaso ({ run, herramienta, motivoDe, lanzarTriage, l
       // texto, no a donde va.
       const destino = esObjeto(c.destino) && typeof c.destino.chat_jid === 'string'
         ? [`--chat=${c.destino.chat_jid}`] : []
+      // Y el archivo tambien (caso-adjuntos): corregir el pie no lo quita. La propuesta nueva
+      // lo vuelve a leer, con su sha256 de ahora, y el dueno firma esa.
+      const archivo = archivoDe(c)
       const nueva = await caso(['propuesta', String(id), '--tipo=responder',
-        `--respuesta=${texto}`, ...destino, '--actor', ACTOR])
+        `--respuesta=${texto}`, ...destino, ...(archivo ? [`--file=${archivo.ruta}`] : []),
+        '--actor', ACTOR])
       if (typeof nueva.propuesta_version !== 'string' || !VERSION.test(nueva.propuesta_version)) {
         throw new Rechazo('fallo', 'wa-scope caso propuesta returned no version')
       }

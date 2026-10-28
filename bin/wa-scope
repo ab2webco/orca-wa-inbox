@@ -476,7 +476,8 @@ create table if not exists respuesta_auto (
 -- y `req_id` (`caso-<id>-avance-<n>`) su id de wa-send, que nunca se reusa — uno retenido
 -- tambien ocupa su numero. pendiente (lo manda el tick si no salio en el acto) | enviado |
 -- retenido (la revision lo freno: se descarta, nunca va al dueno) | omitido (el chat o el
--- caso ya no lo admiten cuando le toco salir).
+-- caso ya no lo admiten cuando le toco salir) | espera (lleva un archivo: es un borrador que
+-- espera el visto del dueno, caso-adjuntos). `adjunto`: el JSON del archivo, o null.
 create table if not exists caso_avance (
   case_id    integer not null,
   n          integer not null,
@@ -487,6 +488,7 @@ create table if not exists caso_avance (
   motivo     text,
   at         text not null,
   enviado_at text,
+  adjunto    text,
   primary key (case_id, n)
 );
 -- La transcripcion de una nota de voz, calculada UNA vez por mensaje: lo que juzga Jev, lo
@@ -1937,6 +1939,9 @@ def migrate(con):
         con.execute("alter table caso add column relacionado integer")
     if "pospuesto_hasta" not in caso_cols:
         con.execute("alter table caso add column pospuesto_hasta text")
+    # El archivo de un avance (caso-adjuntos): una base de antes gana la columna.
+    if "adjunto" not in {r["name"] for r in con.execute("pragma table_info(caso_avance)")}:
+        con.execute("alter table caso_avance add column adjunto text")
     # El despacho por terminal (T8): una base con la tabla de antes gana las dos columnas.
     despacho_cols = {r["name"] for r in con.execute("pragma table_info(caso_despacho)")}
     if "cuenta_claude" not in despacho_cols:
@@ -4983,7 +4988,11 @@ def propuesta_canonica(propuesta):
     Dos propuestas con el mismo contenido tienen la misma version aunque lleguen con las
     banderas en otro orden; es lo que deja a triage repasar cada cinco minutos sin
     invalidar lo que el dueno ya firmo."""
-    propuesta = {k: texto_caso(v) for k, v in propuesta.items()}
+    # El archivo (caso-adjuntos) es un objeto: sus textos se normalizan y su tamano sigue
+    # siendo un numero. Su sha256 entra en la version: lo que el dueno firma son esos bytes.
+    propuesta = {k: ({c: texto_caso(x) if isinstance(x, str) else x for c, x in v.items()}
+                     if isinstance(v, dict) else texto_caso(v))
+                 for k, v in propuesta.items()}
     texto = json.dumps(propuesta, sort_keys=True, separators=(",", ":"),
                        ensure_ascii=False)
     return texto, hashlib.sha256(texto.encode("utf-8", "replace")).hexdigest()
@@ -5049,6 +5058,12 @@ def cmd_caso_propuesta(con, a):
             # La orden del dueno a un chat de otra linea: la linea por la que sale es parte
             # de lo que firma (ordenes-del-dueno).
             propuesta["linea"] = linea
+    if getattr(a, "archivo", None):
+        if a.tipo != "responder":
+            caso_falla("E_ARGS", f"--file goes with responder: a {a.tipo} proposal sends no file")
+        # El chat que lo recibe decide (el destino, si va a otro), y el dueno lo aprueba siempre.
+        propuesta["archivo"] = archivo_del_caso(con, caso, a.archivo, propuesta.get("chat"),
+                                                propuesta.get("linea"))
     texto, version = propuesta_canonica(propuesta)
     if caso["etapa"] in ("decision", "listo") and caso["propuesta_version"] == version:
         # Triage repasa cada cinco minutos: lo mismo no es un cambio ni deja evento. En
@@ -5473,6 +5488,10 @@ def frenos_de_regla(con, caso):
     # Lo que retoma lo atrasado de un chat lo firma el dueno, nunca la regla (sin-responder).
     if caso.get("case_id") is not None and es_rezago(con, caso["case_id"]):
         al_dueno.append(REZAGO_FRENO)
+    # Un archivo no lo lee ni el piso ni Jev (es binario): lo firma el dueno, siempre. Al
+    # final y sin excepciones: ni su chat ni su orden lo saltan (caso-adjuntos).
+    if archivo_de_propuesta(caso):
+        al_dueno.append("file")
     return al_dueno, al_agente
 
 
@@ -5689,6 +5708,52 @@ def cmd_caso_aprobar(con, a):
     return [caso_fila(con, caso_de(con, a.id))]
 
 
+# ── Los archivos del agente (caso-adjuntos) ──────────────────────────────────────────────
+# `caso avance`, `caso resultado` y una propuesta `responder` llevan un archivo con `--file`
+# solo si el chat que lo recibe tiene `send_files` encendido (su valor, o el general). La regla
+# de lo que puede salir es la de `wa-send --file` (`wa_store.validar_adjunto`). Y ningun
+# archivo sale sin el visto del dueno, en ningun chat: el del dueno tampoco.
+# La pista de un avance o un resultado con archivo: espera al dueno, no se reescribe ni se
+# vuelve a mandar.
+PISTA_ARCHIVO = ("Waiting for the owner's approval: a file always waits for it, in every chat. "
+                 "Nothing reached the chat yet; do not send it again or another way, and go on "
+                 "with the work. The owner approves or withdraws it.")
+
+
+def archivo_del_caso(con, caso, ruta, destino=None, linea=None):
+    """El archivo que el agente pide adjuntar, como lo guarda la bandeja (dict con ruta,
+    nombre, mimetype, bytes y sha256), o la negativa. Manda el ajuste del chat que lo RECIBE:
+    `destino` (en `linea`) si va a otro chat, si no el del caso. No escribe nada."""
+    cuenta = linea or linea_del_caso(caso)
+    jid = destino or caso["chat_jid"]
+    fila = merged_scope(con, cuenta).get(jid) or {}
+    if not envia_archivos(fila, merged_settings(con, cuenta))[0]:
+        caso_falla("E_FILES_OFF", f"case #{caso['case_id']}: sending files is off for "
+                                  f"{fila.get('chat_name') or jid} (send_files). Only the owner "
+                                  f"turns it on, in the plugin settings: send the message "
+                                  f"without the file")
+    try:
+        return wa_store.validar_adjunto(ruta)
+    except wa_store.AdjuntoInvalido as e:
+        caso_falla("E_BAD_FILE", f"{e} Nothing was saved.")
+
+
+def archivo_de_propuesta(caso):
+    """El archivo de la propuesta vigente (dict), o None si es solo texto."""
+    try:
+        propuesta = json.loads(caso["propuesta"] or "null")
+    except (TypeError, ValueError):
+        return None
+    archivo = propuesta.get("archivo") if isinstance(propuesta, dict) else None
+    return archivo if isinstance(archivo, dict) and archivo.get("ruta") else None
+
+
+def args_de_archivo(archivo):
+    """Las banderas de `wa-send` para el archivo firmado: la ruta y el sha256 que tiene que
+    seguir teniendo (`send-file-changed` si no)."""
+    return [f"--file={archivo['ruta']}", f"--file-sha256={archivo['sha256']}"] if archivo else []
+
+
 ESTADOS_RESULTADO = ("resuelto", "necesita", "bloqueado")
 PREFIJO_BLOQUEO_AGENTE = "bloqueado por el agente del proyecto: "
 
@@ -5738,6 +5803,9 @@ def cmd_caso_resultado(con, a):
     if estado == "bloqueado" and espera:
         caso_falla("E_ARGS", "--espera goes with resuelto or necesita: a blocked result sends "
                              "nothing")
+    if estado == "bloqueado" and getattr(a, "archivo", None):
+        caso_falla("E_ARGS", "--file goes with resuelto or necesita: a blocked result sends "
+                             "nothing")
     if estado == "bloqueado":
         if not resumen:
             caso_falla("E_ARGS", "a blocked result needs --resumen: the owner reads why")
@@ -5772,6 +5840,11 @@ def cmd_caso_resultado(con, a):
         nueva["chat"] = destino
         if linea:
             nueva["linea"] = linea
+    if getattr(a, "archivo", None):
+        # El chat que lo recibe decide (el destino, si va a otro), y el dueno lo aprueba
+        # siempre: la regla nunca firma un archivo (`frenos_de_regla`).
+        nueva["archivo"] = archivo_del_caso(con, caso, a.archivo, nueva.get("chat"),
+                                            nueva.get("linea"))
     texto, version = propuesta_canonica(nueva)
     if (caso["etapa"] == "listo" and caso["propuesta_version"] == version
             and caso["resumen"] == resumen):
@@ -5786,6 +5859,8 @@ def cmd_caso_resultado(con, a):
     # La respuesta sale YA, por el mismo camino que el tick: lo que la retiene (el modo del
     # chat, el piso fijo, Jev) la deja para el dueno igual que alla.
     envio = envia_resultado(con, a.id)
+    if nueva.get("archivo") and envio.get("estado") != "enviado":
+        envio = dict(envio, hint=PISTA_ARCHIVO)
     return [dict(caso_fila(con, caso_de(con, a.id)), envio=envio)]
 
 
@@ -6041,8 +6116,11 @@ def avance_sello_acuse(con, cid):
 def avance_cupo(con, cid, ajustes):
     """(usados, sello del ultimo): los mensajes que ya ocupan lugar en el caso —los avances
     que salieron o van a salir, y el acuse de respaldo que salio— y cuando salio el ultimo."""
+    # El avance con archivo que espera al dueno (`espera`) cuenta: sale si lo aprueba, y su
+    # ritmo se mide desde que se pidio (caso-adjuntos).
     filas = con.execute("select coalesce(enviado_at, at) as sello from caso_avance where "
-                        "case_id=? and estado in ('pendiente', 'enviado')", (cid,)).fetchall()
+                        "case_id=? and estado in ('pendiente', 'enviado', 'espera')",
+                        (cid,)).fetchall()
     sellos = [f["sello"] for f in filas]
     acuse = avance_sello_acuse(con, cid)
     if acuse:
@@ -6101,6 +6179,8 @@ def avance_manda(con, fila):
         return {"estado": "enviado", "req_id": req}
     if not vivo:
         return {"estado": "pendiente", "motivo": ENVIO_SIN_LINEA, "req_id": req}
+    if fila.get("adjunto"):
+        return avance_al_dueno(con, caso, fila, estados.get(req))
     codigo, detalle = tick_envia(caso, fila["texto"], req)
     if codigo is None:
         avance_marca(con, cid, n, "enviado", None, f"avance {n} enviado {req}")
@@ -6118,6 +6198,51 @@ def avance_manda(con, fila):
         return {"estado": "omitido", "motivo": codigo, "req_id": req}
     # La linea caida, sin firma, sin veredicto a tiempo: el tick pregunta con el mismo id.
     return {"estado": "pendiente", "motivo": codigo, "req_id": req}
+
+
+def avance_al_dueno(con, caso, fila, estado):
+    """Un avance con archivo (caso-adjuntos): nunca toma el camino de lo retenido (retirar,
+    reescribir). Queda de borrador en la bandeja —sin `--send`: tampoco sale solo en el chat
+    del dueno— con el archivo y su sha256, y espera su visto en el tablero o por WhatsApp."""
+    cid, n, req = fila["case_id"], fila["n"], fila["req_id"]
+    archivo = json.loads(fila["adjunto"])
+    if estado != "borrador":
+        args = [WA_SEND, f"--id={req}"] + ([f"--line={linea_del_caso(caso)}"]
+                                           if linea_del_caso(caso) else [])
+        args += args_de_archivo(archivo) + [f"--timeout={PLAZO_ENVIO_TICK_S}", "--json", "--",
+                                            caso["chat_jid"], fila["texto"]]
+        try:
+            p = subprocess.run(args, capture_output=True, text=True, env=env_del_plugin(),
+                               timeout=PLAZO_ENVIO_TICK_S + 30)
+        except (OSError, subprocess.SubprocessError):
+            return {"estado": "pendiente", "motivo": "fallo", "req_id": req}
+        if p.returncode != 0:
+            primera = next((l.strip() for l in (p.stderr or "").splitlines() if l.strip()), "")
+            codigo = primera[len("wa-send: "):].split()[0] if primera.startswith("wa-send: ") \
+                else "fallo"
+            if codigo in ("send-bad-file", "send-file-changed", "send-file-unsupported"):
+                avance_marca(con, cid, n, "omitido", codigo, f"avance {n} omitido: {codigo}")
+                return {"estado": "omitido", "motivo": codigo, "req_id": req}
+            return {"estado": "pendiente", "motivo": codigo, "req_id": req}
+    avance_marca(con, cid, n, "espera", "rule: file",
+                 f"avance {n} con archivo, espera al dueno {req}")
+    avisa_borrador_de_caso(con, req)
+    return {"estado": "espera", "motivo": "rule: file", "req_id": req}
+
+
+def avisa_borrador_de_caso(con, req):
+    """El aviso por WhatsApp del borrador con archivo de un avance, como el de una sesion
+    (`draft-notice`): el texto, el archivo y `si <codigo>`. Solo lo encola; lo manda el tick.
+    Sin numero de aprobacion, nada: el borrador igual esta en el tablero."""
+    fila = envio_de(req)
+    aviso_id = PREFIJO_AVISO_BORRADOR + req
+    if not numero_aprobacion() or not fila or fila["estado"] != "borrador" or \
+            con.execute("select 1 from aviso where req_id=?", (aviso_id,)).fetchone():
+        return
+    codigo = codigo_de_borrador(con)
+    aviso_encola(con, aviso_id, TIPO_AVISO_BORRADOR, texto_de_borrador(con, fila, codigo),
+                 version=codigo)
+    con.commit()
 
 
 def avance_sin_salida(con, cid, n):
@@ -6233,7 +6358,9 @@ PISTA_DESCARTA = ("Held again after a rewrite: drop it. Do not rewrite it again 
 
 
 def avance_con_pista(con, cid, n, envio):
-    """El envio de un avance, con su `hint` si quedo retenido."""
+    """El envio de un avance, con su `hint` si quedo retenido o si espera al dueno."""
+    if envio.get("estado") == "espera":
+        return dict(envio, hint=PISTA_ARCHIVO)
     if envio.get("estado") != "retenido":
         return envio
     previo = con.execute("select estado from caso_avance where case_id=? and n<? order by n desc "
@@ -6249,8 +6376,13 @@ def cmd_caso_avance(con, a):
     texto = texto_caso((a.texto or "").strip())
     if not texto:
         caso_falla("E_ARGS", "an update needs its text: what the customer reads")
-    ya = con.execute("select * from caso_avance where case_id=? and texto=? order by n desc "
-                     "limit 1", (cid, texto)).fetchone()
+    # El archivo se mira antes que nada: lo que no puede salir no deja ni el avance.
+    archivo = archivo_del_caso(con, caso, a.archivo) if getattr(a, "archivo", None) else None
+    # El mismo texto con el mismo archivo (o sin ninguno) es el mismo avance.
+    ya = next((f for f in con.execute("select * from caso_avance where case_id=? and texto=? "
+                                      "order by n desc", (cid, texto)).fetchall()
+               if (json.loads(f["adjunto"] or "null") or {}).get("sha256")
+               == (archivo or {}).get("sha256")), None)
     if ya:
         # El mismo texto otra vez (el agente reintenta): no es otro avance.
         con.rollback()
@@ -6278,10 +6410,12 @@ def cmd_caso_avance(con, a):
                                f"can go in {falta} s, only if there is real news")
     n = con.execute("select coalesce(max(n), 0) + 1 from caso_avance where case_id=?",
                     (cid,)).fetchone()[0]
+    adjunto = json.dumps(archivo, sort_keys=True) if archivo else None
     fila = {"case_id": cid, "n": n, "req_id": f"caso-{cid}-avance-{n}", "texto": texto,
-            "actor": a.actor}
-    con.execute("insert into caso_avance (case_id, n, req_id, texto, actor, at) values "
-                "(?,?,?,?,?,?)", (cid, n, fila["req_id"], texto, a.actor, ahora_caso()))
+            "actor": a.actor, "adjunto": adjunto}
+    con.execute("insert into caso_avance (case_id, n, req_id, texto, actor, at, adjunto) values "
+                "(?,?,?,?,?,?,?)", (cid, n, fila["req_id"], texto, a.actor, ahora_caso(),
+                                    adjunto))
     caso_tocar(con, caso, a.actor, f"avance {n} {fila['req_id']}")
     con.commit()
     envio = avance_con_pista(con, cid, n, avance_intenta(con, fila))
@@ -6301,6 +6435,20 @@ def tick_avances(con, resumen):
         elif envio.get("motivo") == ENVIO_SIN_LINEA:
             resumen["sin_transporte"] = True
             return
+    # Los avances con archivo que esperaban al dueno (caso-adjuntos): lo que el aprobo ya
+    # salio; lo que retiro, o lo que se retiro porque el archivo cambio, deja de contar.
+    esperan = [dict(r) for r in con.execute(
+        "select av.* from caso_avance av join caso c on c.case_id=av.case_id where "
+        "av.estado='espera' and c.account=?", (cuenta_activa(),))]
+    estados, _ = envios_del_almacen([f["req_id"] for f in esperan]) if esperan else ({}, False)
+    for fila in esperan:
+        cid, n, req = fila["case_id"], fila["n"], fila["req_id"]
+        estado = estados.get(req)
+        if estado == "enviado":
+            avance_marca(con, cid, n, "enviado", None, f"avance {n} enviado {req}")
+        elif estado in ("cancelado", "rechazado"):
+            motivo = "send-cancelled" if estado == "cancelado" else "send-rejected"
+            avance_marca(con, cid, n, "omitido", motivo, f"avance {n} omitido: {motivo}")
 
 
 def cmd_caso_unir(con, a):
@@ -9849,7 +9997,12 @@ def tarjeta_de(caso, nombres, titulos, motivos, eventos=None, sin_agente=None,
                          **({"destino": {"chat_jid": propuesta["chat"],
                                          "chat_name": nombres.get(propuesta["chat"])
                                          or propuesta["chat"]}}
-                            if destino_de_propuesta(caso) else {})) if propuesta else None,
+                            if destino_de_propuesta(caso) else {}),
+                         # El archivo (caso-adjuntos): cual y cuanto pesa, nunca la ruta. El
+                         # dueno aprueba algo que nadie mas pudo leer.
+                         **({"file": {"name": str(archivo_de_propuesta(caso).get("nombre") or "?"),
+                                      "bytes": int(archivo_de_propuesta(caso).get("bytes") or 0)}}
+                            if archivo_de_propuesta(caso) else {})) if propuesta else None,
         "exceptions": excepciones_de_tarjeta(caso),
         "blocked_reason": (motivos.get(caso["case_id"]) if caso["etapa"] == "bloqueado"
                            else None),
@@ -10271,7 +10424,9 @@ def motivos_de_retenido(detalle):
 
 def retenidos_del_tablero(con, cuenta):
     """Los borradores de la linea activa que esperan al dueno y no son de ningun caso: el
-    aviso de la sesion de un proyecto que el piso freno, por ejemplo. Sin esto nadie los
+    aviso de la sesion de un proyecto que el piso freno, por ejemplo. Y el avance con archivo
+    de un caso (`caso-<id>-avance-<n>`, caso-adjuntos): espera su visto como cualquier
+    retenido; la respuesta de un caso, en cambio, se aprueba en su tarjeta. Sin esto nadie los
     podia aprobar: `wa-send --approve` ya no es de los agentes. Va el texto, como la
     propuesta de una tarjeta: aprobar sin leerlo seria a ciegas. Del mas viejo al mas nuevo."""
     ruta = wa_store.store_db_path()
@@ -10283,8 +10438,9 @@ def retenidos_del_tablero(con, cuenta):
         # `select *`: la columna `adjunto` falta en un almacen de antes de los archivos.
         filas = fuente.execute(
             "select * from envio where "
-            "estado='borrador' and account=? and req_id not like 'caso-%' and req_id not like "
-            "'aviso-%' order by created_at, rowid limit ?", (cuenta, TOPE_RETENIDOS)).fetchall()
+            "estado='borrador' and account=? and (req_id not like 'caso-%' or req_id like "
+            "'caso-%-avance-%') and req_id not like 'aviso-%' order by created_at, rowid limit ?",
+            (cuenta, TOPE_RETENIDOS)).fetchall()
         fuente.close()
     except sqlite3.Error:
         return []
@@ -13270,6 +13426,31 @@ def aviso_contestado(con, aviso):
     con.commit()
 
 
+def borrador_y_visto(caso, texto, req, por):
+    """La respuesta firmada por el dueno, como la entrega el tablero (`entregar` en
+    acciones.mjs): el borrador con el id del caso y `--approve` con la llave SOLO en ese hijo.
+    Con el archivo de la propuesta (caso-adjuntos) y el sha256 que firmo: si el archivo cambio,
+    `send-file-changed` y no sale. Devuelve None si salio, o el codigo de `wa-send`."""
+    linea = linea_de_envio(caso)
+    args = [WA_SEND, f"--id={req}"] + ([f"--line={linea}"] if linea else [])
+    args += args_de_archivo(archivo_de_propuesta(caso))
+    pasos = ((args + [f"--timeout={PLAZO_ENVIO_TICK_S}", "--json", "--",
+                      destino_de_propuesta(caso) or caso["chat_jid"], texto], env_del_plugin()),
+             ([WA_SEND, "--approve", req, "--by", por, f"--timeout={PLAZO_ENVIO_TICK_S}",
+               "--json"], env_del_plugin(llave=True)))
+    for paso, env in pasos:
+        try:
+            p = subprocess.run(paso, capture_output=True, text=True, env=env,
+                               timeout=PLAZO_ENVIO_TICK_S + 30)
+        except (OSError, subprocess.SubprocessError):
+            return ENVIO_SIN_LINEA
+        if p.returncode != 0:
+            primera = next((l.strip() for l in (p.stderr or "").splitlines() if l.strip()), "")
+            return primera[len("wa-send: "):].split()[0] if primera.startswith("wa-send: ") \
+                else "fallo"
+    return None
+
+
 def entrega_del_dueno(con, caso, tx):
     """La respuesta aprobada por el dueno sale como la del tablero (`entregar` en
     acciones.mjs): el borrador con el id del caso y `--approve`, que es la firma del dueno y
@@ -13284,28 +13465,14 @@ def entrega_del_dueno(con, caso, tx):
     destino = destino_de_propuesta(caso)
     # Un destino en borrador (la orden del dueno, ordenes-del-dueno) sale como cualquier chat
     # en borrador: la firma del dueno lo manda. Otro destino pasa por el piso y Jev de alla.
-    if destino and modo_de_destino(con, caso) != "borrador":
+    # Con un archivo no: su firma ya es la del dueno, y sale como borrador y `--approve`.
+    if destino and modo_de_destino(con, caso) != "borrador" and not archivo_de_propuesta(caso):
         return entrega_a_otro_chat(con, caso, texto, tx)
-    linea = linea_de_envio(caso)
-    args = [WA_SEND, f"--id={req}"] + ([f"--line={linea}"] if linea else [])
-    con_llave = env_del_plugin(llave=True)
-    pasos = ((args + [f"--timeout={PLAZO_ENVIO_TICK_S}", "--json", "--", destino or caso["chat_jid"],
-                      texto], env_del_plugin()),
-             ([WA_SEND, "--approve", req, "--by", "whatsapp-reply",
-               f"--timeout={PLAZO_ENVIO_TICK_S}", "--json"], con_llave))
-    for paso, env in pasos:
-        try:
-            p = subprocess.run(paso, capture_output=True, text=True, env=env,
-                               timeout=PLAZO_ENVIO_TICK_S + 30)
-        except (OSError, subprocess.SubprocessError):
-            return tx["aprobado_linea"].format(n=n)
-        if p.returncode != 0:
-            primera = next((l.strip() for l in (p.stderr or "").splitlines() if l.strip()), "")
-            codigo = primera[len("wa-send: "):].split()[0] if primera.startswith("wa-send: ") \
-                else "fallo"
-            if codigo in (ENVIO_SIN_LINEA, "send-timeout"):
-                return tx["aprobado_linea"].format(n=n)
-            return tx["aprobado_falla"].format(n=n, x=codigo)
+    codigo = borrador_y_visto(caso, texto, req, "whatsapp-reply")
+    if codigo in (ENVIO_SIN_LINEA, "send-timeout"):
+        return tx["aprobado_linea"].format(n=n)
+    if codigo:
+        return tx["aprobado_falla"].format(n=n, x=codigo)
     caso_toma(con)
     try:
         actual = caso_de(con, n)
@@ -14857,6 +15024,18 @@ def tick_caso(con, caso, texto, estados, resumen):
     # Super admin sale solo con la firma del dueno (respuesta-otro-chat).
     firmada_por_dueno = (destino_de_propuesta(caso) is not None
                          and caso.get("propuesta_aprobada") == version)
+    if archivo_de_propuesta(caso) and caso.get("propuesta_aprobada") == version:
+        # Un archivo que el dueno firmo y no salio (su clic fallo a mitad): sale como lo
+        # entrega el tablero, borrador y `--approve`, con el sha256 que firmo (caso-adjuntos).
+        codigo = borrador_y_visto(caso, texto, req, "board")
+        if codigo is None:
+            if tick_cierra(con, cid, "respondido", f"enviado {req}"):
+                resumen["enviados"] += 1
+        elif codigo == ENVIO_SIN_LINEA:
+            resumen["sin_transporte"] = True
+        else:
+            resumen["errores"] += 1
+        return
     try:
         if not firmada_por_dueno:
             cmd_caso_aprobar(con, argparse.Namespace(id=cid, version=version, actor="regla"))
@@ -18344,6 +18523,10 @@ def main():
     c.add_argument("--evidencia", help="when the reply says work was done: what proves it (a "
                                        "link, a file, a commit). The plugin's review reads it "
                                        "with the reply, so a status it backs is not held")
+    c.add_argument("--file", dest="archivo", metavar="PATH",
+                   help="with responder: attach this file to the reply. Only when the chat "
+                        "that receives it has send_files on (E_FILES_OFF); E_BAD_FILE for a "
+                        "key, a link or an empty file. The owner always approves it")
     c.add_argument("--espera", choices=list(ESPERAS),
                    help="with responder: what the reply waits for once sent. nosotros: we still "
                         "owe the real answer (it comes back to you if none goes out in "
@@ -18415,6 +18598,11 @@ def main():
                                   "E_DEST_ROLE (a customer's case), E_DEST_NOT_FOUND, "
                                   "E_DEST_AMBIGUOUS (pass the JID), E_DEST_LINE, E_DEST_MODE, "
                                   "E_ARGS (necesita or bloqueado)")
+    c.add_argument("--file", dest="archivo", metavar="PATH",
+                   help="with resuelto or necesita: attach this file to the reply. Only when "
+                        "the chat that receives it has send_files on (E_FILES_OFF); E_BAD_FILE "
+                        "for a key, a link or an empty file. The owner always approves it: "
+                        "the rule never does")
     # Solo el trabajador: es su reporte, y cualquier otro firmandolo seria un resultado
     # de un trabajo que no hizo.
     c.add_argument("--actor", required=True, choices=["trabajador"])
@@ -18433,6 +18621,11 @@ def main():
                             "E_MAX_UPDATES")
     c.add_argument("id", type=int)
     c.add_argument("texto", help="what the customer reads; signed like every message")
+    c.add_argument("--file", dest="archivo", metavar="PATH",
+                   help="attach this file (the text is its caption). Only when the chat has "
+                        "send_files on (E_FILES_OFF otherwise); a key, a link or an empty file is "
+                        "E_BAD_FILE. It never goes out by itself: it waits for the owner's "
+                        "approval (estado espera), in every chat. Do not send it again")
     c.add_argument("--actor", default="agente", choices=["agente", "trabajador"],
                    help="agente (the cases agent) or trabajador (the project agent)")
     c.set_defaults(fn=cmd_caso_avance)
