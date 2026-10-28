@@ -120,6 +120,14 @@ WhatsApp no tiene borradores del lado del servidor. Esa escalera solo existía m
 el agente conducía una pantalla. Hoy el texto se guarda y espera: `wa-send --drafts`
 lista lo que hay, y lo único que lo pone en la línea es la aprobación del dueño.
 
+**Archivos.** `wa-send "<chat>" "<pie>" --file <ruta> --send` manda un archivo como
+documento por la misma bandeja, con el texto de pie. Solo sale un archivo común (no un
+enlace), de hasta 64 MB, sin forma de llave o credencial (`.env`, `.pem`, `id_rsa`, `*.db`…)
+y fuera de `~/.ssh`, `~/.aws`, `~/.wa-inbox` y parecidos; si no, `send-bad-file`. Ni el piso
+ni Jev leen un binario, así que a cualquiera que no sea el propio chat del dueño **siempre
+espera su aprobación**: el tablero y el aviso por WhatsApp dicen cuál archivo es y cuánto
+pesa. El sidecar lo lee al mandar y lo rechaza si cambió desde que se pidió (tamaño o sha256).
+
 **Solo el dueño aprueba.** Un mensaje retenido sale cuando el dueño lo aprueba en el
 tablero o contesta el aviso del plugin por WhatsApp, y por ningún otro camino. Antes,
 cualquier sesión que pudiera correr la CLI podía aprobarlo con `wa-send --approve` (el

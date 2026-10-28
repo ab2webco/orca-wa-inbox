@@ -22,6 +22,9 @@
 // dos drenados no pueden mandar lo mismo dos veces. Un mensaje repetido a un grupo de un
 // cliente no se retira con una disculpa.
 
+import { createHash } from 'node:crypto'
+import { readFileSync } from 'node:fs'
+
 // Los estados de una peticion. Son contrato con `bin/wa-send`, que los lee del mismo
 // archivo: el panel y los CLI traducen por codigo, nunca por texto (§11-E1).
 export const ENVIO = Object.freeze({
@@ -69,6 +72,49 @@ export function motivoDeFallo (error) {
     .slice(0, 160)
 }
 
+// El tope de un adjunto. El MISMO numero vive en `bin/wa-send` (ADJUNTO_MAX_BYTES): alla
+// se niega antes de encolar, aca se vuelve a mirar porque entre una cosa y la otra el
+// archivo pudo crecer.
+export const ADJUNTO_MAX_BYTES = 64 * 1024 * 1024
+
+/** El adjunto de una fila, ya leido, o `null` si la fila es solo texto.
+ *
+ *  Se lee AL MANDAR, no al encolar: un borrador puede esperar horas al dueno y la base no
+ *  es lugar para megas. Por eso se guarda con bytes y sha256: lo que sale tiene que ser
+ *  exactamente lo que se pidio (y lo que el dueno aprobo), no lo que haya hoy en esa
+ *  ruta. Cualquier diferencia es un error, y el envio se cierra como rechazado. */
+export function leerAdjunto (fila, leer = readFileSync) {
+  if (!fila?.adjunto) return null
+  let meta
+  try {
+    meta = JSON.parse(fila.adjunto)
+  } catch {
+    throw new Error('adjunto ilegible')
+  }
+  if (!meta?.ruta || !meta?.nombre) throw new Error('adjunto sin ruta')
+  let datos
+  try {
+    datos = leer(meta.ruta)
+  } catch {
+    // El error de `fs` trae la ruta, y el motivo termina en un log: va sin ella.
+    throw new Error('el adjunto no se pudo leer')
+  }
+  if (datos.length > ADJUNTO_MAX_BYTES) throw new Error('adjunto demasiado grande')
+  if (datos.length !== meta.bytes) throw new Error('el adjunto cambio desde que se pidio')
+  const sha = createHash('sha256').update(datos).digest('hex')
+  if (sha !== meta.sha256) throw new Error('el adjunto cambio desde que se pidio')
+  return { datos, nombre: String(meta.nombre), mimetype: meta.mimetype || 'application/octet-stream' }
+}
+
+/** Lo que se le pasa a `sock.sendMessage`: el texto, o el documento con el cuerpo de pie. */
+export function contenidoDe (fila, leer = readFileSync) {
+  const adjunto = leerAdjunto(fila, leer)
+  if (!adjunto) return { text: fila.body }
+  const contenido = { document: adjunto.datos, mimetype: adjunto.mimetype, fileName: adjunto.nombre }
+  if (fila.body) contenido.caption = fila.body
+  return contenido
+}
+
 /**
  * Vacia la bandeja de salida contra el socket, y deja el veredicto de cada peticion.
  *
@@ -81,7 +127,7 @@ export function motivoDeFallo (error) {
  * al dueno que WhatsApp se nego a un mensaje que nunca lo vio.
  */
 export async function atenderSalida ({ almacen, enviar, conectado = true,
-  ahora = () => Date.now(), maximo = POR_VUELTA, cuenta } = {}) {
+  ahora = () => Date.now(), maximo = POR_VUELTA, cuenta, leer = readFileSync } = {}) {
   if (!almacen || typeof enviar !== 'function' || !conectado) return { enviados: 0, rechazados: 0 }
   // Cada numero, su linea: el socket solo manda lo encolado para SU cuenta. Lo de otro
   // numero queda pendiente hasta que ese numero se vuelva a vincular. `null` es "todavia
@@ -98,7 +144,7 @@ export async function atenderSalida ({ almacen, enviar, conectado = true,
     const fila = almacen.tomarEnvio(ahora(), cuenta)
     if (!fila) break
     try {
-      const r = await enviar(fila.chat_jid, { text: fila.body })
+      const r = await enviar(fila.chat_jid, contenidoDe(fila, leer))
       almacen.resolverEnvio(fila.req_id, { estado: ENVIO.ENVIADO,
         stanzaId: r?.key?.id || null, ahora: ahora() })
       enviados += 1
@@ -129,7 +175,10 @@ export async function atenderSalida ({ almacen, enviar, conectado = true,
 export function mensajeDeEnvio ({ almacen, cuenta, key }) {
   if (!almacen || !cuenta || !key?.id) return undefined
   const fila = almacen.envioPorStanza(cuenta, key.id)
-  return fila ? { extendedTextMessage: { text: fila.body } } : undefined
+  // Un documento no se rearma desde aca: su forma lleva la llave de cifrado del medio que
+  // subio Baileys, y eso no se guarda. Sin mensaje, Baileys no lo reenvia.
+  if (!fila || fila.adjunto) return undefined
+  return { extendedTextMessage: { text: fila.body } }
 }
 
 // Lo mismo que Baileys usa de fabrica para la cuenta de reintentos (DEFAULT_CACHE_TTLS

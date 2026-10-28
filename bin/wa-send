@@ -97,7 +97,7 @@ through the same approval, and `no <code>` withdraws it. A secret-shaped value o
 credential never travels in that notice and is approved on the board only. The code is
 never printed here: only his reply from his phone counts.
 """
-import argparse, os, sqlite3, subprocess, sys, time, uuid
+import argparse, hashlib, json, mimetypes, os, re, sqlite3, stat, subprocess, sys, time, uuid
 
 # Sin esto Python deja un __pycache__ DENTRO de bin/, y el directorio del plugin
 # instalado esta direccionado por hash.
@@ -201,6 +201,23 @@ ID_EN_USO = "send-id-conflict"
 # Jev no contesto (sin red, error, timeout o una respuesta que no se entiende). Con la
 # llave puesta eso deja borrador: Jev falla CERRADO (kanban-casos, "Jev").
 JEV_NO_CONTESTA = "jev-unavailable"
+
+# El archivo de `--file` que no puede salir: no existe, no es un archivo comun, es un
+# enlace, esta vacio, pasa el tope, o tiene forma de secreto. No se encola nada.
+ADJUNTO_INVALIDO = "send-bad-file"
+# El almacen es de un sidecar de antes de los adjuntos (sin la columna `adjunto`): mandar
+# el texto solo seria mandar otra cosa que la pedida.
+ADJUNTO_SIN_SOPORTE = "send-file-unsupported"
+# El MISMO numero que ADJUNTO_MAX_BYTES en `sidecar/src/envio.js`.
+ADJUNTO_MAX_BYTES = 64 * 1024 * 1024
+# Lo que nunca sale como adjunto, por nombre: llaves, certificados, env y bases de claves.
+ADJUNTO_SECRETO = re.compile(
+    r"(^\.env(\..*)?$|^\.netrc$|^\.npmrc$|^\.pypirc$|^id_(rsa|dsa|ecdsa|ed25519)(\.pub)?$|"
+    r"\.(pem|key|p12|pfx|jks|keystore|kdbx|ovpn|gpg|asc)$|credential|secret|token|password|"
+    r"approver\.key$|\.db$|\.sqlite3?$)", re.IGNORECASE)
+# Directorios de los que nunca sale nada: llaves, nubes y el propio plugin.
+ADJUNTO_DIRS_VEDADOS = (".ssh", ".gnupg", ".aws", ".azure", ".kube", ".docker",
+                        ".config/gcloud", ".wa-inbox", ".config/orca-ide")
 
 # Salidas. `3` es la misma que la compuerta `wa-scope check`: denegado, se anota y se
 # sigue. `4` es la misma que `wa-read` sin linea enlazada: no hay de donde, y no hay
@@ -467,20 +484,88 @@ def con_transporte(cuenta=None):
     return con
 
 
-def encolar(con, fila, texto, req_id, estado):
+def tamano(n):
+    """Bytes en palabras, para el aviso del dueno y el listado de borradores."""
+    for unidad in ("B", "KB", "MB"):
+        if n < 1024 or unidad == "MB":
+            return f"{n:.0f} {unidad}" if unidad == "B" else f"{n:.1f} {unidad}"
+        n /= 1024
+
+
+def validar_adjunto(ruta):
+    """El adjunto de `--file`, como lo guarda la bandeja (dict), o la negativa.
+
+    Falla cerrada: solo un archivo comun, no un enlace (lo que se aprueba tiene que ser lo
+    que sale), fuera de los directorios de llaves y del plugin, y sin nombre de secreto. El
+    contenido no se revisa —es binario—: por eso todo adjunto a alguien que no es el dueno
+    espera su visto (`main`)."""
+    absoluta = os.path.abspath(os.path.expanduser(ruta))
+    try:
+        info = os.lstat(absoluta)
+    except OSError:
+        niega(ADJUNTO_INVALIDO, f"{ruta!r} does not exist or cannot be read. Nothing was sent.")
+    if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
+        niega(ADJUNTO_INVALIDO, f"{ruta!r} is not a regular file (links are refused). "
+                                "Nothing was sent.")
+    if info.st_size == 0 or info.st_size > ADJUNTO_MAX_BYTES:
+        niega(ADJUNTO_INVALIDO, f"{ruta!r} is empty or over {tamano(ADJUNTO_MAX_BYTES)}. "
+                                "Nothing was sent.")
+    nombre = os.path.basename(absoluta)
+    casa = os.path.realpath(os.path.expanduser("~"))
+    real = os.path.realpath(absoluta)
+    vedado = any(real == os.path.join(casa, d) or real.startswith(os.path.join(casa, d) + os.sep)
+                 for d in ADJUNTO_DIRS_VEDADOS)
+    if vedado or ADJUNTO_SECRETO.search(nombre):
+        niega(ADJUNTO_INVALIDO, f"{nombre!r} looks like a key, a credential or the plugin's "
+                                "own data: it never goes out as a file. Nothing was sent.")
+    sha = hashlib.sha256()
+    with open(absoluta, "rb") as f:
+        for bloque in iter(lambda: f.read(1 << 20), b""):
+            sha.update(bloque)
+    tipo = mimetypes.guess_type(nombre)[0] or "application/octet-stream"
+    return {"ruta": real, "nombre": nombre, "mimetype": tipo, "bytes": info.st_size,
+            "sha256": sha.hexdigest()}
+
+
+def adjunto_de(fila):
+    """El adjunto guardado en una fila de la bandeja (dict), o None."""
+    try:
+        crudo = fila["adjunto"]
+    except (IndexError, KeyError):
+        return None
+    try:
+        return json.loads(crudo) if crudo else None
+    except ValueError:
+        return None
+
+
+def encolar(con, fila, texto, req_id, estado, adjunto=None):
     """Deja la peticion, o devuelve la que ya estaba con ese id.
 
     `do nothing` y no `do update`: el mismo `req_id` es el MISMO pedido. Esto es lo que
     hace que un reintento —o dos corridas del agente sobre la misma tarjeta— entreguen
     una sola vez."""
-    con.execute(
-        "insert into envio (req_id, account, chat_jid, chat_name, body, estado, "
-        "created_at) values (?,?,?,?,?,?,?) on conflict(req_id) do nothing",
-        (req_id, fila["account"], fila["chat_jid"], fila["chat_name"], texto, estado,
-         int(time.time())))
+    meta = json.dumps(adjunto, sort_keys=True) if adjunto else None
+    if adjunto is None:
+        con.execute(
+            "insert into envio (req_id, account, chat_jid, chat_name, body, estado, "
+            "created_at) values (?,?,?,?,?,?,?) on conflict(req_id) do nothing",
+            (req_id, fila["account"], fila["chat_jid"], fila["chat_name"], texto, estado,
+             int(time.time())))
+    else:
+        columnas = [c[1] for c in con.execute("pragma table_info(envio)").fetchall()]
+        if "adjunto" not in columnas:
+            niega(ADJUNTO_SIN_SOPORTE, "the WhatsApp sidecar running now predates files: "
+                                       "restart Orca so it upgrades the outbox. Nothing was sent.")
+        con.execute(
+            "insert into envio (req_id, account, chat_jid, chat_name, body, estado, "
+            "created_at, adjunto) values (?,?,?,?,?,?,?,?) on conflict(req_id) do nothing",
+            (req_id, fila["account"], fila["chat_jid"], fila["chat_name"], texto, estado,
+             int(time.time()), meta))
     con.commit()
     previa = con.execute("select * from envio where req_id=?", (req_id,)).fetchone()
-    if previa["body"] != texto or previa["chat_jid"] != fila["chat_jid"]:
+    if previa["body"] != texto or previa["chat_jid"] != fila["chat_jid"] \
+            or adjunto_de(previa) != (json.loads(meta) if meta else None):
         niega(ID_EN_USO,
               f"the id {req_id!r} already names another request, for a different "
               "conversation or with a different text. Nothing was sent: pick a new id.")
@@ -743,9 +828,9 @@ def como_se_aprueba(avisado):
 
 
 def deja_borrador(con, fila, texto, req_id, salida_json, pedia_envio, frenado=None,
-                  reescribir=False):
+                  reescribir=False, adjunto=None):
     """Escribe el borrador y dice como se aprueba. No manda nada."""
-    encolar(con, fila, texto, req_id, BORRADOR)
+    encolar(con, fila, texto, req_id, BORRADOR, adjunto)
     anotar_borrador(fila, req_id, frenado)
     # Lo que el chat deja al agente (reescribir) es de quien lo escribio, no del dueno.
     avisado = not reescribir and pide_aviso_al_dueno(fila, req_id)
@@ -787,12 +872,15 @@ def listar_borradores(salida_json):
     activas = wa_store.lineas_activas_en_disco()
     solo_activas = (f" and account in ({','.join('?' * len(activas))})" if activas else "")
     filas = con.execute(
-        f"select req_id, chat_name, body, created_at from envio where estado=?{solo_activas} "
+        f"select * from envio where estado=?{solo_activas} "
         "order by created_at, rowid", (BORRADOR, *activas)).fetchall()
     if salida_json:
         import json
         print(json.dumps([{"req_id": f["req_id"], "chat": f["chat_name"],
-                           "text": f["body"], "created_at": f["created_at"]}
+                           "text": f["body"], "created_at": f["created_at"],
+                           "file": ({"name": adjunto_de(f)["nombre"],
+                                     "bytes": adjunto_de(f)["bytes"]}
+                                    if adjunto_de(f) else None)}
                           for f in filas], ensure_ascii=False, indent=2))
         sys.exit(0)
     if not filas:
@@ -803,6 +891,8 @@ def listar_borradores(salida_json):
         print(f"{f['req_id']}  {cuando}  {f['chat_name']}")
         for renglon in (f["body"] or "").splitlines():
             print(f"    {renglon}")
+        if adjunto_de(f):
+            print(f"    [file] {adjunto_de(f)['nombre']} ({tamano(adjunto_de(f)['bytes'])})")
         print(f"    -> {ESPERA_AL_DUENO}")
     sys.exit(0)
 
@@ -910,6 +1000,9 @@ def main():
                          "status backed by it is not held as unverified")
     ap.add_argument("--answers", metavar="TEXT",
                     help="the message this reply answers, for Jev's review")
+    ap.add_argument("--file", metavar="PATH", dest="archivo",
+                    help="send this file as a document, with the text as its caption. "
+                         "To anyone but the owner it always waits for his approval")
     ap.add_argument("--json", action="store_true", help="machine-readable output")
     a = ap.parse_args()
 
@@ -919,8 +1012,12 @@ def main():
         aprobar(a.approve, a.timeout, a.json, a.por)
     if a.cancel:
         cancelar(a.cancel, a.reason, a.json)
+    if a.archivo and a.text is None:
+        a.text = ""
     if not a.chat or a.text is None:
         ap.error("the chat and the text are required (or use --drafts / --cancel)")
+    # El archivo se mira antes que nada: lo que no puede salir no deja ni borrador.
+    adjunto = validar_adjunto(a.archivo) if a.archivo else None
 
     # La linea se decide ANTES de tocar nada. El mismo grupo puede existir en dos
     # lineas, y elegir "la primera" ahi le escribe a la conversacion equivocada.
@@ -993,7 +1090,7 @@ def main():
     # sin nadie mirando. Con `--send` en `borrador`, tampoco — pero se dice distinto.
     if modo == MODO_BORRADOR or not a.send:
         deja_borrador(con, fila, a.text, req_id, a.json,
-                      pedia_envio=a.send and modo == MODO_BORRADOR)
+                      pedia_envio=a.send and modo == MODO_BORRADOR, adjunto=adjunto)
 
     # La revision, solo sobre lo que de verdad va a salir: el piso fijo siempre, y Jev
     # con la llave. Cualquiera de los dos que lo frene (o Jev sin contestar) lo deja
@@ -1023,9 +1120,19 @@ def main():
     frenado = motivos_de(piso, jev)
     if frenado:
         deja_borrador(con, fila, a.text, req_id, a.json, pedia_envio=True,
-                      frenado=frenado, reescribir=para_el_agente(piso, jev, niv))
+                      frenado=frenado, reescribir=para_el_agente(piso, jev, niv),
+                      adjunto=adjunto)
+    # Un archivo no lo lee ni el piso ni Jev (es binario): a cualquiera que no sea el dueno
+    # sale solo con su visto. Ni el operador se lo salta: un archivo es la forma mas facil de
+    # sacar datos, y quien decide que datos salen es el dueno.
+    if adjunto and not wa_store.chat_del_dueno(con, fila["account"], fila["chat_jid"],
+                                               duenos_linea):
+        # `rule: file`, con la forma de los otros motivos: el tablero y el aviso lo traducen,
+        # y la bitacora no lleva el nombre del archivo (va el id, no el contenido).
+        deja_borrador(con, fila, a.text, req_id, a.json, pedia_envio=True,
+                      frenado=["rule: file"], adjunto=adjunto)
 
-    encolar(con, fila, a.text, req_id, PENDIENTE)
+    encolar(con, fila, a.text, req_id, PENDIENTE, adjunto)
     veredicto(con, req_id, a.timeout, a.json, fila.get("account"))
 
 
