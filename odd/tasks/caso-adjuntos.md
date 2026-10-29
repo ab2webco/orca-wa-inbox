@@ -22,15 +22,26 @@ global value with a per-chat override, default OFF.
 3. Hash check before send.
 
 ## Checklist
-- [ ] T1 RED tests: setting off refused; on -> draft not sent; owner chat still held; file changed after approval refused; approval -> sent once
-- [ ] T2 shared validar_adjunto in wa_store + sha256 in adjunto meta + sender re-check
-- [ ] T3 setting send_files (global + per chat, default off, ALTER) incl. panel UI
-- [ ] T4 caso avance/resultado --file (+ --chat target gate), responder proposal forces ask
-- [ ] T5 harness docs/skill + E_ code; held card shows file
-- [ ] T6 screenshots (reduced: WA_INBOX_SOLO/TEMA/ANCHO/IDIOMA) of settings panel and held card; build:sidecar if sidecar/src touched
+- [x] T1 RED tests: setting off refused; on -> draft not sent; owner chat still held; file changed after approval refused; approval -> sent once (RED observed: `wa-scope set --send-files` unknown, `caso avance --file` unknown; commit 7b87f31)
+- [x] T2 shared validar_adjunto in wa_store + sha256 in adjunto meta + sender re-check (`wa-send --file-sha256`, re-hash in `--approve` -> `send-file-changed`; check-casos caso-adjuntos green)
+- [x] T3 setting send_files (global + per chat, default off, ALTER) incl. panel UI (panels RED 6 fails -> green)
+- [x] T4 caso avance/resultado --file (+ --chat target gate), responder proposal forces ask; board Enviar / `si N` / tick send the signed file as draft + `--approve` (worker RED 4 fails -> green)
+- [x] T5 harness docs/skill + E_FILES_OFF / E_BAD_FILE; held card and case card show the file (panels RED 3 fails -> green)
+- [x] T6 screenshots (reduced: WA_INBOX_SOLO/TEMA/ANCHO/IDIOMA) of settings panel and held card, 1440 and 390, light and dark, es; build:sidecar run (only a comment changed, bundle identical). The board shot caught the held list hiding `caso-<id>-avance-<n>`: fixed in 652a730
 
 ## Acceptance
 All tests green (python + node), no debug output, no `any`, Spanish code comments / English agent-facing text, conventional commits, no AI attribution.
 
 ## Checks
 Run the repo's test scripts (see package.json) from this worktree only.
+
+## Decisions taken while implementing
+- A waiting file update (`caso_avance.estado = espera`) counts toward `updates_max` and pacing (it goes out if approved).
+- A file update is drafted without `--send` (`rule: file` noted), so the owner's own chat is held too; it never takes the retenido path.
+- The tick reconciles waiting updates with the outbox: sent -> enviado; cancelled/rejected -> omitido.
+- Only case updates WITH a file reach the held list; a case reply is approved on its card, which shows the file name and size.
+- Editing a file reply on the board keeps the file but re-hashes it at edit time.
+
+## Known gaps
+- `caso resultado --estado necesita --file` is accepted but not covered by a test.
+- An owner-signed file reply delivered by the tick logs `approved on the board` even if he signed by WhatsApp.
