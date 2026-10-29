@@ -3895,6 +3895,10 @@ if opcion(argv, '--actor') is None and sub != 'ver': falla('E_ARGS', 'no actor')
 if sub == 'propuesta':
     texto = opcion(argv, '--respuesta')
     caso['propuesta'] = {'tipo': opcion(argv, '--tipo'), 'respuesta': texto}
+    archivo = opcion(argv, '--file')
+    if archivo:
+        caso['propuesta']['archivo'] = {'ruta': archivo, 'nombre': os.path.basename(archivo),
+                                        'bytes': 10, 'sha256': 'f' * 64}
     destino = opcion(argv, '--chat')
     if destino:
         caso['propuesta']['chat'] = destino
@@ -4092,6 +4096,54 @@ const verbo = (llamada) => llamada[1]
   const tarde = await pideCaso(orca, { action: 'cancelar-retenido', reqId: 'nota-proyecto-3' })
   ok('lo que ya no era un borrador no se cancela, y se dice', tarde && tarde.ok === false &&
     tarde.code === 'send-no-draft', JSON.stringify(tarde))
+  apagar()
+}
+
+{
+  // caso-adjuntos: la respuesta con archivo sale con la firma del dueno como borrador y
+  // `--approve`, con la ruta y el sha256 que firmo. Nunca con `--send`, ni a otro chat.
+  const ARCHIVO = { ruta: '/tmp/docs/informe-ejemplo.pdf', nombre: 'informe-ejemplo.pdf',
+    mimetype: 'application/pdf', bytes: 10, sha256: 'e'.repeat(64) }
+  const conArchivo = (extra = {}) => casoDe({ propuesta: { tipo: 'responder',
+    respuesta: 'Le comparto el informe.', archivo: ARCHIVO }, ...extra })
+  const f = herramientasCaso('caso-archivo', { casos: {
+    7: conArchivo(),
+    8: conArchivo({ case_id: 8, propuesta: { tipo: 'responder', respuesta: 'Le comparto el informe.',
+      archivo: ARCHIVO, chat: '120363000000000002@g.us' },
+    destino: { chat_jid: '120363000000000002@g.us', chat_name: 'Grupo Destino', retenido: false } }),
+    9: conArchivo({ case_id: 9 }) } })
+  const orca = hostFalso(f.dir, { chats: [] })
+  const { apagar } = await arranca(orca)
+  const v = await pideCaso(orca, { action: 'enviar', caseId: 7, version: V1 })
+  const [borrador, aprobacion] = f.send()
+  ok('adjuntos: Enviar una respuesta con archivo deja el borrador con la ruta y el sha256 firmado',
+    v && v.ok === true && borrador && borrador.includes(`--file=${ARCHIVO.ruta}`) &&
+    borrador.includes(`--file-sha256=${ARCHIVO.sha256}`) && !borrador.includes('--send'),
+  JSON.stringify(f.send()))
+  ok('adjuntos: y lo aprueba el dueno', aprobacion && aprobacion[0] === '--approve',
+    JSON.stringify(f.send()))
+  const otro = await pideCaso(orca, { action: 'enviar', caseId: 8, version: V1 })
+  const [borradorOtro, aprobacionOtro] = f.send().slice(2)
+  ok('adjuntos: a otro chat tampoco va con --send: borrador con el archivo y --approve',
+    otro && otro.ok === true && borradorOtro && !borradorOtro.includes('--send') &&
+    borradorOtro.includes('120363000000000002@g.us') &&
+    borradorOtro.includes(`--file-sha256=${ARCHIVO.sha256}`) &&
+    aprobacionOtro && aprobacionOtro[0] === '--approve', JSON.stringify(f.send()))
+  const editada = await pideCaso(orca, { action: 'editar-enviar', caseId: 9, version: V1,
+    texto: 'Le comparto el informe corregido.' })
+  const propuesta = f.scope().find((a) => verbo(a) === 'propuesta')
+  const borradorEditado = f.send().slice(4)[0]
+  ok('adjuntos: corregir el texto conserva el archivo de la propuesta',
+    editada && editada.ok === true && propuesta && propuesta.includes(`--file=${ARCHIVO.ruta}`) &&
+    borradorEditado && borradorEditado.some((x) => x.startsWith('--file=')),
+  JSON.stringify({ propuesta, send: f.send() }))
+  const avance = await pideCaso(orca, { action: 'aprobar-retenido', reqId: 'caso-7-avance-2' })
+  ok('adjuntos: el avance con archivo de un caso se aprueba como cualquier retenido',
+    avance && avance.ok === true && f.send().at(-1)[0] === '--approve' &&
+    f.send().at(-1)[1] === 'caso-7-avance-2', JSON.stringify(avance))
+  const caso = await pideCaso(orca, { action: 'aprobar-retenido', reqId: 'caso-7-a1a1a1a1a1a1' })
+  ok('adjuntos: la respuesta de un caso sigue yendo por su tarjeta',
+    caso && caso.ok === false && caso.code === 'E_ARGS', JSON.stringify(caso))
   apagar()
 }
 

@@ -1502,7 +1502,7 @@ const ALCANCE_POR_LINEA_KEY = 'alcancePorLinea'
 // el pedido llega del panel y no es lugar para dejar pasar claves sueltas al registro.
 const CAMPOS_ALCANCE = Object.freeze(['chatName', 'mode', 'tone', 'instructions',
   'provider', 'target', 'workspaces', 'workspace', 'projectQuestion', 'ack', 'ackText',
-  'greeting', 'greetingText', 'firstReply', 'approval', 'members', 'account'])
+  'greeting', 'greetingText', 'firstReply', 'sendFiles', 'approval', 'members', 'account'])
 
 const SCOPE_VEREDICTO = Object.freeze({
   QUITADO: 'quitado',
@@ -1990,6 +1990,7 @@ export const AJUSTES_DE_LINEA = Object.freeze(['agentName', 'ownerName', 'tone',
   'transcribeLang',
   'orcaNotices',
   'signMessages',
+  'sendFiles',
   'botClaudeAccount',
   'transcribe',
   'transcribeQuality',

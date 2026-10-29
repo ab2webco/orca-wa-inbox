@@ -784,6 +784,14 @@
           </div>
           <p class="hint approval-warn" id="chat-first-reply-warn" data-t="frWarn" hidden></p>
           <p class="hint" data-t="chatAutoHelp"></p>
+          <span class="label" id="chat-send-files-label" data-t="filesLabel"></span>
+          <div class="seg" id="chat-send-files" role="group" aria-labelledby="chat-send-files-label"
+               aria-describedby="chat-send-files-help">
+            <button type="button" data-value="default" data-t="autoDefault"></button>
+            <button type="button" data-value="on" data-t="autoOn"></button>
+            <button type="button" data-value="off" data-t="autoOff"></button>
+          </div>
+          <p class="hint" id="chat-send-files-help" data-t="chatFilesHelp"></p>
           <!-- T22.3: cada regla de aprobacion con su nivel en ESTA conversacion. Grupos de
                botones como el modo: un select nativo no se abre en el panel de Orca. -->
           <span class="label" data-t="chatApLabel"></span>
@@ -1093,6 +1101,24 @@
           <div class="actions">
             <button class="primary" id="save-pq-hours" data-t="saveCard"></button>
             <span class="said" id="said-pq-hours"></span>
+          </div>
+        </section>
+
+        <!-- Si el agente del caso puede adjuntar un archivo (caso-adjuntos): un ajuste global, en
+             la clave plana `sendFiles`, apagado de fabrica; cada conversacion lo puede pisar.
+             Encendido o no, ningun archivo sale sin la aprobacion del dueno. -->
+        <section class="card" id="files-card">
+          <h2 id="files-legend" data-t="filesLegend"></h2>
+          <span class="label" id="send-files-label" data-t="filesLabel"></span>
+          <div class="seg" id="send-files" role="group" aria-labelledby="send-files-label"
+               aria-describedby="send-files-help">
+            <button type="button" data-value="on" data-t="autoOn"></button>
+            <button type="button" data-value="off" data-t="autoOff"></button>
+          </div>
+          <p class="hint" id="send-files-help" data-t="filesHelp"></p>
+          <div class="actions">
+            <button class="primary" id="save-files" data-t="saveCard"></button>
+            <span class="said" id="said-files"></span>
           </div>
         </section>
 
@@ -1702,6 +1728,14 @@
           pqHoursHelp: 'Si quien escribio no contesta "¿A o B?" en este plazo, la pregunta pasa ' +
             'a usted.',
           pqHoursRange: 'Son horas enteras, desde 1.',
+          // --- Los archivos del agente (caso-adjuntos) ---
+          filesLegend: 'Archivos del agente',
+          filesLabel: 'El agente puede adjuntar archivos',
+          filesHelp: 'Activado, el agente del caso puede adjuntar un archivo (un informe, un PDF) ' +
+            'a lo que le envia al cliente. Ningun archivo sale sin aprobacion: espera en el ' +
+            'tablero, tambien en el chat del dueno. Cada conversacion lo puede cambiar.',
+          chatFilesHelp: 'Segun el general usa lo de la tarjeta Archivos del agente, en Su ' +
+            'aprobacion. Cada archivo espera aprobacion antes de salir.',
           // --- El seguimiento de cada caso respondido (seguimiento-casos) ---
           fuLegend: 'Seguimiento de los casos',
           fuUsLabel: 'Minutos para la respuesta prometida',
@@ -2324,6 +2358,14 @@
           pqHoursHelp: 'If whoever wrote does not answer "A or B?" within this time, the ' +
             'question goes to you.',
           pqHoursRange: 'Whole hours, from 1.',
+          // --- The agent's files (caso-adjuntos) ---
+          filesLegend: "The agent's files",
+          filesLabel: 'The agent can attach files',
+          filesHelp: 'When on, the case agent can attach a file (a report, a PDF) to what it ' +
+            "sends the customer. No file goes out without approval: it waits on the board, in " +
+            "the owner's own chat too. Each conversation can change it.",
+          chatFilesHelp: "Use the default takes the agent's files card, under Your approval. " +
+            'Every file waits for approval before it goes out.',
           // --- The follow-up of each answered case (seguimiento-casos) ---
           fuLegend: 'Case follow-up',
           fuUsLabel: 'Minutes for the promised reply',
@@ -2955,6 +2997,14 @@
         pqHoursHelp: 'Se quem escreveu nao responder "A ou B?" neste prazo, a pergunta passa ' +
           'para voce.',
         pqHoursRange: 'Sao horas inteiras, a partir de 1.',
+        // --- Os arquivos do agente (caso-adjuntos) ---
+        filesLegend: 'Arquivos do agente',
+        filesLabel: 'O agente pode anexar arquivos',
+        filesHelp: 'Ativado, o agente do caso pode anexar um arquivo (um relatorio, um PDF) ao ' +
+          'que envia ao cliente. Nenhum arquivo sai sem aprovacao: espera no quadro, tambem no ' +
+          'chat do dono. Cada conversa pode mudar isso.',
+        chatFilesHelp: 'Conforme o geral usa o cartao Arquivos do agente, em Sua aprovacao. ' +
+          'Cada arquivo espera aprovacao antes de sair.',
         // --- O acompanhamento de cada caso respondido (seguimiento-casos) ---
         fuLegend: 'Acompanhamento dos casos',
         fuUsLabel: 'Minutos para a resposta prometida',
@@ -3665,6 +3715,7 @@
         'firstReply', 'slaMinutes', 'projectQuestionHours', 'inboxDays', 'transcribeLang',
         'orcaNotices',
         'signMessages',
+        'sendFiles',
         'botClaudeAccount',
         'transcribe',
         'transcribeQuality',
@@ -3759,7 +3810,9 @@
         // La meta del primer contacto, en minutos (informes-tablero, I4).
         slaMinutes: ['sla-minutes', '15'],
         // Cuantas horas espera la pregunta "A o B?" a quien escribio (proyectos-por-chat, M5).
-        projectQuestionHours: ['pq-hours', '24']
+        projectQuestionHours: ['pq-hours', '24'],
+        // Si el agente del caso puede adjuntar archivos (caso-adjuntos): apagado de fabrica.
+        sendFiles: ['send-files', 'off']
       }
       Object.keys(CONTROLES).forEach(function (k) { ensuciar(CONTROLES[k][0]) })
 
@@ -3957,6 +4010,8 @@
         { tarjeta: 'sla-card', boton: 'save-sla', said: 'said-sla', claves: ['slaMinutes'] },
         { tarjeta: 'pq-card', boton: 'save-pq-hours', said: 'said-pq-hours',
           claves: ['projectQuestionHours'] },
+        { tarjeta: 'files-card', boton: 'save-files', said: 'said-files',
+          claves: ['sendFiles'] },
         { tarjeta: 'follow-up-card', boton: 'save-follow-up', said: 'said-follow-up',
           claves: ['followUp'] },
         { tarjeta: 'agent-card', boton: 'save-agent', said: 'said-agent',
@@ -3969,7 +4024,8 @@
       // Las de Su aprobacion que no estan en la vuelta (CLAVES): se piden al abrir SU
       // pestana. Primero los avisos de Orca, que son la tarjeta de arriba.
       var CLAVES_AUTO = ['orcaNotices', 'ackMode', 'ackText', 'ackQuietMinutes', 'greetingMode',
-        'greetingText', 'firstReply', 'slaMinutes', 'projectQuestionHours', 'followUp']
+        'greetingText', 'firstReply', 'slaMinutes', 'projectQuestionHours', 'followUp',
+        'sendFiles']
       var pintadas = {}
       var autoPedida = false
       function tarjetaLeida (c) {
@@ -4233,6 +4289,11 @@
         }
         el('pq-hours').value = String(Number(texto))
         guardarTarjeta(event.currentTarget, 'said-pq-hours', ['projectQuestionHours'])
+      })
+      // Los archivos del agente: on u off, en la clave plana `sendFiles`.
+      el('save-files').addEventListener('click', function (event) {
+        if (sinLeer('save-files')) return
+        guardarTarjeta(event.currentTarget, 'said-files', ['sendFiles'])
       })
       // ---------- el seguimiento de cada caso respondido (seguimiento-casos) ----------
       // UNA clave, `followUp`, en texto como el resto, con los rangos que valida wa-scope.
@@ -5706,6 +5767,8 @@
         ponerSeg('chat-first-reply', PRIMER_MODOS.indexOf(entry.firstReply) !== -1
           ? entry.firstReply : 'default', 'default')
         pintarPrimerVista()
+        ponerSeg('chat-send-files', entry.sendFiles === 'on' || entry.sendFiles === 'off'
+          ? entry.sendFiles : 'default', 'default')
         ponerNiveles(entry.approval)
         ponerSeg('mode', entry.mode, 'off')
         pintarModo()
@@ -5733,6 +5796,7 @@
         el('chat-greeting-text').value = ''
         ponerSeg('chat-first-reply', 'default', 'default')
         pintarPrimerVista()
+        ponerSeg('chat-send-files', 'default', 'default')
         ponerNiveles(null)
         // Una conversacion nueva arranca sin proyecto: la mayoria de los 1 a 1 solo piden
         // que el agente lea y conteste, y elegir uno por inercia mandaria su trabajo a un
@@ -5843,6 +5907,9 @@
             greetingText: el('chat-greeting-text').value.trim() || null,
             firstReply: valorSeg('chat-first-reply') === 'default' ? null
               : valorSeg('chat-first-reply') || null,
+            // Si el agente puede adjuntar archivos aca (caso-adjuntos); null = el general.
+            sendFiles: valorSeg('chat-send-files') === 'default' ? null
+              : valorSeg('chat-send-files') || null,
             approval: nivelesDelFormulario(),
             // Los roles de esta conversacion (roles-por-numero): siempre una lista, vacia
             // cuando nadie tiene rol, que es lo mismo que no tener la clave.
@@ -7389,7 +7456,7 @@
         numeroEnEdicion = null
         pintarDuenos()
         ;['said-agent', 'said-owners', 'said-orca', 'said-auto', 'said-sla', 'said-pq-hours',
-          'said-follow-up', 'said-voice', 'said-reading'].forEach(function (id) { said(id, '') })
+          'said-files', 'said-follow-up', 'said-voice', 'said-reading'].forEach(function (id) { said(id, '') })
         pintarLecturas()
         olvidarReglasYProyectos()
       }

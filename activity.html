@@ -1079,7 +1079,7 @@
               "jevSees": "Lo ve como",
               "excLead": "Necesita su decision por",
               "heldTitle": "Mensajes retenidos",
-              "heldLead": "Estos mensajes no son de ningun caso y esperan su aprobacion. Lea el texto antes de aprobarlo.",
+              "heldLead": "Estos mensajes esperan su aprobacion: los que no son de ningun caso y los archivos que adjunto el agente de un caso. Lea el texto antes de aprobarlo.",
               "heldReason": "Retenido por: {x}",
               "heldFile": "Archivo: {x}",
               "heldApprove": "Aprobar",
@@ -1470,7 +1470,7 @@
               "jevSees": "Reads it as",
               "excLead": "Needs your decision because",
               "heldTitle": "Held messages",
-              "heldLead": "These messages belong to no case and wait for your approval. Read the text before you approve it.",
+              "heldLead": "These messages wait for your approval: the ones that belong to no case, and the files a case agent attached. Read the text before you approve it.",
               "heldReason": "Held for: {x}",
               "heldFile": "File: {x}",
               "heldApprove": "Approve",
@@ -1861,7 +1861,7 @@
               "jevSees": "Ve como",
               "excLead": "Precisa da sua decisao por",
               "heldTitle": "Mensagens retidas",
-              "heldLead": "Estas mensagens nao sao de nenhum caso e aguardam sua aprovacao. Leia o texto antes de aprovar.",
+              "heldLead": "Estas mensagens aguardam sua aprovacao: as que nao sao de nenhum caso e os arquivos que o agente de um caso anexou. Leia o texto antes de aprovar.",
               "heldReason": "Retida por: {x}",
               "heldFile": "Arquivo: {x}",
               "heldApprove": "Aprovar",
@@ -2935,7 +2935,8 @@
       var heldHechos = {}
       var heldMsgs = {}
       var heldAviso = null
-      var ID_RETENIDO = /^(?!caso-|aviso-)[A-Za-z0-9_][^\s]{0,199}$/
+      // La misma forma que acciones.mjs: el avance con archivo de un caso (caso-adjuntos) si.
+      var ID_RETENIDO = /^(?!aviso-)(?!caso-(?!\d+-avance-\d+$))[A-Za-z0-9_][^\s]{0,199}$/
 
       function retenidosDe (board) {
         var lista = esObjeto(board) && Array.isArray(board.held_drafts) ? board.held_drafts : []
@@ -3653,6 +3654,16 @@
       }
 
       /** A que otro chat va la propuesta, o null si va al del caso (respuesta-otro-chat). */
+      /** El archivo de la propuesta (caso-adjuntos): cual y cuanto pesa, o null. Lo que el dueno
+       *  firma es un archivo que nadie mas pudo leer; la ruta nunca llega al panel. */
+      function archivoPropuestaNodo (c) {
+        var f = esObjeto(c.proposal) && esObjeto(c.proposal.file) &&
+          typeof c.proposal.file.name === 'string' ? c.proposal.file : null
+        if (!f) return null
+        var peso = tamanoTexto(f.bytes)
+        return crear('div', 'card-meta', fmt('heldFile', { x: f.name + (peso ? ' (' + peso + ')' : '') }))
+      }
+
       function destinoNodo (c) {
         var prop = esObjeto(c.proposal) ? c.proposal : null
         var d = prop && esObjeto(prop.destino) ? prop.destino : null
@@ -3708,6 +3719,8 @@
           var entera = texto.length <= PROPUESTA_EN_TARJETA
           var destino = destinoNodo(c)
           if (destino) nodos.push(destino)
+          var archivo = archivoPropuestaNodo(c)
+          if (archivo) nodos.push(archivo)
           if (texto) nodos.push(crear('div', 'card-prop' + (entera ? '' : ' clamp3'), texto))
           if (aviso) nodos.push(aviso)
           var fila = crear('div', 'card-acts')
@@ -4111,6 +4124,8 @@
             (prop.tipo ? ' · ' + porCodigo(PROP_KEY, prop.tipo, '') : ''))
           var destinoDet = destinoNodo(c)
           if (destinoDet) sp.appendChild(destinoDet)
+          var archivoDet = archivoPropuestaNodo(c)
+          if (archivoDet) sp.appendChild(archivoDet)
           if (prop.texto) sp.appendChild(crear('div', 'card-prop', prop.texto))
           var preguntaDet = preguntaEscalarNodo(c)
           if (preguntaDet) sp.appendChild(preguntaDet)

@@ -72,7 +72,7 @@ export function motivoDeFallo (error) {
     .slice(0, 160)
 }
 
-// El tope de un adjunto. El MISMO numero vive en `bin/wa-send` (ADJUNTO_MAX_BYTES): alla
+// El tope de un adjunto. El MISMO numero vive en `bin/wa_store.py` (ADJUNTO_MAX_BYTES): alla
 // se niega antes de encolar, aca se vuelve a mirar porque entre una cosa y la otra el
 // archivo pudo crecer.
 export const ADJUNTO_MAX_BYTES = 64 * 1024 * 1024

@@ -20,10 +20,13 @@ lo dice con un motivo estable en vez de devolver una lista vacia: una bandeja va
 lee como "no hay nada que atender", que es lo contrario de "no puedo leer nada"
 (§11-E5).
 """
+import hashlib
 import json
+import mimetypes
 import os
 import re
 import sqlite3
+import stat
 import sys
 import time
 
@@ -1397,3 +1400,88 @@ def state(con, linea=None):
             "evictedFiles": desalojo.get("archivos", 0),
         })
     return salida
+
+
+# ── Los archivos que salen (send-files, caso-adjuntos) ───────────────────────────────────
+# Lo mira `wa-send --file` antes de encolar y `wa-scope caso avance/resultado --file` antes de
+# guardar nada: los dos con la MISMA regla, aca. El sidecar lo vuelve a mirar al mandar
+# (`leerAdjunto` en sidecar/src/envio.js): bytes y sha256 tienen que ser los que se pidieron.
+# El MISMO numero que ADJUNTO_MAX_BYTES en `sidecar/src/envio.js`.
+ADJUNTO_MAX_BYTES = 64 * 1024 * 1024
+# Lo que nunca sale como adjunto, por nombre: llaves, certificados, env y bases de claves.
+ADJUNTO_SECRETO = re.compile(
+    r"(^\.env(\..*)?$|^\.netrc$|^\.npmrc$|^\.pypirc$|^id_(rsa|dsa|ecdsa|ed25519)(\.pub)?$|"
+    r"\.(pem|key|p12|pfx|jks|keystore|kdbx|ovpn|gpg|asc)$|credential|secret|token|password|"
+    r"approver\.key$|\.db$|\.sqlite3?$)", re.IGNORECASE)
+# Directorios de los que nunca sale nada: llaves, nubes y el propio plugin.
+ADJUNTO_DIRS_VEDADOS = (".ssh", ".gnupg", ".aws", ".azure", ".kube", ".docker",
+                        ".config/gcloud", ".wa-inbox", ".config/orca-ide")
+
+
+class AdjuntoInvalido(Exception):
+    """El archivo no puede salir. El mensaje es el detalle, en ingles, sin mas: quien llama
+    le pone su codigo (`send-bad-file` en wa-send, `E_BAD_FILE` en wa-scope)."""
+
+
+def tamano(n):
+    """Bytes en palabras, para el aviso del dueno y el listado de borradores."""
+    n = float(n or 0)
+    for unidad in ("B", "KB", "MB"):
+        if n < 1024 or unidad == "MB":
+            return f"{n:.0f} {unidad}" if unidad == "B" else f"{n:.1f} {unidad}"
+        n /= 1024
+
+
+def sha256_de(ruta):
+    """El sha256 del archivo, leido por bloques: un adjunto puede pesar decenas de megas."""
+    sha = hashlib.sha256()
+    with open(ruta, "rb") as f:
+        for bloque in iter(lambda: f.read(1 << 20), b""):
+            sha.update(bloque)
+    return sha.hexdigest()
+
+
+def validar_adjunto(ruta):
+    """El adjunto como lo guarda la bandeja (dict con ruta, nombre, mimetype, bytes y
+    sha256), o `AdjuntoInvalido`.
+
+    Falla cerrada: solo un archivo comun, no un enlace (lo que se aprueba tiene que ser lo
+    que sale), fuera de los directorios de llaves y del plugin, y sin nombre de secreto. El
+    contenido no se revisa —es binario—: por eso todo adjunto espera el visto del dueno."""
+    absoluta = os.path.abspath(os.path.expanduser(str(ruta)))
+    try:
+        info = os.lstat(absoluta)
+    except OSError:
+        raise AdjuntoInvalido(f"{ruta!r} does not exist or cannot be read.") from None
+    if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
+        raise AdjuntoInvalido(f"{ruta!r} is not a regular file (links are refused).")
+    if info.st_size == 0 or info.st_size > ADJUNTO_MAX_BYTES:
+        raise AdjuntoInvalido(f"{ruta!r} is empty or over {tamano(ADJUNTO_MAX_BYTES)}.")
+    nombre = os.path.basename(absoluta)
+    casa = os.path.realpath(os.path.expanduser("~"))
+    real = os.path.realpath(absoluta)
+    vedado = any(real == os.path.join(casa, d) or real.startswith(os.path.join(casa, d) + os.sep)
+                 for d in ADJUNTO_DIRS_VEDADOS)
+    if vedado or ADJUNTO_SECRETO.search(nombre):
+        raise AdjuntoInvalido(f"{nombre!r} looks like a key, a credential or the plugin's own "
+                              "data: it never goes out as a file.")
+    try:
+        sha = sha256_de(absoluta)
+    except OSError:
+        raise AdjuntoInvalido(f"{ruta!r} cannot be read.") from None
+    tipo = mimetypes.guess_type(nombre)[0] or "application/octet-stream"
+    return {"ruta": real, "nombre": nombre, "mimetype": tipo, "bytes": info.st_size,
+            "sha256": sha}
+
+
+def adjunto_cambio(meta):
+    """Si el archivo de `meta` (lo que se pidio y se aprobo) ya no es ese: no esta, no se lee,
+    o sus bytes o su sha256 son otros. Lo mismo que el sidecar mira al mandar, antes."""
+    if not isinstance(meta, dict) or not meta.get("ruta") or not meta.get("sha256"):
+        return True
+    try:
+        if os.path.getsize(meta["ruta"]) != meta.get("bytes"):
+            return True
+        return sha256_de(meta["ruta"]) != meta["sha256"]
+    except OSError:
+        return True

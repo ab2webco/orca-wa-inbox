@@ -103,6 +103,25 @@ use `caso avance`.
 4. Close with the final reply (your `responder` proposal, or `caso resultado --estado
    resuelto`): say concretely what was fixed and ask the customer to check it.
 
+## Files
+
+Only when the chat that receives it allows files (`send_files.on` in `wa-scope voice`; the
+case file has a "Files: allowed" line). Never mention or try `--file` anywhere else.
+
+    "$WA/wa-scope" caso avance <id> "<caption>" --file <absolute path> --actor agente
+    "$WA/wa-scope" caso resultado <id> --estado resuelto --respuesta "<caption>" --resumen "<what was done>" --file <absolute path> --actor trabajador
+    "$WA/wa-scope" caso propuesta <id> --tipo responder --respuesta "<caption>" --file <absolute path> --actor agente
+
+1. Attach only a file you made for this customer (a report, a PDF), never keys, credentials,
+   `.env` files or the plugin's data: those are refused with `E_BAD_FILE` and never go out.
+2. Every file waits for the owner's approval, in every chat, his own included. An update
+   comes back with `estado` `espera` and a `hint`; a result or a proposal waits on its card.
+   Nothing reached the chat yet: never send it again, never rewrite it to get around the
+   wait, never send it another way. Go on with the work.
+3. A waiting update counts toward `updates_max` and the pacing, like one that went out.
+4. `E_FILES_OFF`: the chat does not allow files. Send the message without the file; only the
+   owner turns the setting on.
+
 ## Follow-ups
 
 Every message the customer gets says what it waits for, and the plugin reviews the case
