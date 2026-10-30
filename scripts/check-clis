@@ -2842,6 +2842,32 @@ def wa_settings():
     return cargar_modulo("wa_settings_check", BIN / "wa_settings.py")
 
 
+def revisa_mando_herramienta(fallos: list) -> int:
+    """En Windows las herramientas hermanas corren con el interprete delante.
+
+    Son guiones sin extension con `#!/usr/bin/env python3`: Windows no lee el shebang y
+    `subprocess` contesta "%1 is not a valid Win32 application". En macOS y Linux el mando
+    queda como siempre, por la ruta. Y ningun llamado a una hermana se salta el helper."""
+    mod = wa_settings()
+    vistos = 0
+    casos = [("posix", "/plugin/bin/wa-read", ["/plugin/bin/wa-read"]),
+             ("nt", "C:\\plugin\\bin\\wa-read", [sys.executable, "C:\\plugin\\bin\\wa-read"])]
+    for so, ruta, esperado in casos:
+        vistos += 1
+        obtenido = mod.mando_herramienta(ruta, so=so)
+        if obtenido != esperado:
+            fallos.append(f"mando_herramienta({ruta!r}, so={so!r}) = {obtenido!r}, "
+                          f"esperaba {esperado!r}")
+    patron = re.compile(r"\[\s*(WA_READ|WA_SEND|WA_SCOPE|transcriptor_cli\(\)|exe)\s*,")
+    for nombre in ("wa-scope", "wa-read", "wa-send"):
+        for n, linea in enumerate((BIN / nombre).read_text(encoding="utf-8").splitlines(), 1):
+            if patron.search(linea):
+                vistos += 1
+                fallos.append(f"bin/{nombre}:{n} lanza una hermana por su ruta, sin "
+                              f"mando_herramienta: en Windows no arranca: {linea.strip()}")
+    return vistos
+
+
 def revisa_casa_del_runtime(fallos: list) -> int:
     """Como se elige el Orca vivo, sobre las formas que puede tener una maquina.
 
@@ -4099,6 +4125,7 @@ def main() -> int:
                       + revisa_sin_bytecode(fallos)
                       + revisa_firma_del_panel(fallos)
                       + revisa_casa_del_runtime(fallos)
+                      + revisa_mando_herramienta(fallos)
                       + revisa_juicio(fallos)
                       + revisa_rol_del_juicio(fallos)
                       + revisa_linea_por_numero(fallos)

@@ -13,6 +13,7 @@
 // nunca se pudo cargar, no se guarda nada. Un fallo de lectura no puede abrir permisos.
 import { execFileSync } from 'node:child_process'
 import { join } from 'node:path'
+import { mandoHerramienta, pythonDeEnv } from './herramienta.js'
 
 // Cada cuanto se vuelve a preguntar. El usuario autoriza un chat desde el panel y
 // espera que el proximo mensaje ya entre; 30 s es lo que tarda en dejar de parecer
@@ -133,7 +134,10 @@ export function crearAlcance ({ toolsDir, ejecutar = correr, ttlMs = ALCANCE_TTL
   }
 }
 
-function correr (cmd, args, env) {
-  return execFileSync(cmd, args, { encoding: 'utf8', timeout: 30000, maxBuffer: 8 << 20,
+/** `wa-scope` por el mando de cada sistema: en Windows, con el interprete que paso el
+ *  worker delante (herramienta.js); en macOS y Linux, como siempre. */
+export function correr (cmd, args, env, plataforma = process.platform) {
+  const m = mandoHerramienta(cmd, args, { plataforma, python: pythonDeEnv(env ?? process.env) })
+  return execFileSync(m.cmd, m.args, { encoding: 'utf8', timeout: 30000, maxBuffer: 8 << 20,
     ...(env ? { env } : {}) })
 }
