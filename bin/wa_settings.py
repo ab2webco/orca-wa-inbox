@@ -34,6 +34,15 @@ RUNTIME_FILE = "orca-runtime.json"
 NOMBRES_USER_DATA = ("orca", "orca-ide", "orca-dev", "zzorcanametest")
 
 
+def mando_herramienta(ruta, so=None):
+    """Como lanzar una herramienta hermana (`wa-read`, `wa-send`...): el comienzo del mando.
+
+    Son guiones sin extension con `#!/usr/bin/env python3`. Windows no lee el shebang y
+    `subprocess` contesta "%1 is not a valid Win32 application", asi que ahi, y solo ahi,
+    corren con este mismo interprete delante. En macOS y Linux, por la ruta, como siempre."""
+    return [sys.executable, ruta] if (so or os.name) == "nt" else [ruta]
+
+
 def user_data_base(env=None, sistema=None):
     """La carpeta donde Electron pone los userData de esta maquina.
 

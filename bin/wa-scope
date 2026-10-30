@@ -55,6 +55,7 @@ from wa_settings import (  # noqa: E402
     plugin_store_targets, settings_from_plugin, user_data_roots, valida_ajuste)
 from wa_settings import jev_en_linea, linea_de_avisos  # noqa: E402
 from wa_settings import VARIABLE_ENVIO_PLUGIN  # noqa: E402
+from wa_settings import mando_herramienta  # noqa: E402
 import wa_store  # noqa: E402  (solo lectura: de capture.db se lee la linea activa)
 import wa_jev  # noqa: E402  (el cliente de Jev: falla cerrado, nunca habilita)
 import wa_reglas  # noqa: E402  (el piso fijo de excepciones: corre siempre, con o sin Jev)
@@ -1318,7 +1319,7 @@ def source_fingerprint():
     para siempre. Las dos firmas que no son firmas —`missing` y `live`— devuelven None,
     que es la manera de decir "no me puedo saltear esta lectura"."""
     try:
-        out = subprocess.run([WA_READ, "state", "--json"], capture_output=True,
+        out = subprocess.run([*mando_herramienta(WA_READ), "state", "--json"], capture_output=True,
                              text=True, timeout=20)
         filas = json.loads(out.stdout or "[]")
     except (OSError, ValueError, subprocess.SubprocessError):
@@ -1396,7 +1397,7 @@ def build_activity(con, scope, firma=None):
     decided = decisions_read()
     pending = []
     try:
-        out = subprocess.run([WA_READ, "inbox", "--json"],
+        out = subprocess.run([*mando_herramienta(WA_READ), "inbox", "--json"],
                              capture_output=True, text=True, timeout=60)
         for m in json.loads(out.stdout or "[]"):
             entry = scope.get(m.get("chat_jid"))
@@ -1427,7 +1428,7 @@ def build_chats():
     nombre exacto escrito a mano. Hay grupos con nombres repetidos, asi que cada
     entrada lleva su jid, que es la llave real."""
     try:
-        out = subprocess.run([WA_READ, "chats", "-n", "400", "--json"],
+        out = subprocess.run([*mando_herramienta(WA_READ), "chats", "-n", "400", "--json"],
                              capture_output=True, text=True, timeout=90)
         chats = json.loads(out.stdout or "[]")
     except (OSError, ValueError, subprocess.SubprocessError):
@@ -1447,7 +1448,7 @@ def build_senders():
     """Quienes escribieron en las conversaciones autorizadas, para elegir en el panel los
     numeros del dueno por su nombre (T22.1): ids y nombres, nunca texto."""
     try:
-        out = subprocess.run([WA_READ, "senders", "-n", "400", "--json"],
+        out = subprocess.run([*mando_herramienta(WA_READ), "senders", "-n", "400", "--json"],
                              capture_output=True, text=True, timeout=90)
         filas = json.loads(out.stdout or "[]")
     except (OSError, ValueError, subprocess.SubprocessError):
@@ -1480,7 +1481,7 @@ def build_health():
     """El panel no puede ejecutar nada, asi que el estado se lo dejamos masticado:
     un booleano y, si algo falla, QUE falla. El porque va en el README, no en la UI."""
     try:
-        out = subprocess.run([WA_READ, "doctor", "--json"],
+        out = subprocess.run([*mando_herramienta(WA_READ), "doctor", "--json"],
                              capture_output=True, text=True, timeout=60)
         checks = json.loads(out.stdout or "[]")
     except (OSError, ValueError, subprocess.SubprocessError):
@@ -6152,7 +6153,8 @@ def avance_marca(con, cid, n, estado, motivo, detalle):
 def avance_retira(req):
     """Retira el borrador que `wa-send` dejo al frenar un avance: no espera al dueno."""
     try:
-        subprocess.run([WA_SEND, "--cancel", req, "--reason", "avance retenido", "--json"],
+        subprocess.run([*mando_herramienta(WA_SEND), "--cancel", req, "--reason",
+                        "avance retenido", "--json"],
                        capture_output=True, text=True, timeout=60)
     except (OSError, subprocess.SubprocessError):
         pass
@@ -6207,7 +6209,7 @@ def avance_al_dueno(con, caso, fila, estado):
     cid, n, req = fila["case_id"], fila["n"], fila["req_id"]
     archivo = json.loads(fila["adjunto"])
     if estado != "borrador":
-        args = [WA_SEND, f"--id={req}"] + ([f"--line={linea_del_caso(caso)}"]
+        args = [*mando_herramienta(WA_SEND), f"--id={req}"] + ([f"--line={linea_del_caso(caso)}"]
                                            if linea_del_caso(caso) else [])
         args += args_de_archivo(archivo) + [f"--timeout={PLAZO_ENVIO_TICK_S}", "--json", "--",
                                             caso["chat_jid"], fila["texto"]]
@@ -7880,7 +7882,8 @@ def transcribe_archivo(ruta, ajustes):
     if not os.path.isfile(ruta):
         return None, "sin_archivo", False, None
     try:
-        p = subprocess.run([transcriptor_cli(), ruta, "--json"], capture_output=True,
+        p = subprocess.run([*mando_herramienta(transcriptor_cli()), ruta, "--json"],
+                           capture_output=True,
                            text=True, timeout=transcribe_timeout())
     except subprocess.TimeoutExpired:
         return None, "timeout", True, None
@@ -8783,7 +8786,8 @@ def cancela_borradores():
     pendientes, CANCELACIONES[:] = list(CANCELACIONES), []
     for req, motivo in pendientes:
         try:
-            p = subprocess.run([WA_SEND, "--cancel", req, "--reason", motivo, "--json"],
+            p = subprocess.run([*mando_herramienta(WA_SEND), "--cancel", req, "--reason", motivo,
+                                "--json"],
                                capture_output=True, text=True, timeout=60)
         except (OSError, subprocess.SubprocessError) as exc:
             print(f"wa-scope: could not cancel draft {req}: {exc}", file=sys.stderr)
@@ -11836,7 +11840,7 @@ def tick_envia(caso, texto, req, evidencia=None, pregunta=None):
     """`wa-send --send` con el id del caso: (codigo, detalle). `None` es enviado. Nunca
     devuelve el texto del mensaje: lo que se lee de stderr es el codigo y su detalle.
     `evidencia` y `pregunta` van a la revision de Jev (atencion-casos, R1)."""
-    args = [WA_SEND, f"--id={req}"]
+    args = [*mando_herramienta(WA_SEND), f"--id={req}"]
     if linea_de_envio(caso):
         args.append(f"--line={linea_de_envio(caso)}")
     if (evidencia or "").strip():
@@ -13218,7 +13222,7 @@ def cmd_aviso_borrador(con, a):
 def wa_send_del_plugin(args, llave=False):
     """`wa-send` con la marca del plugin: (salida, codigo). La salida es None si no corrio."""
     try:
-        p = subprocess.run([WA_SEND, *args], capture_output=True, text=True,
+        p = subprocess.run([*mando_herramienta(WA_SEND), *args], capture_output=True, text=True,
                            env=env_del_plugin(llave), timeout=PLAZO_ENVIO_TICK_S + 30)
     except (OSError, subprocess.SubprocessError):
         return None, "fallo"
@@ -13436,11 +13440,12 @@ def borrador_y_visto(caso, texto, req, por):
     Con el archivo de la propuesta (caso-adjuntos) y el sha256 que firmo: si el archivo cambio,
     `send-file-changed` y no sale. Devuelve None si salio, o el codigo de `wa-send`."""
     linea = linea_de_envio(caso)
-    args = [WA_SEND, f"--id={req}"] + ([f"--line={linea}"] if linea else [])
+    args = [*mando_herramienta(WA_SEND), f"--id={req}"] + ([f"--line={linea}"] if linea else [])
     args += args_de_archivo(archivo_de_propuesta(caso))
     pasos = ((args + [f"--timeout={PLAZO_ENVIO_TICK_S}", "--json", "--",
                       destino_de_propuesta(caso) or caso["chat_jid"], texto], env_del_plugin()),
-             ([WA_SEND, "--approve", req, "--by", por, f"--timeout={PLAZO_ENVIO_TICK_S}",
+             ([*mando_herramienta(WA_SEND), "--approve", req, "--by", por,
+               f"--timeout={PLAZO_ENVIO_TICK_S}",
                "--json"], env_del_plugin(llave=True)))
     for paso, env in pasos:
         try:

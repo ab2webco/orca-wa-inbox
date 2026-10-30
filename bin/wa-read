@@ -43,6 +43,7 @@ sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import wa_store  # noqa: E402
 from wa_store import SinFuente  # noqa: E402
+from wa_settings import mando_herramienta  # noqa: E402
 
 # Salir con 1 ya significa "te falta un requisito" y con 2 "esa referencia es ambigua".
 # Que no haya de donde leer es otra cosa, y quien automatiza necesita distinguirla sin
@@ -114,7 +115,7 @@ def _transcribe_check():
     if not os.path.exists(exe):
         return False, "bin/wa-transcribe is missing", "transcribe-missing-tool"
     try:
-        p = subprocess.run([exe, "--check", "--json"], capture_output=True,
+        p = subprocess.run([*mando_herramienta(exe), "--check", "--json"], capture_output=True,
                            text=True, timeout=30)
         info = json.loads(p.stdout or "{}")
     except (OSError, ValueError, subprocess.SubprocessError):
@@ -370,7 +371,7 @@ def autorizada(fila):
         # El alcance es de cada linea: sin `--line`, `list` responde por la principal y un
         # chat autorizado en la otra se negaba como si estuviera apagado.
         linea = [] if fila["account"] == "local" else ["--line", fila["account"]]
-        p = subprocess.run([exe, "list", "--json", *linea], capture_output=True, text=True,
+        p = subprocess.run([*mando_herramienta(exe), "list", "--json", *linea], capture_output=True, text=True,
                            timeout=60)
         filas = json.loads(p.stdout or "[]") if p.returncode == 0 else []
     except (OSError, ValueError, subprocess.SubprocessError):

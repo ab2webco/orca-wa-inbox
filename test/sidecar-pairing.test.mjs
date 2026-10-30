@@ -22,7 +22,8 @@ import { decidirTrasCierre, calcularEsperaMs, intentoTrasEvento, mensajeQr, qrVe
 import { crearCacheDeReintentos } from '../sidecar/src/envio.js'
 import { crearRegistro, FALLO_DE_DESCIFRADO } from '../sidecar/src/registro.js'
 import { readFileSync, existsSync, writeFileSync } from 'node:fs'
-import { crearAlcance, LINEA_ENV } from '../sidecar/src/alcance.js'
+import { crearAlcance, LINEA_ENV, correr as correrAlcance } from '../sidecar/src/alcance.js'
+import { PYTHON_ENV } from '../sidecar/src/herramienta.js'
 import { abrirAlmacen, rutaAlmacen } from '../sidecar/src/almacen.js'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -655,6 +656,29 @@ console.log('\nsidecar: lo que no se pudo descifrar queda dicho, sin contenido')
   const registro = crearRegistro({ ruta: '/nunca/se/escribe.log' })
   const o = opcionesDeSocket({ version: [2, 3000, 1], auth: {}, browser: ['Chrome', 'Chrome', ''], logger: registro })
   ok('el socket recibe ese registro y no el pino de fabrica a stdout', o.logger === registro)
+}
+
+// En Windows `wa-scope` no arranca por su shebang (spawn ENOENT): el sidecar lo corre con
+// el interprete que el worker le paso por env. Aca el "interprete" es este mismo Node y la
+// herramienta un guion de Node, asi que se ve el mando de verdad corriendo.
+console.log('\nsidecar: en Windows wa-scope corre con el interprete que paso el worker')
+{
+  const dir = mkdtempSync(join(tmpdir(), 'wa-alcance-win-'))
+  try {
+    const herramienta = join(dir, 'wa-scope')
+    writeFileSync(herramienta, 'process.stdout.write(JSON.stringify(process.argv.slice(2)))\n')
+    const env = { ...process.env, [PYTHON_ENV]: JSON.stringify([process.execPath]) }
+    let salida = null
+    try { salida = correrAlcance(herramienta, ['list', '--json'], env, 'win32') } catch (e) { salida = String(e.code ?? e) }
+    ok('win32: wa-scope corre con el interprete delante y recibe sus argumentos',
+      salida === JSON.stringify(['list', '--json']), String(salida))
+    let directo = null
+    try { correrAlcance(herramienta, ['list'], env, 'darwin') } catch (e) { directo = e.code }
+    ok('darwin: se lanza como siempre, por su ruta (aca sin permiso de ejecucion: EACCES)',
+      directo === 'EACCES', String(directo))
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
 }
 
 console.log(`\n${pruebas - fallos}/${pruebas} en verde`)

@@ -23,6 +23,7 @@
  * que nadie sabe si existe.
  */
 import { mandoSinValla } from '../main.mjs'
+import { mandoHerramienta, resolverPython, pythonDeEnv, PYTHON_ENV } from '../sidecar/src/herramienta.js'
 import {
   mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, realpathSync, rmSync,
   statSync, readdirSync
@@ -3210,20 +3211,98 @@ console.log('\nworker: A4 — una linea nueva empieza con los ajustes de la prin
 // y CERO escritura, con lo cual no puede guardar el auth state — y guardarlo es el
 // motivo por el que existe como proceso aparte.
 {
-  const m = mandoSinValla('/ruta/al/node', ['guion.mjs', 'argumento'])
-  if (process.platform === 'win32') {
-    ok('en Windows no hay /usr/bin/env: se lanza directo y se asume la limitacion',
-      m.cmd === '/ruta/al/node' && m.args[0] === 'guion.mjs', JSON.stringify(m))
-  } else {
-    ok('no lanza el binario directo: Node le inyectaria la valla al hijo',
+  for (const plataforma of ['darwin', 'linux']) {
+    const m = mandoSinValla('/ruta/al/node', ['guion.mjs', 'argumento'], { plataforma })
+    ok(`${plataforma}: no lanza el binario directo: Node le inyectaria la valla al hijo`,
       m.cmd !== '/ruta/al/node', JSON.stringify(m.cmd))
-    ok('lanza por un intermediario que NO es Node', m.cmd === '/usr/bin/env', m.cmd)
-    ok('le quita NODE_OPTIONS, que es por donde viaja la valla',
-      m.args[0] === '-u' && m.args[1] === 'NODE_OPTIONS', JSON.stringify(m.args.slice(0, 2)))
-    ok('el binario y sus argumentos quedan intactos detras',
-      m.args[2] === '/ruta/al/node' && m.args[3] === 'guion.mjs' && m.args[4] === 'argumento',
-      JSON.stringify(m.args.slice(2)))
+    ok(`${plataforma}: lanza por un intermediario que NO es Node`, m.cmd === '/usr/bin/env', m.cmd)
+    ok(`${plataforma}: el mando es exactamente el de siempre`,
+      JSON.stringify(m.args) ===
+        JSON.stringify(['-u', 'NODE_OPTIONS', '/ruta/al/node', 'guion.mjs', 'argumento']),
+      JSON.stringify(m.args))
   }
+}
+
+// En Windows no hay `/usr/bin/env`, y lanzar directo deja al hijo vallado: el sidecar no
+// puede ni guardar su auth state (sidecar-authdir-fallo). La salida es la otra puerta que
+// Node deja: cuando los argumentos del hijo ya traen `--permission`, Node NO le copia la
+// valla del padre en NODE_OPTIONS. Se le pasa entonces una valla con todo abierto. Medido
+// con el Node de Orca (Electron 43, Node 24.18): el hijo escribe fuera de la raiz.
+console.log('\nworker: en Windows el hijo de Node sale con la valla abierta')
+{
+  const banderas = new Set(['--permission', '--allow-fs-read', '--allow-fs-write',
+    '--allow-child-process', '--allow-worker', '--allow-addons', '--allow-wasi'])
+  const m = mandoSinValla('C:\\Orca\\Orca.exe', ['C:\\plugin\\sidecar.cjs', 'a b'],
+    { plataforma: 'win32', nodo: 'C:\\Orca\\Orca.exe', vallado: true, banderas })
+  ok('win32: lanza el mismo binario, sin intermediario', m.cmd === 'C:\\Orca\\Orca.exe', m.cmd)
+  ok('win32: abre la valla con --permission y todo permitido',
+    JSON.stringify(m.args) === JSON.stringify(['--permission', '--allow-fs-read=*',
+      '--allow-fs-write=*', '--allow-child-process', '--allow-worker', '--allow-addons',
+      '--allow-wasi', 'C:\\plugin\\sidecar.cjs', 'a b']), JSON.stringify(m.args))
+  const conMas = mandoSinValla('C:\\Orca\\Orca.exe', ['g.mjs'], { plataforma: 'win32',
+    nodo: 'C:\\Orca\\Orca.exe', vallado: true,
+    banderas: new Set([...banderas, '--allow-net', '--allow-inspector']) })
+  ok('win32: un Node que conoce mas puertas las abre tambien (red, inspector)',
+    conMas.args.includes('--allow-net') && conMas.args.includes('--allow-inspector'),
+    JSON.stringify(conMas.args))
+  const sinValla = mandoSinValla('C:\\Orca\\Orca.exe', ['g.mjs'],
+    { plataforma: 'win32', nodo: 'C:\\Orca\\Orca.exe', vallado: false, banderas })
+  ok('win32: un worker sin valla no se la pone al hijo',
+    JSON.stringify(sinValla) === JSON.stringify({ cmd: 'C:\\Orca\\Orca.exe', args: ['g.mjs'] }),
+    JSON.stringify(sinValla))
+  const otro = mandoSinValla('orca', ['worktree', 'list'],
+    { plataforma: 'win32', nodo: 'C:\\Orca\\Orca.exe', vallado: true, banderas })
+  ok('win32: lo que no es Node se lanza como antes (las banderas son de Node)',
+    JSON.stringify(otro) === JSON.stringify({ cmd: 'orca', args: ['worktree', 'list'] }),
+    JSON.stringify(otro))
+}
+
+// Las herramientas son guiones de Python sin extension con `#!/usr/bin/env python3`.
+// Windows no lee el shebang: `execFile` contesta ENOENT aunque el archivo este ahi. En
+// Windows, y solo ahi, se corren con el interprete delante.
+console.log('\nworker: en Windows las herramientas corren con Python delante')
+{
+  for (const plataforma of ['darwin', 'linux']) {
+    const m = mandoHerramienta('/plugin/bin/wa-scope', ['list', '--json'],
+      { plataforma, python: ['py', '-3'] })
+    ok(`${plataforma}: la herramienta se lanza como siempre`,
+      JSON.stringify(m) === JSON.stringify({ cmd: '/plugin/bin/wa-scope', args: ['list', '--json'] }),
+      JSON.stringify(m))
+  }
+  const m = mandoHerramienta('C:\\plugin\\bin\\wa-scope', ['list', '--json'],
+    { plataforma: 'win32', python: ['py', '-3'] })
+  ok('win32: wa-scope corre como py -3 <guion> <args>',
+    JSON.stringify(m) === JSON.stringify({ cmd: 'py',
+      args: ['-3', 'C:\\plugin\\bin\\wa-scope', 'list', '--json'] }), JSON.stringify(m))
+  for (const nombre of ['wa-read', 'wa-send', 'wa-transcribe']) {
+    const h = mandoHerramienta(`C:\\plugin\\bin\\${nombre}`, [], { plataforma: 'win32',
+      python: ['C:\\Python312\\python.exe'] })
+    ok(`win32: ${nombre} tambien`, h.cmd === 'C:\\Python312\\python.exe' &&
+      h.args[0] === `C:\\plugin\\bin\\${nombre}`, JSON.stringify(h))
+  }
+  const orcaCli = mandoHerramienta('orca', ['worktree', 'list'],
+    { plataforma: 'win32', python: ['py', '-3'] })
+  ok('win32: lo que no es una herramienta del plugin no se toca',
+    JSON.stringify(orcaCli) === JSON.stringify({ cmd: 'orca', args: ['worktree', 'list'] }),
+    JSON.stringify(orcaCli))
+
+  const probados = []
+  const probar = (cmd, args) => { probados.push([cmd, ...args].join(' ')); return cmd === 'python' }
+  ok('win32: sin ajuste prueba py -3 y despues python, y se queda con el que contesta',
+    JSON.stringify(resolverPython({ env: {}, probar })) === JSON.stringify(['python']) &&
+      JSON.stringify(probados) === JSON.stringify(['py -3 --version', 'python --version']),
+    JSON.stringify(probados))
+  ok('win32: WA_INBOX_PYTHON manda y no se prueba nada',
+    JSON.stringify(resolverPython({ env: { WA_INBOX_PYTHON: 'C:\\Py\\python.exe' },
+      probar: () => { throw new Error('no deberia probar') } })) ===
+      JSON.stringify(['C:\\Py\\python.exe']))
+  ok('win32: si ninguno contesta queda python, y el fallo se ve al lanzar',
+    JSON.stringify(resolverPython({ env: {}, probar: () => false })) === JSON.stringify(['python']))
+  ok('el interprete viaja al sidecar como JSON y vuelve igual',
+    JSON.stringify(pythonDeEnv({ [PYTHON_ENV]: JSON.stringify(['py', '-3']) })) ===
+      JSON.stringify(['py', '-3']))
+  ok('un valor roto en el env no tumba a nadie: queda python',
+    JSON.stringify(pythonDeEnv({ [PYTHON_ENV]: '{roto' })) === JSON.stringify(['python']))
 }
 
 // ───────── la entrada: un mensaje nuevo se vuelve caso sin esperar al reloj ─────────

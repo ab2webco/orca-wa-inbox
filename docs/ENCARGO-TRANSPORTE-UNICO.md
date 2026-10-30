@@ -87,8 +87,13 @@ permisos de Node. El usuario no instala ni administra nada aparte.
   resolvedor moría en su primer `existsSync` y el panel decía que no encontraba
   la carpeta de datos del plugin.
 
-  En Windows no existe `/usr/bin/env`: allí el hijo queda vallado. Limitación
-  conocida, no descuido.
+  En Windows no existe `/usr/bin/env`. Allí se usa la otra puerta que Node deja:
+  si los argumentos del hijo ya traen `--permission`, Node no le copia la valla
+  del padre (`copyPermissionModelFlagsToEnv`). Al hijo de Node se le pasa una
+  valla con todas las puertas que ese Node conoce abiertas (`--allow-fs-read=*`,
+  `--allow-fs-write=*`, `--allow-child-process`...). Medido con el Node de Orca
+  (Electron 43, Node 24.18): el hijo escribe fuera de la raíz. Sin medir en una
+  máquina Windows real (`odd/tasks/windows-launch.md`).
 - La red **no** está en el modelo de permisos de Node: el bloqueo de `net`/`tls`
   del worker lo hace el preload de Orca, que el hijo no carga. Por eso el sidecar
   sí puede abrir sockets aunque herede la valla de archivos.

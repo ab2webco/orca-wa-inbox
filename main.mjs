@@ -30,6 +30,7 @@ import { comandoOrca, crearCatalogo, curarCatalogo, PROJECTS_KEY, catalogosDeLin
   unionDeCatalogos } from './catalogo.mjs'
 import { SKILLS_ACCION, SKILLS_STATUS_KEY, SKILLS_VEREDICTO } from './skills.mjs'
 import { AVISO_PLAZO_MS, crearAvisosOrca } from './avisos-orca.mjs'
+import { mandoHerramienta, resolverPython, PYTHON_ENV } from './sidecar/src/herramienta.js'
 
 // Las herramientas viajan dentro del plugin. Antes se buscaban en el PATH del usuario,
 // lo que solo funcionaba en la maquina donde alguien las habia enlazado a mano.
@@ -256,11 +257,24 @@ function lineaUtil(stderr) {
 // tienen que volver a buscarla cada uno por su lado.
 let ENV_HERRAMIENTAS = null
 
+// El interprete de Python en Windows, resuelto una vez (sidecar/src/herramienta.js). En
+// macOS y Linux no se resuelve ni se usa: el shebang de cada herramienta ya lo nombra.
+let PYTHON_WINDOWS = null
+const pythonDeWindows = () => (PYTHON_WINDOWS ??= resolverPython())
+
+/** El mando real de `cmd args`: igual en macOS y Linux; en Windows, una herramienta del
+ *  plugin corre con Python delante, porque Windows no lee el shebang (spawn ENOENT). */
+function mandoDe (cmd, args) {
+  if (process.platform !== 'win32') return { cmd, args }
+  return mandoHerramienta(cmd, args, { plataforma: 'win32', python: pythonDeWindows() })
+}
+
 /** `env` suma variables SOLO a este hijo: la llave del aprobador viaja asi, al
  *  `wa-send --approve` del tablero y a nadie mas (approve-solo-dueno). */
 function run(cmd, args, { timeoutMs = 20000, env = null } = {}) {
   return new Promise((resolve, reject) => {
-    execFile(cmd, args,
+    const m = mandoDe(cmd, args)
+    execFile(m.cmd, m.args,
       { timeout: timeoutMs, maxBuffer: 8 * 1024 * 1024,
         env: env ? { ...(ENV_HERRAMIENTAS || process.env), ...env } : (ENV_HERRAMIENTAS || process.env) },
       (error, stdout, stderr) => {
@@ -322,7 +336,8 @@ function tomarCandadoDelStorage (waScope, plazoMs) {
       resolve(valor)
     }
     try {
-      hijo = spawn(waScope, ['storage-lock', '--json'],
+      const m = mandoDe(waScope, ['storage-lock', '--json'])
+      hijo = spawn(m.cmd, m.args,
         { stdio: ['pipe', 'pipe', 'ignore'], env: ENV_HERRAMIENTAS || process.env, windowsHide: true })
     } catch {
       resolve(null)
@@ -1577,12 +1592,33 @@ function motivoAuthDir(resuelto) {
  * plugin y NINGUN permiso de escritura, con lo cual el sidecar no podria ni guardar
  * el auth state ni averiguar donde guardarlo (docs/ENCARGO-TRANSPORTE-UNICO.md §2).
  *
- * En Windows no hay `/usr/bin/env`; alli se lanza directo y el hijo queda vallado,
- * que es una limitacion conocida y no un descuido.
+ * En Windows no hay `/usr/bin/env`. Ahi se usa la otra puerta que Node deja: cuando los
+ * argumentos del hijo ya traen `--permission`, Node NO le copia la valla del padre en
+ * `NODE_OPTIONS` (`copyPermissionModelFlagsToEnv`). Al hijo de Node se le pasa entonces
+ * una valla con todas las puertas que ese Node conoce abiertas. Medido con el Node de
+ * Orca (Electron 43, Node 24.18): el hijo escribe fuera de la raiz del plugin. Sigue
+ * diciendo `process.permission` activo, y nada en el sidecar lo consulta. Lo que no es
+ * Node (la CLI de Orca) se lanza como antes: esas banderas son de Node.
  */
-export function mandoSinValla (ejecutable, args) {
-  if (process.platform === 'win32') return { cmd: ejecutable, args }
-  return { cmd: '/usr/bin/env', args: ['-u', 'NODE_OPTIONS', ejecutable, ...args] }
+export function mandoSinValla (ejecutable, args, { plataforma = process.platform,
+  nodo = process.execPath, vallado = Boolean(process.permission),
+  banderas = process.allowedNodeEnvironmentFlags } = {}) {
+  if (plataforma !== 'win32') {
+    return { cmd: '/usr/bin/env', args: ['-u', 'NODE_OPTIONS', ejecutable, ...args] }
+  }
+  if (ejecutable !== nodo || !vallado) return { cmd: ejecutable, args }
+  return { cmd: ejecutable, args: [...vallaAbierta(banderas), ...args] }
+}
+
+/** Las puertas de la valla, abiertas, en el orden de la documentacion de Node. Solo las
+ *  que este Node conoce: una que no conoce lo hace salir con "bad option". */
+const PUERTAS = [['--allow-fs-read', '=*'], ['--allow-fs-write', '=*'],
+  ['--allow-child-process', ''], ['--allow-worker', ''], ['--allow-addons', ''],
+  ['--allow-wasi', ''], ['--allow-net', ''], ['--allow-inspector', '']]
+
+function vallaAbierta (banderas) {
+  return ['--permission', ...PUERTAS.filter(([nombre]) => banderas.has(nombre))
+    .map(([nombre, valor]) => nombre + valor)]
 }
 
 
@@ -1704,7 +1740,10 @@ export function lanzarSidecar({ orca, scriptPath, authDir, toolsDir = TOOLS,
       // en el PATH: las herramientas viajan juntas, y buscarlas afuera ya habia
       // mandado a una a la instalacion equivocada (§11-E4).
       env: { ...env, ELECTRON_RUN_AS_NODE: '1', WA_SIDECAR_AUTH_DIR: authDir,
-        WA_SIDECAR_TOOLS_DIR: toolsDir, ...envLinea },
+        WA_SIDECAR_TOOLS_DIR: toolsDir,
+        // En Windows el sidecar corre `wa-scope` con el mismo interprete que el worker.
+        ...(process.platform === 'win32' ? { [PYTHON_ENV]: JSON.stringify(pythonDeWindows()) } : {}),
+        ...envLinea },
       stdio: ['ignore', 'pipe', 'pipe']
     })
   } catch (error) {
