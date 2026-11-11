@@ -19,6 +19,7 @@ import { homedir } from 'node:os'
 import { basename, dirname, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { leerCatalogo, limpiarLinea } from './catalogo.mjs'
+import { mandoHerramienta, pythonDeEnv } from './sidecar/src/herramienta.js'
 
 // El estado del arnes va por el mismo canal que el del sync: el panel no puede
 // ejecutar nada, asi que sin esto no hay forma de saber si la carpeta se sembro.
@@ -371,9 +372,17 @@ export function renderProyectos(proyectos) {
   return [...cabecera, ...lista.flatMap((p) => ficha(p, '##'))].join('\n')
 }
 
+/** El mando de `cmd args` para el arnes: igual en macOS y Linux; en Windows, con el
+ *  interprete que el worker le paso por env (`PYTHON_ENV`), como al sidecar. Sin esto el
+ *  `--help` daba ENOENT y la siembra quedaba en sin-herramientas (#78). */
+export function mandoDeAyuda (cmd, args, { plataforma = process.platform, env = process.env } = {}) {
+  return mandoHerramienta(cmd, args, { plataforma, python: pythonDeEnv(env) })
+}
+
 function corre(cmd, args, timeoutMs = 20000) {
   return new Promise((resolve, reject) => {
-    execFile(cmd, args, { timeout: timeoutMs, maxBuffer: 4 * 1024 * 1024 },
+    const m = mandoDeAyuda(cmd, args)
+    execFile(m.cmd, m.args, { timeout: timeoutMs, maxBuffer: 4 * 1024 * 1024 },
       (error, stdout, stderr) => {
         if (error && !stdout) { reject(error); return }
         resolve(String(stdout ?? '') || String(stderr ?? ''))

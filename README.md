@@ -21,6 +21,7 @@ confundirlas es leer «no puedo leer nada» como «no hay nada que atender».
 | Sistema | **macOS, Linux o Windows.** El sidecar habla el protocolo multi-dispositivo, que no depende del sistema. |
 | App | **Ninguna.** No hace falta WhatsApp Desktop ni un navegador: la línea se enlaza escaneando un QR desde el panel de ajustes, con el teléfono. |
 | CLIs | `wa-read`, `wa-send`, `wa-scope`, `wa-transcribe`: viajan dentro del plugin, en su `bin/`. El prompt resuelve esa carpeta en `$WA`; no dependen del `PATH`. |
+| Python | **Python 3.** En macOS y Linux cada CLI lo nombra en su primera línea (`#!/usr/bin/env python3`). Windows no lee esa línea, así que ahí el plugin los corre con el intérprete delante: primero `WA_INBOX_PYTHON` si está puesta (la ruta completa a un `python.exe`), después el lanzador `py -3` que trae el instalador de [python.org](https://www.python.org/downloads/windows/), y por último `python`. El `python.exe` de la Microsoft Store no cuenta como intérprete: puede ser el atajo que abre la tienda. Sin ninguno que conteste, el panel lo dice con el código `sin-python`; al instalarlo, la próxima revisión de salud lo encuentra sin reiniciar Orca. |
 | Permisos | El plugin declara `process:spawn` porque el sidecar es un proceso hijo. Sin ese permiso concedido, el panel lo dice con su propio código y manda a *Revisar y activar*. |
 
 Antes de nada, ejecute:

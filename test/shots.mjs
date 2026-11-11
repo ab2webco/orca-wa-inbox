@@ -1904,6 +1904,18 @@ const PANELES = [
         optional: [] }
     })
   },
+  // Windows sin Python 3 (#78): el aviso dice que falta Python y como instalarlo, no
+  // "las herramientas no contestaron". Ruta y error son de ejemplo.
+  {
+    nombre: 'config-sin-python', archivo: 'config.html', anchos: ANCHOS,
+    enTodosLosAnchos: true,
+    datos: Object.assign({}, SIN_VINCULAR, {
+      health: { ok: false, problem: 'Python 3 was not found', problemCode: 'sin-python',
+        detail: 'Install Python 3 from python.org (it brings the py launcher) or set ' +
+          'WA_INBOX_PYTHON to its full path. spawn python ENOENT',
+        optional: [] }
+    })
+  },
   // El storage EXACTO que quedo en la maquina del dueno: 401, y encima el
   // `sidecar-cayo` que escribia el `exit` del worker viejo. Tiene que ofrecer
   // Desvincular y no Reintentar.

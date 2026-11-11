@@ -22,7 +22,7 @@
  * principio que el sync: un camino de falla que ninguna prueba recorre es un camino
  * que nadie sabe si existe.
  */
-import { mandoSinValla } from '../main.mjs'
+import { mandoSinValla, mandoDe, encontrarPython, crearPythonDelProceso, SIN_PYTHON } from '../main.mjs'
 import { mandoHerramienta, resolverPython, pythonDeEnv, PYTHON_ENV } from '../sidecar/src/herramienta.js'
 import {
   mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, realpathSync, rmSync,
@@ -3303,6 +3303,114 @@ console.log('\nworker: en Windows las herramientas corren con Python delante')
       JSON.stringify(['py', '-3']))
   ok('un valor roto en el env no tumba a nadie: queda python',
     JSON.stringify(pythonDeEnv({ [PYTHON_ENV]: '{roto' })) === JSON.stringify(['python']))
+}
+
+// Sin Python en Windows el panel decia "las herramientas no respondieron" y el usuario no
+// sabia que le faltaba Python (#78). Se decide al resolver el interprete, no por el error
+// del lanzamiento: el `python` de la tienda de Windows arranca y sale mal, no da ENOENT.
+console.log('\nworker: en Windows sin Python el motivo es sin-python')
+{
+  ok('el codigo es estable', SIN_PYTHON === 'sin-python', SIN_PYTHON)
+  ok('sin ajuste y sin interprete que conteste: null (no encontrado)',
+    encontrarPython({ env: {}, probar: () => false }) === null)
+  ok('con uno que contesta: ese',
+    JSON.stringify(encontrarPython({ env: {}, probar: (cmd) => cmd === 'py' })) ===
+      JSON.stringify(['py', '-3']))
+  ok('resolverPython sigue devolviendo un arreglo para el sidecar',
+    JSON.stringify(resolverPython({ env: {}, probar: () => false })) === JSON.stringify(['python']))
+
+  ok('con WA_INBOX_PYTHON puesto: ese, sin probar nada',
+    JSON.stringify(encontrarPython({ env: { WA_INBOX_PYTHON: 'C:\\Py\\python.exe' }, probar: () => false })) ===
+      JSON.stringify(['C:\\Py\\python.exe']))
+
+  const m = mandoDe('C:\\plugin\\bin\\wa-read', ['doctor', '--json'],
+    { plataforma: 'win32', python: null })
+  ok('win32 sin interprete: el mando queda marcado sin-python',
+    m.sinPython === true && m.cmd === 'python' &&
+      JSON.stringify(m.args) === JSON.stringify(['C:\\plugin\\bin\\wa-read', 'doctor', '--json']),
+    JSON.stringify(m))
+  for (const plataforma of ['darwin', 'linux']) {
+    const p = mandoDe('/plugin/bin/wa-read', ['doctor'], { plataforma, python: null })
+    ok(`${plataforma}: sin interprete no cambia nada (el shebang manda)`,
+      JSON.stringify(p) === JSON.stringify({ cmd: '/plugin/bin/wa-read', args: ['doctor'] }),
+      JSON.stringify(p))
+  }
+  const orcaCli = mandoDe('orca', ['status'], { plataforma: 'win32', python: null })
+  const conPy = mandoDe('C:\\plugin\\bin\\wa-read', ['doctor'], { plataforma: 'win32', python: ['py', '-3'] })
+  ok('win32 con interprete: el mando no se marca',
+    JSON.stringify(conPy) === JSON.stringify({ cmd: 'py', args: ['-3', 'C:\\plugin\\bin\\wa-read', 'doctor'] }),
+    JSON.stringify(conPy))
+  ok('win32 sin interprete: la CLI de Orca no se marca',
+    JSON.stringify(orcaCli) === JSON.stringify({ cmd: 'orca', args: ['status'] }), JSON.stringify(orcaCli))
+
+  // Una vez por proceso, pero un "no hay" no es para siempre: instalar Python y esperar
+  // la proxima vuelta de la salud tiene que alcanzar, sin reiniciar Orca.
+  let busquedas = 0
+  let instalado = false
+  const py = crearPythonDelProceso({ encontrar: () => { busquedas += 1; return instalado ? ['py', '-3'] : null } })
+  py.actual(); py.actual(); py.actual()
+  ok('el interprete se busca una vez aunque se lance muchas veces', busquedas === 1, String(busquedas))
+  ok('sin Python, actual() es null', py.actual() === null)
+  instalado = true
+  py.reintentar()
+  ok('reintentar() vuelve a buscar cuando no habia',
+    JSON.stringify(py.actual()) === JSON.stringify(['py', '-3']) && busquedas === 2, String(busquedas))
+  py.reintentar()
+  py.actual()
+  ok('y no vuelve a buscar cuando ya lo encontro', busquedas === 2, String(busquedas))
+
+  const { checkSystem, motivoDe } = await import('../main.mjs')
+  const sinPy = Object.assign(new Error('spawn python ENOENT'), { spawnCode: 'ENOENT', sinPython: true })
+  ok('motivoDe: sin-python antes que sin-herramientas', motivoDe(sinPy) === 'sin-python', motivoDe(sinPy))
+  const alias = Object.assign(new Error('exit 9009'), { exitCode: 9009, sinPython: true })
+  ok('motivoDe: tambien cuando el alias de la tienda arranca y sale mal',
+    motivoDe(alias) === 'sin-python', motivoDe(alias))
+  ok('motivoDe: un ENOENT sin marca sigue siendo sin-herramientas',
+    motivoDe({ spawnCode: 'ENOENT' }) === 'sin-herramientas')
+
+  const dir = herramientas('salud-sin-python', '#!/bin/sh\necho \'[]\'\n')
+  const orca = hostFalso(dir, { chats: [] })
+  const memoria = {}
+  const correr = async () => { throw sinPy }
+  await checkSystem(orca, dir, memoria, { correr })
+  await checkSystem(orca, dir, memoria, { correr })
+  const h = orca.store.health
+  ok('la salud dice sin-python', h && h.ok === false && h.problemCode === 'sin-python', JSON.stringify(h))
+  ok('UN aviso, y dice que falta Python', orca.avisos.length === 1 &&
+    /python/i.test(JSON.stringify(orca.avisos[0])), JSON.stringify(orca.avisos))
+
+  // Cada vuelta de la salud le da otra oportunidad al interprete: es la que ve el usuario.
+  let reintentos = 0
+  const pyFalso = { actual: () => null, reintentar: () => { reintentos += 1 } }
+  await checkSystem(hostFalso(dir, { chats: [] }), dir, {}, { correr, python: pyFalso })
+  ok('checkSystem vuelve a buscar Python en cada vuelta', reintentos === 1, String(reintentos))
+}
+
+// El arnes siembra la referencia con el `--help` de cada herramienta. En Windows eso daba
+// ENOENT y la siembra quedaba en sin-herramientas aunque Python estuviera (#78).
+console.log('\nworker: el arnes corre las herramientas con el interprete que le pasa el worker')
+{
+  const { mandoDeAyuda } = await import('../harness.mjs')
+  const { envDeSiembra } = await import('../main.mjs')
+  for (const plataforma of ['darwin', 'linux']) {
+    const m = mandoDeAyuda('/plugin/bin/wa-scope', ['--help'],
+      { plataforma, env: { [PYTHON_ENV]: '["py","-3"]' } })
+    ok(`${plataforma}: el arnes lanza la herramienta por su ruta`,
+      JSON.stringify(m) === JSON.stringify({ cmd: '/plugin/bin/wa-scope', args: ['--help'] }), JSON.stringify(m))
+    const e = envDeSiembra({ plataforma, env: { A: '1' }, python: ['py', '-3'] })
+    ok(`${plataforma}: la siembra no recibe interprete`,
+      JSON.stringify(e) === JSON.stringify({ A: '1', ELECTRON_RUN_AS_NODE: '1' }), JSON.stringify(e))
+  }
+  const w = mandoDeAyuda('C:\\plugin\\bin\\wa-scope', ['caso', '--help'],
+    { plataforma: 'win32', env: { [PYTHON_ENV]: '["py","-3"]' } })
+  ok('win32: el arnes antepone el interprete del worker',
+    JSON.stringify(w) === JSON.stringify({ cmd: 'py', args: ['-3', 'C:\\plugin\\bin\\wa-scope', 'caso', '--help'] }),
+    JSON.stringify(w))
+  const e = envDeSiembra({ plataforma: 'win32', env: { A: '1' }, python: ['py', '-3'] })
+  ok('win32: la siembra recibe el interprete por env',
+    e[PYTHON_ENV] === '["py","-3"]' && e.ELECTRON_RUN_AS_NODE === '1' && e.A === '1', JSON.stringify(e))
+  const sinPy = envDeSiembra({ plataforma: 'win32', env: {}, python: null })
+  ok('win32 sin Python: la siembra recibe el de fabrica', sinPy[PYTHON_ENV] === '["python"]', JSON.stringify(sinPy))
 }
 
 // ───────── la entrada: un mensaje nuevo se vuelve caso sin esperar al reloj ─────────

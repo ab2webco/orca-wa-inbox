@@ -1751,6 +1751,28 @@ titulo('el codigo del CLI, dicho en el idioma del panel')
   ok('y su detalle tecnico se muestra tal cual',
     alertaCrudo.includes('/ruta/que/no/existe/wa-read'), alertaCrudo)
 
+  // Windows sin Python 3 (#78): el usuario tiene que leer que le falta Python, en su
+  // idioma, y no "las herramientas no contestaron", que no le dice que hacer.
+  let textosPy = null
+  for (const [idioma, titulo, como] of [
+    ['es-419', 'Falta Python 3', 'python.org'],
+    ['en-US', 'Python 3 is missing', 'python.org'],
+    ['pt-BR', 'Falta o Python 3', 'python.org']]) {
+    const sinPy = await montar('config.html', { health: { ok: false,
+      problem: 'Python 3 was not found', problemCode: 'sin-python',
+      detail: 'Install Python 3 from python.org (it brings the py launcher) or set ' +
+        'WA_INBOX_PYTHON to its full path. spawn python ENOENT', optional: [] } }, idioma)
+    await espera()
+    const alerta = sinPy.doc.getElementById('alert').textContent
+    textosPy = sinPy.doc.defaultView.STRINGS
+    ok(`${idioma}: sin Python el aviso dice que falta Python`,
+      alerta.includes(titulo) && alerta.includes(como) && !/did not answer|no contestaron/i.test(alerta),
+      alerta)
+  }
+  ok('y el motivo de una busqueda sin Python tambien se dice',
+    ['syncNoPython', 'hNoPython', 'hNoPythonHow'].every((k) => textosPy.es[k] && textosPy.en[k] &&
+      textosPy.pt[k] && textosPy.pt[k] !== textosPy.en[k]))
+
   // La linea existe pero no da senal: el doctor ya no la da por buena con una fila en
   // `linea`. Se dice en el idioma del panel, no con la frase en ingles del CLI.
   const muda = await montar('config.html', { health: { ok: false,

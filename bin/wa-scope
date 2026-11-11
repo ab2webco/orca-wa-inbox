@@ -2159,7 +2159,7 @@ def wa_chats(query=None):
     # Al lado, no en el home: la ruta vieja apuntaba a ~/tools y quedo colgando al
     # mover el arbol. Un plugin busca sus herramientas dentro de si mismo.
     wa_read = os.path.join(os.path.dirname(os.path.abspath(__file__)), "wa-read")
-    cmd = [wa_read, "chats", "-n", "500", "--json"]
+    cmd = [*mando_herramienta(wa_read), "chats", "-n", "500", "--json"]
     if query:
         cmd += ["--query", query]
     p = subprocess.run(cmd, capture_output=True, text=True)
