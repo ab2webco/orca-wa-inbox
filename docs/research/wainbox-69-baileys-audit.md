@@ -198,7 +198,35 @@ case flow. Newsletters are ignored at the socket on purpose (`index.js:340-342`)
 | WAINBOX-52 — Line-down alert elsewhere | R1's restriction alert should use the same alternative channel. |
 | WAINBOX-68 — Send files | R8 extends it to native media. |
 
-## 5. How this was checked
+## 5. Plane items created (approved by the lead on 2026-11-10)
+
+All items are in Backlog and use the full refined body, written with the `plane-refinement`
+skill. The project has no work item types, so the epic is a parent item titled `[Epic] …`.
+Four labels were created: `area:sidecar`, `area:send`, `area:panel`, `owner-decision`.
+
+| Backlog row | Plane item |
+|---|---|
+| Epic (C2–C6) | WAINBOX-54, retitled and given an epic body; its children are WAINBOX-70 to WAINBOX-74 |
+| R9 C2 reactions | WAINBOX-70 |
+| R10 C6 mark read | WAINBOX-71 |
+| R11 C4 typing | WAINBOX-72 |
+| R12 C3 quote | WAINBOX-73 |
+| R16 C5 edit/delete | WAINBOX-74 |
+| R1 restricted account | WAINBOX-75 (related to WAINBOX-34 and WAINBOX-52) |
+| R3 group metadata cache | WAINBOX-76 |
+| R4 missed call | WAINBOX-77 |
+| R5 disappearing chats | WAINBOX-78 |
+| R6 number check | WAINBOX-79 |
+| R7 history sync | WAINBOX-80 |
+| R8 native media | WAINBOX-81 (related to WAINBOX-68) |
+| R13 chat backfill | WAINBOX-82 |
+| R14 Business labels | WAINBOX-83 |
+| R15 polls | WAINBOX-84 |
+| R17 libsignal spike | WAINBOX-85 |
+| R18 auth state | WAINBOX-86 |
+| R2 undecryptable | WAINBOX-43, body rewritten |
+
+## 6. How this was checked
 
 - Version: `npm view @whiskeysockets/baileys dist-tags time`; `gh api .../releases`;
   `gh api .../compare/v7.0.0-rc14...master` and `.../compare/master...develop`;
