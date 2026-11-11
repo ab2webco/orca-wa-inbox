@@ -425,6 +425,26 @@ export function aNumero (valor) {
   return null
 }
 
+// WAINBOX-43. `WebMessageInfo.StubType.CIPHERTEXT` del proto: lo que la linea no pudo
+// descifrar. Baileys 7 lo sube igual por `messages.upsert`, sin contenido y con el motivo
+// en `messageStubParameters[0]`, y le pide el contenido al telefono por su cuenta
+// (lib/Socket/messages-recv.js). Si vuelve, llega como un mensaje normal CON EL MISMO id.
+// Antes esto caia en `esDeControl` y se perdia sin dejar ni una fila ni un numero.
+export const STUB_CIPHERTEXT = 2
+
+/** Lo que dice la columna `descifrado` de una fila: null es un mensaje leido. */
+export const SIN_DESCIFRAR = Object.freeze({ PENDIENTE: 'pendiente', ILEGIBLE: 'ilegible' })
+
+/** `{ motivo, solicitud }` de un stub CIPHERTEXT sin contenido, o `null`. Solo para el
+ *  registro: el motivo es la frase del error de Signal y la solicitud el id del pedido de
+ *  reenvio al telefono (`messageStubParameters[1]`). Ninguno de los dos es contenido. */
+export function stubSinDescifrar (wa) {
+  if (!wa || wa.messageStubType !== STUB_CIPHERTEXT || !esDeControl(wa.message)) return null
+  const p = Array.isArray(wa.messageStubParameters) ? wa.messageStubParameters : []
+  const texto = (v) => (typeof v === 'string' && v ? v.slice(0, 120) : null)
+  return { motivo: texto(p[0]), solicitud: texto(p[1]) }
+}
+
 /**
  * De un `WAMessage` de `messages.upsert` a una fila del almacen, o `null` si eso no se
  * guarda.
@@ -437,7 +457,10 @@ export function filaDeMensaje (wa, { cuenta, identidades }) {
   const stanzaId = wa?.key?.id
   if (!chatJid || !stanzaId) return null
   if (!esConversacion(chatJid)) return null
-  if (esDeControl(wa.message)) return null
+  // Un stub sin descifrar SI es una fila: pendiente, sin cuerpo, hasta que llegue el
+  // contenido con el mismo id o venza el plazo (`vencerSinDescifrar`).
+  const pendiente = !!stubSinDescifrar(wa)
+  if (!pendiente && esDeControl(wa.message)) return null
 
   const grupo = esGrupo(chatJid)
   const fromMe = wa.key.fromMe ? 1 : 0
@@ -473,7 +496,8 @@ export function filaDeMensaje (wa, { cuenta, identidades }) {
     // eso se pregunta aparte: inventarlo aca lo dejaria llamandose como quien escribio.
     chatNombre: !grupo && !fromMe && typeof wa.pushName === 'string' && wa.pushName.trim()
       ? wa.pushName.trim()
-      : null
+      : null,
+    descifrado: pendiente ? SIN_DESCIFRAR.PENDIENTE : null
   }
 }
 

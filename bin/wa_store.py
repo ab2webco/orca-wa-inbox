@@ -509,6 +509,37 @@ def columna_cita(con, prefijo="m"):
     return f"{prefijo}.cita_id" if tiene else "null"
 
 
+# WAINBOX-43: lo que la linea no pudo descifrar. El sidecar lo guarda sin cuerpo y con
+# `descifrado` en 'pendiente' mientras espera que el telefono reenvie el contenido, y en
+# 'ilegible' cuando vencio el plazo. Ninguno de los dos es un mensaje vacio: un cuerpo en
+# blanco lo leia el agente como "llego vacio" y cerraba el caso. Se dicen entre corchetes,
+# como `[poll]` o `[location]` en el sidecar.
+TEXTO_PENDIENTE = "[could not be read yet]"
+TEXTO_ILEGIBLE = "[could not be read]"
+
+
+def columna_descifrado(con, prefijo="m"):
+    """La expresion que lee `descifrado`, o `null` en un almacen de antes de la columna
+    (ahi no hay ningun stub guardado). Igual que `columna_cita`."""
+    tiene = any(f["name"] == "descifrado" for f in con.execute("pragma table_info(mensaje)"))
+    return f"{prefijo}.descifrado" if tiene else "null"
+
+
+def sin_pendientes(con, prefijo="m"):
+    """El filtro que deja afuera los pendientes: no abren caso hasta tener contenido."""
+    columna = columna_descifrado(con, prefijo)
+    return "" if columna == "null" else f" and coalesce({columna}, '') <> 'pendiente'"
+
+
+def texto_de(r):
+    """El texto de una fila en una linea, dicho como tal cuando no se pudo descifrar."""
+    if not (r["body"] or "") and r["descifrado"] == "ilegible":
+        return TEXTO_ILEGIBLE
+    if not (r["body"] or "") and r["descifrado"] == "pendiente":
+        return TEXTO_PENDIENTE
+    return (r["body"] or "").replace("\n", " ")
+
+
 def inbox(con, dias, limite, ventana, solo="todos", linea=None, stanzas=None):
     """Lo que le hablo a usted y todavia no contesto. Con `stanzas`, esos mensajes y nada
     mas, sin mirar la ventana de `dias`: lo atrasado que retoma ingest (sin-responder) se
@@ -526,12 +557,13 @@ def inbox(con, dias, limite, ventana, solo="todos", linea=None, stanzas=None):
     sql = f"""
         select m.account, m.chat_jid, m.stanza_id, m.ts, m.from_me, m.sender_jid,
                m.sender_name, m.body, m.media_type, m.media_path, m.menciona_me,
-               m.cita_me, {columna_cita(con)} cita_id, c.rowid chat_id, c.chat_name,
+               m.cita_me, {columna_cita(con)} cita_id, {columna_descifrado(con)} descifrado,
+               c.rowid chat_id, c.chat_name,
                c.is_group, lm.mine
         from mensaje m
         join chat c on c.account = m.account and c.chat_jid = m.chat_jid
         {ULTIMA_MIA}
-        where m.from_me = 0 and m.revocado = 0 and m.ts > ?
+        where m.from_me = 0 and m.revocado = 0 and m.ts > ? {sin_pendientes(con)}
           -- Aca ANTES habia dos filtros que escondian trabajo real, y los dos se
           -- quitaron por lo mismo: el almacen SOLO guarda mensajes de chats que el
           -- dueno autorizo (`ingerirMensaje` le pregunta al alcance antes de escribir
@@ -584,10 +616,13 @@ def inbox(con, dias, limite, ventana, solo="todos", linea=None, stanzas=None):
             # borraba la fila; ahora la acompana, que es lo que deja al agente decidir
             # si ya quedo atendida o si escribio de otra cosa.
             "escribio_despues": bool(r["mine"] and r["ts"] <= r["mine"]),
-            "text": (r["body"] or "").replace("\n", " "),
+            "text": texto_de(r),
             "media": r["media_path"] or None,
             "media_type": r["media_type"] or None,
         }
+        # Lo que no se pudo descifrar, dicho como tal (WAINBOX-43). Solo cuando lo es.
+        if r["descifrado"] == "ilegible":
+            item["unreadable"] = True
         # El veredicto cacheado, la misma llave que identifica el mensaje. Es una
         # PISTA mas, junto a `kind` y `escribio_despues`: informa, no decide, y su
         # ausencia es normal — significa "todavia no juzgado", nunca "juzgado como
@@ -1145,15 +1180,17 @@ def chat(con, fila, limite, dias=None):
         donde = " and ts > ?"
         args.append(int(time.time()) - dias * 86400)
     filas = con.execute(
-        f"""select ts, from_me, sender_name, sender_jid, body, media_path
+        f"""select ts, from_me, sender_name, sender_jid, body, media_path,
+                   {columna_descifrado(con, "mensaje")} descifrado
             from mensaje
             where account = ? and chat_jid = ? and revocado = 0 {donde}
             order by ts desc limit ?""", args + [limite]).fetchall()
     nombres = NombresDeLibreta(con)
     return [{"date": ts(r["ts"]), "chat": nombre_de(fila), "chat_id": fila["id"],
              "sender": quien(r, nombres, fila["account"]),
-             "text": (r["body"] or "").replace("\n", " "),
-             "media": r["media_path"] or None}
+             "text": texto_de(r),
+             "media": r["media_path"] or None,
+             **({"unreadable": True} if r["descifrado"] == "ilegible" else {})}
             for r in reversed(filas)]
 
 
@@ -1212,17 +1249,18 @@ def nuevos(con, fila, base):
                 "where e.account = m.account and e.stanza_id is not null))")
     filas = con.execute(
         f"""select m.stanza_id, m.ts, m.from_me, m.sender_name, m.sender_jid, m.body,
-                   m.media_path
+                   m.media_path, {columna_descifrado(con)} descifrado
             from mensaje m
             where m.account = ? and m.chat_jid = ? and m.revocado = 0 and {otro}
-                  {corte}
+                  {corte} {sin_pendientes(con)}
             order by m.ts, m.rowid""",
         [fila["account"], fila["chat_jid"]] + args).fetchall()
     nombres = NombresDeLibreta(con)
     return [{"date": ts(r["ts"]), "ts": r["ts"], "stanza_id": r["stanza_id"],
              "chat": nombre_de(fila), "chat_id": fila["id"], "chat_jid": fila["chat_jid"],
              "account": fila["account"], "sender": quien(r, nombres, fila["account"]),
-             "text": (r["body"] or "").replace("\n", " "), "media": r["media_path"] or None}
+             "text": texto_de(r), "media": r["media_path"] or None,
+             **({"unreadable": True} if r["descifrado"] == "ilegible" else {})}
             for r in filas]
 
 

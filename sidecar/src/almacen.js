@@ -53,6 +53,11 @@ export const RANGO_FUENTE = Object.freeze({ apodo: 1, verificado: 2, libreta: 3 
 // fila como "la linea ya escribio", y `scripts/check-casos` compara los dos.
 export const ENVIANDO_VENCE_S = 120
 
+// WAINBOX-43: cuanto espera un stub sin descifrar a que el telefono reenvie su contenido
+// antes de quedar ilegible. Diez minutos: el reenvio desde el telefono, cuando funciona,
+// llega en segundos; pasado esto ya no se espera y el tablero lo dice.
+export const SIN_DESCIFRAR_VENCE_MS = 10 * 60 * 1000
+
 // estado-envios: el orden de lo que WhatsApp dice de un envio. `error` es el mas bajo:
 // solo pisa a `servidor` (ver `anotarEntrega`).
 const RANGO_ENTREGA = Object.freeze({
@@ -176,6 +181,11 @@ create table if not exists mensaje (
   revocado    integer not null default 0,
   editado_at  integer,
   captured_at integer not null,
+  -- WAINBOX-43: null es un mensaje leido. 'pendiente': llego un stub CIPHERTEXT que la
+  -- linea no pudo descifrar y el cuerpo todavia no volvio; no abre caso. 'ilegible': el
+  -- plazo vencio sin el contenido (vencerSinDescifrar). Nunca es un mensaje vacio. Un
+  -- almacen de antes la gana al abrirse (columnasNuevas).
+  descifrado  text,
   primary key (account, chat_jid, stanza_id)
 );
 -- La bandeja recorre por chat y fecha; la poda por edad de captura. Los dos indices
@@ -328,6 +338,9 @@ function columnasNuevas (con) {
   }
   if (!columnasDe(con, 'mensaje').includes('cita_id')) {
     con.exec('alter table mensaje add column cita_id text')
+  }
+  if (!columnasDe(con, 'mensaje').includes('descifrado')) {
+    con.exec('alter table mensaje add column descifrado text')
   }
 }
 
@@ -1025,6 +1038,18 @@ class Almacen {
 
   /** El cuerpo de un mensaje de una conversacion AUTORIZADA. */
   guardarMensaje (fila, { mediaPath = null, ahora = Date.now() } = {}) {
+    if (fila.descifrado) {
+      // Un stub sin descifrar entra solo si el id no esta: si ya se leyo el mensaje (un
+      // reenvio tardio, una re-sincronizacion), el stub no puede vaciarlo.
+      this.con.prepare(`insert into mensaje
+        (account, chat_jid, stanza_id, ts, from_me, sender_jid, sender_name, body,
+         revocado, captured_at, descifrado)
+        values (?,?,?,?,?,?,?,'',0,?,?)
+        on conflict(account, chat_jid, stanza_id) do nothing`)
+        .run(fila.cuenta, fila.chatJid, fila.stanzaId, fila.ts, fila.fromMe,
+          fila.senderJid, fila.senderName, Math.floor(ahora / 1000), fila.descifrado)
+      return
+    }
     this.con.prepare(`insert into mensaje
       (account, chat_jid, stanza_id, ts, from_me, sender_jid, sender_name, body,
        media_type, media_path, media_bytes, menciona_me, cita_me, cita_id, revocado,
@@ -1037,7 +1062,9 @@ class Almacen {
         media_bytes=excluded.media_bytes, menciona_me=excluded.menciona_me,
         cita_me=excluded.cita_me,
         -- La misma fila que vuelve sin su contexto no olvida a quien citaba.
-        cita_id=coalesce(excluded.cita_id, mensaje.cita_id)
+        cita_id=coalesce(excluded.cita_id, mensaje.cita_id),
+        -- El contenido que vuelve con el id de un stub lo reemplaza (WAINBOX-43).
+        descifrado=null
       -- Una lapida no se resucita: lo que alguien borro no puede volver porque el
       -- mensaje llegue otra vez por una re-sincronizacion.
       where mensaje.revocado = 0`)
@@ -1045,6 +1072,24 @@ class Almacen {
         fila.senderJid, fila.senderName, fila.body || '', fila.mediaTipo, mediaPath,
         fila.mediaBytes, fila.mencionaMe, fila.citaMe, fila.citaId || null,
         Math.floor(ahora / 1000))
+  }
+
+  /** Los stubs pendientes que pasaron el plazo sin su contenido quedan ilegibles
+   *  (WAINBOX-43). El plazo cuenta desde que la linea vio el stub. Devuelve cuantos. */
+  vencerSinDescifrar ({ ahora = Date.now(), venceMs = SIN_DESCIFRAR_VENCE_MS } = {}) {
+    const corte = Math.floor((ahora - venceMs) / 1000)
+    return Number(this.con.prepare(`update mensaje set descifrado='ilegible'
+      where descifrado='pendiente' and captured_at <= ?`).run(corte).changes)
+  }
+
+  /** `{ pendientes, ilegibles }` de una linea, o de todas. Conteos, nunca contenido. */
+  conteoSinDescifrar (cuenta = null) {
+    const donde = cuenta ? ' and account=?' : ''
+    const fila = this.con.prepare(`select
+        coalesce(sum(descifrado='pendiente'), 0) pendientes,
+        coalesce(sum(descifrado='ilegible'), 0) ilegibles
+      from mensaje where revocado=0${donde}`).get(...(cuenta ? [cuenta] : []))
+    return { pendientes: Number(fila.pendientes), ilegibles: Number(fila.ilegibles) }
   }
 
   /** Un borrado o una edicion (§11-B4). */
