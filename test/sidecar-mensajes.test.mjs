@@ -270,6 +270,40 @@ console.log('\nfilaDeMensaje: de un WAMessage a una fila del almacen')
     cuerpo('L2', { groupMentionedMessage: { message: { extendedTextMessage: { text: 'hola equipo' } } } }) ===
       'hola equipo' &&
     cuerpo('L3', { associatedChildMessage: { message: { conversation: 'adentro' } } }) === 'adentro')
+  // Un pedido o un producto de un catalogo de WhatsApp Business (WAINBOX-94): llegaban con
+  // el cuerpo vacio y el caso se abria sin saber que se pidio. Los montos vienen por 1000
+  // y pueden ser un `Long`; el token del pedido es una credencial y nunca se guarda.
+  ok('un pedido trae su titulo, cuantos items, el total y la moneda',
+    cuerpo('O1', { orderMessage: { orderId: 'ord-fake', itemCount: 2, totalAmount1000: 45500,
+      totalCurrencyCode: 'USD', orderTitle: 'Test order' } }) === '[order] Test order: 2 items, 45.50 USD',
+    cuerpo('O1', { orderMessage: { orderId: 'ord-fake', itemCount: 2, totalAmount1000: 45500,
+      totalCurrencyCode: 'USD', orderTitle: 'Test order' } }))
+  ok('y la nota del cliente, si la escribio',
+    cuerpo('O2', { orderMessage: { itemCount: 1, totalAmount1000: 9990, totalCurrencyCode: 'USD',
+      orderTitle: 'Demo', message: 'Para el viernes' } }) === '[order] Demo: 1 item, 9.99 USD — Para el viernes')
+  const largo = { low: 45500, high: 0, unsigned: false, toNumber () { return 45500 } }
+  ok('un total que llega como Long se lee bien',
+    cuerpo('O3', { orderMessage: { itemCount: 2, totalAmount1000: largo, totalCurrencyCode: 'USD' } }) ===
+      '[order] 2 items, 45.50 USD')
+  ok('un pedido sin titulo ni nota sigue siendo legible, sin separadores colgando',
+    cuerpo('O4', { orderMessage: { itemCount: 3 } }) === '[order] 3 items' &&
+    cuerpo('O5', { orderMessage: { orderTitle: '  ', message: '' } }) === '[order]' &&
+    cuerpo('O6', { orderMessage: { orderTitle: 'Solo titulo' } }) === '[order] Solo titulo' &&
+    cuerpo('O7', { orderMessage: { message: 'Solo nota' } }) === '[order] Solo nota')
+  const conToken = control('O8', { orderMessage: { orderId: 'ord-fake', token: 'tok-fake', itemCount: 2,
+    totalAmount1000: 45500, totalCurrencyCode: 'USD', orderTitle: 'Test order' } })
+  ok('el token del pedido no queda en ninguna parte de la fila',
+    conToken && !JSON.stringify(conToken).includes('tok-fake'), JSON.stringify(conToken))
+  ok('un producto trae su titulo, precio, moneda y referencia',
+    cuerpo('R1', { productMessage: { product: { title: 'Test product', priceAmount1000: 12000,
+      currencyCode: 'COP', retailerId: 'SKU-1' } } }) === '[product] Test product, 12.00 COP (SKU-1)',
+    cuerpo('R1', { productMessage: { product: { title: 'Test product', priceAmount1000: 12000,
+      currencyCode: 'COP', retailerId: 'SKU-1' } } }))
+  ok('y el texto que lo acompana; sin datos, una linea limpia',
+    cuerpo('R2', { productMessage: { product: { title: 'Demo', url: 'https://example.test/p' },
+      body: 'Lo tienen?' } }) === '[product] Demo — Lo tienen?' &&
+    cuerpo('R3', { productMessage: { product: { retailerId: 'SKU-2' } } }) === '[product] (SKU-2)' &&
+    cuerpo('R4', { productMessage: {} }) === '[product]')
   ok('una llamada de grupo y el contenedor de un album no son mensajes (cada foto llega sola)',
     control('K1', { call: { callKey: 'x' } }) === null &&
     control('K2', { albumMessage: { expectedImageCount: 2 } }) === null)
