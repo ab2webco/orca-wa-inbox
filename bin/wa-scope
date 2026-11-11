@@ -16011,7 +16011,9 @@ def brief_de_despacho(con, caso, proyecto, instrucciones):
     wa = ruta_wa_scope()
     del_dueno = caso_del_dueno(con, caso)
     operador = pide_un_operador(con, caso, del_dueno)
-    cabeza = cabeza_del_caso(con, caso, del_dueno, operador, de_casos=False) + [
+    cabeza = cabeza_del_caso(con, caso, del_dueno, operador, de_casos=False)
+    # Lo primero, antes de las instrucciones del chat y de los mensajes (WAINBOX-120).
+    cabeza = cabeza[:1] + seccion_leer_primero(caso, del_dueno, mensajes_nuevos(con, caso)) + cabeza[1:] + [
         "",
         f"You are the project agent of {proyecto['name']} ({proyecto['path']}); the owner "
         f"approved this work for this project.",
@@ -16165,6 +16167,9 @@ def bloques_del_caso(con, caso):
         "select max(at) from caso_evento where case_id=? and a='respondido' and "
         "(de is null or de <> 'respondido')", (caso["case_id"],)).fetchone()[0]
     corte = sello_a_epoch(contestado) if contestado else None
+    # El disparador es el mensaje que abrio el caso: lo de despues va marcado (WAINBOX-120).
+    disparo = min((m["ts"] for m in hilo if m.get("en_caso") and m["ts"] is not None),
+                  default=None)
     bloques = []
     for m in hilo:
         if not m.get("en_caso"):
@@ -16172,6 +16177,8 @@ def bloques_del_caso(con, caso):
         quien = "us" if m["from_me"] else (m["sender"] or "unknown")
         respondido = corte is not None and m["ts"] is not None and m["ts"] < corte
         marca = " (context, already answered)" if respondido else ""
+        if disparo is not None and m["ts"] is not None and m["ts"] > disparo:
+            marca += NUEVO
         if m.get("transcripcion") is True:
             marca += " (voice note, transcribed)"
         elif m.get("transcripcion") is False:
@@ -16567,6 +16574,7 @@ def mensajes_de_memoria(con, caso):
              int(time.time() - MEMORIA_DIAS_MENSAJES * 86400),
              MEMORIA_MENSAJES + len(propios) + len(credencial))).fetchall()
         nombres = wa_store.NombresDeLibreta(fuente)
+        disparo = inicio_del_caso(fuente, caso, sorted(propios))
     except sqlite3.Error:
         return []
     finally:
@@ -16583,6 +16591,8 @@ def mensajes_de_memoria(con, caso):
             texto = wa_jev.mask(texto)
         marca = (" (voice note, transcribed)" if transcripcion is True else
                  " (voice note, not transcribed)" if transcripcion is False else "")
+        if disparo is not None and r["ts"] > disparo:
+            marca = NUEVO + marca
         bloque = [f"[{wa_store.ts(r['ts'])}] {quien}{marca}:", cita(recorta(texto, LARGO_MEMORIA))]
         media = media_de_fila(r)
         if media:
@@ -16596,6 +16606,131 @@ def memoria_del_chat(con, caso):
     return {"casos": casos_de_memoria(con, caso),
             "correcciones": correcciones_de_memoria(con, caso),
             "mensajes": mensajes_de_memoria(con, caso)}
+
+
+# Lo que llego al chat despues del mensaje que abrio el caso (WAINBOX-120). Caso vivo: un
+# cliente escribio "la fila esta trabada", y minutos despues otros mensajes del mismo chat
+# dejaron claro que era la fila de un evento y que ya habia avanzado; el agente del proyecto
+# leyo solo el primero y salio a investigar servidores. El brief los trae marcados, y su
+# primer paso es leerlos otra vez con `caso nuevos` (lo que llego mientras tanto tambien).
+NUEVO = " (newer than the trigger)"
+NUEVOS_MAX = 30
+
+
+def inicio_del_caso(fuente, caso, stanzas):
+    """La hora (epoch) del mensaje que abrio el caso, el disparador: el mas viejo de los
+    suyos en el almacen. None si no hay ninguno."""
+    if not stanzas:
+        return None
+    marcas = ",".join("?" * len(stanzas))
+    fila = fuente.execute(
+        f"select min(ts) from mensaje where account=? and chat_jid=? and stanza_id in ({marcas})",
+        (caso["account"], caso["chat_jid"], *stanzas)).fetchone()
+    return fila[0] if fila else None
+
+
+def mensajes_nuevos(con, caso, limite=NUEVOS_MAX):
+    """Los ultimos `limite` mensajes del chat posteriores al que abrio el caso, en los dos
+    sentidos y en orden: [{date, ts, sender, part_of_case, text, media}]. Los del caso van tal
+    cual; lo de los demas, enmascarado como en la memoria, y lo de un caso con una credencial
+    no entra. [] sin almacen o sin mensajes del caso."""
+    propios = set(stanzas_de_caso(con, caso["case_id"]))
+    credencial = {r["stanza_id"] for r in con.execute(
+        "select cm.stanza_id from caso_mensaje cm join caso c on c.case_id=cm.case_id where "
+        "c.account=? and c.chat_jid=? and c.excepciones like '%credential%' and c.case_id<>?",
+        (caso["account"], caso["chat_jid"], caso["case_id"]))}
+    try:
+        fuente = wa_store.abrir()
+    except wa_store.SinFuente:
+        return []
+    try:
+        desde = inicio_del_caso(fuente, caso, sorted(propios))
+        if desde is None:
+            return []
+        filas = fuente.execute(
+            "select rowid r, stanza_id, ts, from_me, sender_name, sender_jid, body, media_type, "
+            "media_bytes, media_path from mensaje where account=? and chat_jid=? and revocado=0 "
+            "and ts > ? order by ts desc, rowid desc limit ?",
+            (caso["account"], caso["chat_jid"], desde, limite + len(credencial))).fetchall()
+        nombres = wa_store.NombresDeLibreta(fuente)
+    except sqlite3.Error:
+        return []
+    finally:
+        fuente.close()
+    filas = [r for r in filas if r["stanza_id"] not in credencial][:limite]
+    salida = []
+    for r in reversed(filas):
+        texto, transcripcion = texto_de_audio(con, caso, r, r["body"] or "")
+        del_caso = r["stanza_id"] in propios
+        if r["from_me"]:
+            quien = LA_LINEA
+        else:
+            quien = wa_store.quien(r, nombres, caso["account"]) or "unknown"
+            if not del_caso:
+                texto = wa_jev.mask(texto)
+        x = {"date": wa_store.ts(r["ts"]), "ts": r["ts"], "sender": quien,
+             "part_of_case": del_caso, "text": texto, "media": media_de_fila(r)}
+        if transcripcion is not None:
+            x["transcripcion"] = transcripcion
+        salida.append(x)
+    return salida
+
+
+def bloques_de_nuevos(nuevos):
+    """Los mensajes de `mensajes_nuevos`, cada uno citado y marcado como posterior."""
+    bloques = []
+    for m in nuevos:
+        marca = NUEVO + (" (part of this case)" if m["part_of_case"] else "")
+        if m.get("transcripcion") is True:
+            marca += " (voice note, transcribed)"
+        elif m.get("transcripcion") is False:
+            marca += " (voice note, not transcribed)"
+        bloque = [f"[{m['date']}] {m['sender']}{marca}:",
+                  cita(m["text"] if m["part_of_case"] else recorta(m["text"], LARGO_MEMORIA))]
+        if m.get("media"):
+            bloque.append(f"  attachment: {m['media']['type']}: {m['media']['path']}")
+        bloques.append("\n".join(bloque))
+    return bloques
+
+
+def cmd_caso_nuevos(con, a):
+    """`caso nuevos <id>`: lo que llego al chat del caso despues del mensaje que lo abrio
+    (WAINBOX-120), en el momento en que se pide. Solo lee."""
+    nuevos = mensajes_nuevos(con, caso_de(con, a.id))
+    if a.json:
+        return nuevos
+    print("\n\n".join(bloques_de_nuevos(nuevos))
+          or f"(nothing newer than the message that opened case #{a.id})")
+    return None
+
+
+def seccion_leer_primero(caso, del_dueno, nuevos):
+    """El primer paso del brief del despacho (WAINBOX-120): leer lo ultimo del caso con el
+    comando exacto, decir que se pide, y detenerse si lo nuevo lo cancela o lo cambia."""
+    cid = caso["case_id"]
+    wa = ruta_wa_scope()
+    para = ("--estado necesita --actor trabajador --resumen \"<what the newer messages say and "
+            "why you stopped>\" --respuesta \"<one question to the owner: what he wants now>\""
+            if del_dueno else
+            "--estado bloqueado --actor trabajador --resumen \"<newer messages cancel or change "
+            "the request: what they say>\"")
+    lineas = [
+        "",
+        "## Read this first, before any tool use",
+        "Messages can keep arriving in this chat after the one that opened this case, and they "
+        "can change or cancel what it asks. Before you investigate or run anything else:",
+        f"1. Read the latest messages of this case's chat: `{wa} caso nuevos {cid}` (everything "
+        f"after the message that opened the case, including what arrived after this brief "
+        f"was written).",
+        "2. Restate in one line what is being asked now, before any investigation or tool use.",
+        "3. If newer messages cancel the request or change it, stop: do not investigate and "
+        "do not act on the old request. Say so on the case:",
+        f"   {wa} caso resultado {cid} {para}",
+    ]
+    if nuevos:
+        lineas += ["", "### Messages after the one that opened this case, as of this brief "
+                       f"(the latest {NUEVOS_MAX} at most)", *bloques_de_nuevos(nuevos)]
+    return lineas
 
 
 def tamano_de_memoria(memoria):
@@ -18862,6 +18997,11 @@ def main():
 
     c = caso("ver", help="one case with its messages and its events")
     c.add_argument("id", type=int); c.set_defaults(fn=cmd_caso_ver)
+
+    c = caso("nuevos", help="what arrived in the case's chat after the message that opened "
+                            f"the case (the latest {NUEVOS_MAX}), read now: newer messages "
+                            "can change or cancel the request, so read them before acting")
+    c.add_argument("id", type=int); c.set_defaults(fn=cmd_caso_nuevos)
 
     try:
         a = ap.parse_args()
