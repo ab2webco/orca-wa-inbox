@@ -38,6 +38,8 @@ export const CASO_ACCION = Object.freeze({
   AUTORIZAR: 'autorizar',
   IGNORAR: 'ignorar',
   PROYECTO: 'proyecto',
+  // "Devolver al agente" (toma humana, WAINBOX-92): termina la toma del dueno ya.
+  SOLTAR_HUMANO: 'soltar-humano',
   // Un mensaje retenido que NO es de un caso (approve-solo-dueno): el aviso de la sesion de
   // un proyecto que el piso freno. El dueno lo aprueba o lo retira desde el panel; un
   // agente no puede aprobarlo.
@@ -59,6 +61,7 @@ export const CASO_VEREDICTO = Object.freeze({
   AUTORIZADO: 'autorizado',
   IGNORADO: 'ignorado',
   PROYECTO_CAMBIADO: 'proyecto-cambiado',
+  SOLTADO: 'soltado',
   CANCELADO: 'cancelado',
   HILO: 'hilo',
   ARGS: 'E_ARGS',
@@ -383,6 +386,14 @@ export function crearAccionesCaso ({ run, herramienta, motivoDe, lanzarTriage, l
       const id = idDeCaso(pedido)
       await mover(id, 'recibido')
       return { ok: true, code: CASO_VEREDICTO.REABIERTO, caseId: id }
+    }),
+
+    // El dueno le devuelve al agente un caso que estaba atendiendo en persona (toma
+    // humana, WAINBOX-92): el CLI termina la toma y lo marca para el agente.
+    [CASO_ACCION.SOLTAR_HUMANO]: aceptarRechazo(async (pedido) => {
+      const id = idDeCaso(pedido)
+      await caso(['humano', String(id), '--soltar', '--actor', ACTOR])
+      return { ok: true, code: CASO_VEREDICTO.SOLTADO, caseId: id }
     }),
 
     // Marca el caso para el agente: `pending --needs-agent` lo cuenta y triage lo toma en

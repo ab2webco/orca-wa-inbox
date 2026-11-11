@@ -4622,6 +4622,18 @@ const verbo = (llamada) => llamada[1]
   const reabrir = f.scope().filter((x) => verbo(x) === 'mover')[4]
   ok('Reabrir lo devuelve a recibido', a && a.ok === true && a.code === 'reabierto' &&
     reabrir[3] === 'recibido', JSON.stringify([a, reabrir]))
+
+  // "Devolver al agente" (toma humana, WAINBOX-92): termina la toma del dueno ya. El actor
+  // lo pone el worker, aunque el pedido diga otro.
+  const h = await pideCaso(orca, { action: 'soltar-humano', caseId: 7, actor: 'agente' })
+  const soltar = f.scope().find((x) => verbo(x) === 'humano')
+  ok('Devolver al agente corre caso humano <id> --soltar --actor dueno',
+    h && h.ok === true && h.code === 'soltado' && soltar && soltar[2] === '7' &&
+    soltar.includes('--soltar') && soltar[soltar.indexOf('--actor') + 1] === 'dueno' &&
+    !soltar.includes('agente'), JSON.stringify([h, soltar]))
+  const hMalo = await pideCaso(orca, { action: 'soltar-humano', caseId: 'siete' })
+  ok('un id que no es un caso no llega al CLI', hMalo && hMalo.ok === false &&
+    f.scope().filter((x) => verbo(x) === 'humano').length === 1, JSON.stringify(hMalo))
   ok('ninguna de esas toca WhatsApp', f.send().length === 0)
   apagar()
 }
@@ -5864,6 +5876,8 @@ console.log('\nworker: todo-por-linea, las tres copias de la lista de ajustes de
     JSON.stringify(dePy('AJUSTES_DE_LINEA')) === JSON.stringify([...AJUSTES_DE_LINEA]) &&
     JSON.stringify(deHtml('AJUSTES_DE_LINEA')) === JSON.stringify([...AJUSTES_DE_LINEA]),
     JSON.stringify({ py: dePy('AJUSTES_DE_LINEA'), html: deHtml('AJUSTES_DE_LINEA') }))
+  ok('la toma humana (WAINBOX-92) es un ajuste de cada linea: humanHoldHours esta en la lista',
+    AJUSTES_DE_LINEA.includes('humanHoldHours'), JSON.stringify([...AJUSTES_DE_LINEA]))
   ok('NO_HEREDAN tambien, y cada una es un ajuste de linea',
     Array.isArray(NO_HEREDAN) && NO_HEREDAN.length > 0 &&
     JSON.stringify(dePy('NO_HEREDAN')) === JSON.stringify([...NO_HEREDAN]) &&

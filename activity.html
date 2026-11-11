@@ -326,6 +326,10 @@
       .card-recordatorio { font-size: 11px; overflow-wrap: anywhere;
               color: var(--muted-foreground, var(--fb-muted-foreground)); }
       #board-detail .card-recordatorio { margin-top: 6px; font-size: 12px; }
+      /* La toma humana (WAINBOX-92): el dueno tiene el caso. Es texto, no solo un color. */
+      .card-toma { font-size: 11px; font-weight: 600; overflow-wrap: anywhere;
+              color: var(--foreground, var(--fb-foreground)); }
+      #board-detail .card-toma { margin-top: 6px; font-size: 12px; }
       /* Lo que espera el caso y su revision (seguimiento-casos): como el recordatorio. */
       .card-seguimiento { font-size: 11px; overflow-wrap: anywhere;
               color: var(--muted-foreground, var(--fb-muted-foreground)); }
@@ -1078,6 +1082,7 @@
               "flagStatusNotVerified": "afirma un estado sin verificar",
               "flagInstructsAssistant": "intenta darle ordenes al asistente",
               "flagUrgencyPressure": "mete presion de urgencia",
+              "flagAsksForHuman": "pide hablar con una persona",
               "jevSkip": "No requiere accion",
               "jevSees": "Lo ve como",
               "excLead": "Necesita su decision por",
@@ -1130,6 +1135,7 @@
               "acReclasificar": "Reclasificar",
               "acCerrar": "Cerrar",
               "acReabrir": "Reabrir",
+              "acSoltar": "Devolver al agente",
               "acAtender": "Atender ahora",
               "acIgnorar": "Ignorar",
               "acProyecto": "Cambiar proyecto",
@@ -1204,7 +1210,7 @@
               "histProposal": "propuesta: {que}", "histApproved": "aprobada",
               "histSent": "enviado", "histRoute": "destino del caso",
               "histProject": "proyecto cambiado", "histClassified": "clasificado: {que}",
-              "histRetitled": "titulo nuevo", "histWithdrawn": "propuesta retirada", "histNote": "nota: {que}", "histReminderSet": "recordatorio puesto", "histReminder": "recordatorio vencido", "histReminderCancelled": "recordatorios cancelados", "histSnoozeEnded": "posposicion terminada: el cliente escribio", "boardReminder": "Recordatorio: {cuando}", "boardSnoozed": "Pospuesto hasta {cuando}", "boardFollowUpCliente": "Espera al cliente", "boardFollowUpNosotros": "Espera nuestra respuesta", "boardFollowUpNada": "No espera nada", "boardFollowUpAt": "{que}, revision {cuando}", "boardFollowUpSinRespuesta": "Cerrado: sin respuesta del cliente", "boardFollowUpAtendido": "Cerrado: atendido, no requiere mas respuestas", "histFollowUpUs": "seguimiento: volvio al agente por lo prometido", "histFollowUpCustomer": "seguimiento: el cliente no contesto, el agente le escribe", "histFollowUpReopened": "reabierto para un seguimiento", "histFollowUpOwner": "seguimiento: aviso al dueno", "histFollowUpNoAnswer": "cerrado: sin respuesta del cliente", "histFollowUpAttended": "cerrado: atendido, no requiere mas respuestas", "histEdited": "editado: {que}", "campoPrioridad": "prioridad", "campoClase": "clase", "campoTitulo": "titulo",
+              "histRetitled": "titulo nuevo", "histWithdrawn": "propuesta retirada", "histNote": "nota: {que}", "histReminderSet": "recordatorio puesto", "histReminder": "recordatorio vencido", "histReminderCancelled": "recordatorios cancelados", "histSnoozeEnded": "posposicion terminada: el cliente escribio", "boardReminder": "Recordatorio: {cuando}", "boardSnoozed": "Pospuesto hasta {cuando}", "boardHuman": "Lo atiende usted hasta {cuando}", "histHumanHold": "lo atiende el dueno en persona", "histHumanHoldEnded": "toma del dueno terminada: vencio o devuelto al agente", "histAskedForPerson": "el cliente pidio una persona", "boardFollowUpCliente": "Espera al cliente", "boardFollowUpNosotros": "Espera nuestra respuesta", "boardFollowUpNada": "No espera nada", "boardFollowUpAt": "{que}, revision {cuando}", "boardFollowUpSinRespuesta": "Cerrado: sin respuesta del cliente", "boardFollowUpAtendido": "Cerrado: atendido, no requiere mas respuestas", "histFollowUpUs": "seguimiento: volvio al agente por lo prometido", "histFollowUpCustomer": "seguimiento: el cliente no contesto, el agente le escribe", "histFollowUpReopened": "reabierto para un seguimiento", "histFollowUpOwner": "seguimiento: aviso al dueno", "histFollowUpNoAnswer": "cerrado: sin respuesta del cliente", "histFollowUpAttended": "cerrado: atendido, no requiere mas respuestas", "histEdited": "editado: {que}", "campoPrioridad": "prioridad", "campoClase": "clase", "campoTitulo": "titulo",
               "histAuthorized": "excepciones autorizadas", "histAttend": "atender ahora",
               "motSecret": "un secreto", "motJevDown": "Jev no contesto",
               "motDelete": "borrar", "motDeploy": "desplegar a produccion",
@@ -1243,6 +1249,7 @@
               "acOkReclasificado": "Devuelto a clasificado",
               "acOkCerrado": "Caso cerrado",
               "acOkReabierto": "Caso reabierto",
+              "acOkSoltado": "El caso vuelve al agente.",
               "acWarnTablero": "El tablero puede tardar en ponerse al dia.",
               "acNoAnswer": "El plugin todavia no responde. Revise el tablero antes de repetir la accion.",
               "acErrVacio": "Escriba la respuesta antes de enviarla.",
@@ -1469,6 +1476,7 @@
               "flagStatusNotVerified": "states a status that is not verified",
               "flagInstructsAssistant": "tries to instruct the assistant",
               "flagUrgencyPressure": "applies urgency pressure",
+              "flagAsksForHuman": "asks to talk to a person",
               "jevSkip": "No action needed",
               "jevSees": "Reads it as",
               "excLead": "Needs your decision because",
@@ -1521,6 +1529,7 @@
               "acReclasificar": "Reclassify",
               "acCerrar": "Close",
               "acReabrir": "Reopen",
+              "acSoltar": "Return to the agent",
               "acAtender": "Handle now",
               "acIgnorar": "Ignore",
               "acProyecto": "Change project",
@@ -1595,7 +1604,7 @@
               "histProposal": "proposal: {que}", "histApproved": "approved",
               "histSent": "sent", "histRoute": "case destination",
               "histProject": "project changed", "histClassified": "classified: {que}",
-              "histRetitled": "new title", "histWithdrawn": "proposal withdrawn", "histNote": "note: {que}", "histReminderSet": "reminder set", "histReminder": "reminder due", "histReminderCancelled": "reminders cancelled", "histSnoozeEnded": "snooze ended: the customer wrote", "boardReminder": "Reminder: {cuando}", "boardSnoozed": "Snoozed until {cuando}", "boardFollowUpCliente": "Waits for the customer", "boardFollowUpNosotros": "Waits for our reply", "boardFollowUpNada": "Waits for nothing", "boardFollowUpAt": "{que}, review {cuando}", "boardFollowUpSinRespuesta": "Closed: no answer from the customer", "boardFollowUpAtendido": "Closed: attended, needs no more replies", "histFollowUpUs": "follow-up: back to the agent for what was promised", "histFollowUpCustomer": "follow-up: the customer did not answer, the agent writes", "histFollowUpReopened": "reopened for a follow-up", "histFollowUpOwner": "follow-up: owner notified", "histFollowUpNoAnswer": "closed: no answer from the customer", "histFollowUpAttended": "closed: attended, needs no more replies", "histEdited": "edited: {que}", "campoPrioridad": "priority", "campoClase": "kind", "campoTitulo": "title",
+              "histRetitled": "new title", "histWithdrawn": "proposal withdrawn", "histNote": "note: {que}", "histReminderSet": "reminder set", "histReminder": "reminder due", "histReminderCancelled": "reminders cancelled", "histSnoozeEnded": "snooze ended: the customer wrote", "boardReminder": "Reminder: {cuando}", "boardSnoozed": "Snoozed until {cuando}", "boardHuman": "You are handling this until {cuando}", "histHumanHold": "the owner is handling it in person", "histHumanHoldEnded": "the owner's hold ended: expired or back to the agent", "histAskedForPerson": "the customer asked for a person", "boardFollowUpCliente": "Waits for the customer", "boardFollowUpNosotros": "Waits for our reply", "boardFollowUpNada": "Waits for nothing", "boardFollowUpAt": "{que}, review {cuando}", "boardFollowUpSinRespuesta": "Closed: no answer from the customer", "boardFollowUpAtendido": "Closed: attended, needs no more replies", "histFollowUpUs": "follow-up: back to the agent for what was promised", "histFollowUpCustomer": "follow-up: the customer did not answer, the agent writes", "histFollowUpReopened": "reopened for a follow-up", "histFollowUpOwner": "follow-up: owner notified", "histFollowUpNoAnswer": "closed: no answer from the customer", "histFollowUpAttended": "closed: attended, needs no more replies", "histEdited": "edited: {que}", "campoPrioridad": "priority", "campoClase": "kind", "campoTitulo": "title",
               "histAuthorized": "exceptions authorized", "histAttend": "handle now",
               "motSecret": "a secret", "motJevDown": "Jev did not answer",
               "motDelete": "deleting", "motDeploy": "deploying to production",
@@ -1634,6 +1643,7 @@
               "acOkReclasificado": "Sent back to classified",
               "acOkCerrado": "Case closed",
               "acOkReabierto": "Case reopened",
+              "acOkSoltado": "The case goes back to the agent.",
               "acWarnTablero": "The board may take a moment to catch up.",
               "acNoAnswer": "The plugin has not answered yet. Check the board before repeating the action.",
               "acErrVacio": "Write the reply before sending it.",
@@ -1860,6 +1870,7 @@
               "flagStatusNotVerified": "afirma um status nao verificado",
               "flagInstructsAssistant": "tenta dar ordens ao assistente",
               "flagUrgencyPressure": "faz pressao de urgencia",
+              "flagAsksForHuman": "pede para falar com uma pessoa",
               "jevSkip": "Nao requer acao",
               "jevSees": "Ve como",
               "excLead": "Precisa da sua decisao por",
@@ -1912,6 +1923,7 @@
               "acReclasificar": "Reclassificar",
               "acCerrar": "Fechar",
               "acReabrir": "Reabrir",
+              "acSoltar": "Devolver ao agente",
               "acAtender": "Atender agora",
               "acIgnorar": "Ignorar",
               "acProyecto": "Mudar projeto",
@@ -1986,7 +1998,7 @@
               "histProposal": "proposta: {que}", "histApproved": "aprovada",
               "histSent": "enviado", "histRoute": "destino do caso",
               "histProject": "projeto alterado", "histClassified": "classificado: {que}",
-              "histRetitled": "titulo novo", "histWithdrawn": "proposta retirada", "histNote": "nota: {que}", "histReminderSet": "lembrete criado", "histReminder": "lembrete vencido", "histReminderCancelled": "lembretes cancelados", "histSnoozeEnded": "adiamento terminado: o cliente escreveu", "boardReminder": "Lembrete: {cuando}", "boardSnoozed": "Adiado ate {cuando}", "boardFollowUpCliente": "Espera o cliente", "boardFollowUpNosotros": "Espera nossa resposta", "boardFollowUpNada": "Nao espera nada", "boardFollowUpAt": "{que}, revisao {cuando}", "boardFollowUpSinRespuesta": "Fechado: sem resposta do cliente", "boardFollowUpAtendido": "Fechado: atendido, nao precisa de mais respostas", "histFollowUpUs": "acompanhamento: voltou ao agente pelo prometido", "histFollowUpCustomer": "acompanhamento: o cliente nao respondeu, o agente escreve", "histFollowUpReopened": "reaberto para um acompanhamento", "histFollowUpOwner": "acompanhamento: aviso ao dono", "histFollowUpNoAnswer": "fechado: sem resposta do cliente", "histFollowUpAttended": "fechado: atendido, nao precisa de mais respostas", "histEdited": "editado: {que}", "campoPrioridad": "prioridade", "campoClase": "tipo", "campoTitulo": "titulo",
+              "histRetitled": "titulo novo", "histWithdrawn": "proposta retirada", "histNote": "nota: {que}", "histReminderSet": "lembrete criado", "histReminder": "lembrete vencido", "histReminderCancelled": "lembretes cancelados", "histSnoozeEnded": "adiamento terminado: o cliente escreveu", "boardReminder": "Lembrete: {cuando}", "boardSnoozed": "Adiado ate {cuando}", "boardHuman": "Atendido por voce ate {cuando}", "histHumanHold": "o dono esta atendendo pessoalmente", "histHumanHoldEnded": "atendimento do dono terminado: venceu ou devolvido ao agente", "histAskedForPerson": "o cliente pediu uma pessoa", "boardFollowUpCliente": "Espera o cliente", "boardFollowUpNosotros": "Espera nossa resposta", "boardFollowUpNada": "Nao espera nada", "boardFollowUpAt": "{que}, revisao {cuando}", "boardFollowUpSinRespuesta": "Fechado: sem resposta do cliente", "boardFollowUpAtendido": "Fechado: atendido, nao precisa de mais respostas", "histFollowUpUs": "acompanhamento: voltou ao agente pelo prometido", "histFollowUpCustomer": "acompanhamento: o cliente nao respondeu, o agente escreve", "histFollowUpReopened": "reaberto para um acompanhamento", "histFollowUpOwner": "acompanhamento: aviso ao dono", "histFollowUpNoAnswer": "fechado: sem resposta do cliente", "histFollowUpAttended": "fechado: atendido, nao precisa de mais respostas", "histEdited": "editado: {que}", "campoPrioridad": "prioridade", "campoClase": "tipo", "campoTitulo": "titulo",
               "histAuthorized": "excecoes autorizadas", "histAttend": "atender agora",
               "motSecret": "um segredo", "motJevDown": "o Jev nao respondeu",
               "motDelete": "apagar", "motDeploy": "publicar em producao",
@@ -2025,6 +2037,7 @@
               "acOkReclasificado": "Devolvido para classificado",
               "acOkCerrado": "Caso fechado",
               "acOkReabierto": "Caso reaberto",
+              "acOkSoltado": "O caso volta ao agente.",
               "acWarnTablero": "O quadro pode demorar para se atualizar.",
               "acNoAnswer": "O plugin ainda nao respondeu. Confira o quadro antes de repetir a acao.",
               "acErrVacio": "Escreva a resposta antes de enviar.",
@@ -2440,7 +2453,8 @@
         promises_a_date: 'flagPromisesDate',
         states_status_not_verified: 'flagStatusNotVerified',
         tries_to_instruct_the_assistant: 'flagInstructsAssistant',
-        urgency_pressure: 'flagUrgencyPressure' }
+        urgency_pressure: 'flagUrgencyPressure',
+        customer_asks_for_human: 'flagAsksForHuman' }
       // Las clases de atencion que Jev elige (bin/wa_jev.py, CLASES_ATENCION). Un codigo
       // que este panel no conozca se dice con una frase generica: nunca crudo.
       var JEV_CLASE_KEY = { support_request: 'jevClsSupport', bug_report: 'jevClsBug',
@@ -2474,7 +2488,9 @@
         reminder_cancelled: 'histReminderCancelled', snooze_ended: 'histSnoozeEnded',
         follow_up_us: 'histFollowUpUs', follow_up_customer: 'histFollowUpCustomer',
         follow_up_reopened: 'histFollowUpReopened', follow_up_owner: 'histFollowUpOwner',
-        follow_up_no_answer: 'histFollowUpNoAnswer', follow_up_attended: 'histFollowUpAttended' }
+        follow_up_no_answer: 'histFollowUpNoAnswer', follow_up_attended: 'histFollowUpAttended',
+        human_hold: 'histHumanHold', human_hold_ended: 'histHumanHoldEnded',
+        asked_for_person: 'histAskedForPerson' }
       // Los motivos y excepciones que viajan en `args`, en palabras.
       var MOTIVO_KEY = { money: 'excMoney', credential: 'excCredential',
         commitment: 'excCommitment', jev: 'excJev', file: 'excFile', secret: 'motSecret',
@@ -2705,7 +2721,7 @@
       // aprueba algo, la version que el dueno vio. El worker pone el actor, saca el texto
       // y el chat del caso y contesta en `scopeResult`, emparejado por el id del pedido.
       var ACCIONES = ['atender', 'ignorar', 'enviar', 'editar', 'ejecutar', 'autorizar', 'reclasificar',
-        'cerrar', 'reabrir', 'proyecto']
+        'cerrar', 'reabrir', 'proyecto', 'soltar']
       // Donde vale cada accion. `actions` de la tarjeta dice lo que el CLI ofrece; esto
       // saca lo que el worker rechazaria siempre: reclasificar lo que ya esta clasificado
       // no tiene camino en el CLI, y un boton que siempre falla es un boton que no hace
@@ -2729,14 +2745,18 @@
         ignorar: { etapas: ['recibido', 'clasificado'] },
         // En respondido solo cuando la tarjeta la ofrece: la pregunta "A o B?" espera al que
         // escribio, y elegir el proyecto la contesta (proyectos-por-chat).
-        proyecto: { etapas: ['recibido', 'clasificado', 'decision', 'bloqueado', 'respondido'] }
+        proyecto: { etapas: ['recibido', 'clasificado', 'decision', 'bloqueado', 'respondido'] },
+        // "Devolver al agente" (toma humana, WAINBOX-92): solo mientras el dueno lo tiene.
+        soltar: { etapas: ['recibido', 'clasificado', 'decision', 'trabajo', 'listo', 'respondido',
+          'bloqueado'], conToma: true }
       }
       var ACC_KEY = { enviar: 'acEnviar', editar: 'acEditar', ejecutar: 'acEjecutar',
         reclasificar: 'acReclasificar', cerrar: 'acCerrar', reabrir: 'acReabrir',
-        atender: 'acAtender', ignorar: 'acIgnorar', proyecto: 'acProyecto', autorizar: 'acAutorizar' }
+        atender: 'acAtender', ignorar: 'acIgnorar', proyecto: 'acProyecto', autorizar: 'acAutorizar',
+        soltar: 'acSoltar' }
       // El nombre con que el worker conoce la accion: "editar" abre un editor, y lo que se
       // pide es editar Y enviar.
-      var ACC_PEDIDO = { editar: 'editar-enviar' }
+      var ACC_PEDIDO = { editar: 'editar-enviar', soltar: 'soltar-humano' }
       // Las acciones con un campo antes de confirmar.
       var ACC_FORM = { editar: { campo: 'textarea', label: 'acEditarLabel', ok: 'acConfirmEditar' },
         reclasificar: { campo: 'input', label: 'acNotaLabel', ok: 'acConfirmReclasificar' },
@@ -2746,7 +2766,8 @@
       var ACC_APAGADA = { cerrar: true, reabrir: true, ignorar: true }
       var OK_ACCION = { enviado: 'acOkEnviado', aprobada: 'acOkAprobada',
         reclasificado: 'acOkReclasificado', cerrado: 'acOkCerrado', reabierto: 'acOkReabierto',
-        atendido: 'acOkAtendido', autorizado: 'acOkAutorizado', ignorado: 'acOkIgnorado', 'proyecto-cambiado': 'acOkProyecto' }
+        atendido: 'acOkAtendido', autorizado: 'acOkAutorizado', ignorado: 'acOkIgnorado', 'proyecto-cambiado': 'acOkProyecto',
+        soltado: 'acOkSoltado' }
       // Lo que dice `agent` en el veredicto de "atender": si el worker pudo lanzar la
       // automatizacion del agente al momento. `launched` NO es "ya esta respondiendo": que
       // el agente no tenga sesion de Claude solo lo dice Orca despues de despachar.
@@ -2795,6 +2816,7 @@
           if (regla.tipo && !(prop && prop.tipo === regla.tipo)) return false
           if (regla.tipos && !(prop && regla.tipos.indexOf(prop.tipo) >= 0)) return false
           if (regla.conExcepciones && !textos(c.exceptions).length) return false
+          if (regla.conToma && !tomaHasta(c)) return false
           if (regla.sinTexto && prop && prop.texto) return false
           if (regla.conTexto && !(prop && prop.texto)) return false
           if (regla.version && !(prop && typeof prop.version === 'string' && prop.version)) return false
@@ -3475,6 +3497,25 @@
           minute: '2-digit' })
       }
 
+      /** Hasta cuando el dueno atiende el caso en persona (toma humana, WAINBOX-92), como
+       *  fecha, o null si no lo tiene o ya vencio. */
+      function tomaHasta (c) {
+        var r = esObjeto(c.reminder) ? c.reminder : null
+        var f = r && typeof r.human_until === 'string' ? new Date(r.human_until) : null
+        return f && !isNaN(f.getTime()) && f.getTime() > Date.now() ? f : null
+      }
+
+      /** "Lo atiende usted hasta HH:MM" (con el dia si no es hoy), en una linea de texto: el
+       *  lector de pantalla la lee igual que se ve, sin depender de un color o un icono. */
+      function tomaNodo (c) {
+        var f = tomaHasta(c)
+        if (!f) return null
+        var hoy = f.toDateString() === new Date().toDateString()
+        var cuando = hoy ? f.toLocaleTimeString(LOCALE, { hour: '2-digit', minute: '2-digit' })
+          : fechaHora(f.toISOString())
+        return crear('div', 'card-toma', fmt('boardHuman', { cuando: cuando }))
+      }
+
       /** La posposicion o el proximo recordatorio del caso (casos-cli, K10), en una linea. */
       function recordatorioNodo (c) {
         var r = esObjeto(c.reminder) ? c.reminder : null
@@ -3745,6 +3786,8 @@
         var pregunta = preguntaTarjetaNodo(c)
         if (pregunta) nodos.push(pregunta)
         if (c.read_only === true) nodos.push(crear('div', 'card-solo-leer', t('boardReadOnly')))
+        var toma = tomaNodo(c)
+        if (toma) nodos.push(toma)
         var recordatorio = recordatorioNodo(c)
         if (recordatorio) nodos.push(recordatorio)
         var seguimiento = seguimientoNodo(c)
@@ -4118,6 +4161,8 @@
         }
         var preguntaNodo = preguntaDetalleNodo(c)
         if (preguntaNodo) caja.appendChild(preguntaNodo)
+        var tomaDet = tomaNodo(c)
+        if (tomaDet) caja.appendChild(tomaDet)
         var recordatorioDet = recordatorioNodo(c)
         if (recordatorioDet) caja.appendChild(recordatorioDet)
         var seguimientoDet = seguimientoNodo(c)

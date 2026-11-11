@@ -1303,6 +1303,22 @@
           </div>
         </section>
 
+        <!-- La toma humana (WAINBOX-92): cuando el dueno contesta desde su telefono, el agente
+             se aparta de ese caso estas horas. Global, en la clave plana `humanHoldHours`. -->
+        <section class="card" id="human-hold-card">
+          <h2 data-t="humanHoldLegend"></h2>
+          <div class="fr-num">
+            <label for="human-hold" data-t="humanHoldLabel"></label>
+            <input id="human-hold" type="number" min="1" max="24" step="1" inputmode="numeric"
+                   aria-describedby="human-hold-help" />
+          </div>
+          <p class="hint" id="human-hold-help" data-t="humanHoldHelp"></p>
+          <div class="actions barra-guardar">
+            <button class="primary" id="save-human-hold" data-t="saveCard"></button>
+            <span class="said" id="said-human-hold"></span>
+          </div>
+        </section>
+
         <!-- Si el agente del caso puede adjuntar un archivo (caso-adjuntos): un ajuste global, en
              la clave plana `sendFiles`, apagado de fabrica; cada conversacion lo puede pisar.
              Encendido o no, ningun archivo sale sin la aprobacion del dueno. -->
@@ -1952,6 +1968,13 @@
           pqHoursHelp: 'Si quien escribio no contesta "¿A o B?" en este plazo, la pregunta pasa ' +
             'a usted.',
           pqHoursRange: 'Son horas enteras, desde 1.',
+          // --- La toma humana (WAINBOX-92) ---
+          humanHoldLegend: 'Cuando usted contesta',
+          humanHoldLabel: 'Horas que el agente se aparta del caso',
+          humanHoldHelp: 'Si usted le contesta a un cliente desde su telefono, el agente deja ese ' +
+            'caso estas horas: no redacta ni manda acuses ni seguimientos. "Devolver al agente" ' +
+            'lo termina antes.',
+          humanHoldRange: 'Son horas enteras, de 1 a 24.',
           // --- Los archivos del agente (caso-adjuntos) ---
           filesLegend: 'Archivos del agente',
           filesLabel: 'El agente puede adjuntar archivos',
@@ -2614,6 +2637,13 @@
           pqHoursHelp: 'If whoever wrote does not answer "A or B?" within this time, the ' +
             'question goes to you.',
           pqHoursRange: 'Whole hours, from 1.',
+          // --- Human takeover (WAINBOX-92) ---
+          humanHoldLegend: 'When you reply',
+          humanHoldLabel: 'Hours the agent steps back from the case',
+          humanHoldHelp: 'If you answer a customer from your phone, the agent leaves that case ' +
+            'for this many hours: no drafts, acknowledgements or follow-ups. "Return to the ' +
+            'agent" ends it sooner.',
+          humanHoldRange: 'Whole hours, from 1 to 24.',
           // --- The agent's files (caso-adjuntos) ---
           filesLegend: "The agent's files",
           filesLabel: 'The agent can attach files',
@@ -3289,6 +3319,13 @@
         pqHoursHelp: 'Se quem escreveu nao responder "A ou B?" neste prazo, a pergunta passa ' +
           'para voce.',
         pqHoursRange: 'Sao horas inteiras, a partir de 1.',
+        // --- O atendimento pessoal (WAINBOX-92) ---
+        humanHoldLegend: 'Quando voce responde',
+        humanHoldLabel: 'Horas que o agente se afasta do caso',
+        humanHoldHelp: 'Se voce responder a um cliente pelo seu telefone, o agente deixa esse ' +
+          'caso por estas horas: nao redige nem manda confirmacoes ou acompanhamentos. ' +
+          '"Devolver ao agente" termina antes.',
+        humanHoldRange: 'Sao horas inteiras, de 1 a 24.',
         // --- Os arquivos do agente (caso-adjuntos) ---
         filesLegend: 'Arquivos do agente',
         filesLabel: 'O agente pode anexar arquivos',
@@ -4021,7 +4058,8 @@
         'projects',
         'syncMinutes',
         'jevEnabled',
-        'followUp'
+        'followUp',
+        'humanHoldHours'
       ]
       // Los que otra linea NUNCA toma de la principal (`NO_HEREDAN`, la misma lista de
       // wa_settings.py y main.mjs): sin uno propio se pintan los de fabrica. Los avisos de Orca
@@ -4109,6 +4147,8 @@
         slaMinutes: ['sla-minutes', '15'],
         // Cuantas horas espera la pregunta "A o B?" a quien escribio (proyectos-por-chat, M5).
         projectQuestionHours: ['pq-hours', '24'],
+        // Cuantas horas el agente se aparta de un caso que el dueno contesto (WAINBOX-92).
+        humanHoldHours: ['human-hold', '4'],
         // Si el agente del caso puede adjuntar archivos (caso-adjuntos): apagado de fabrica.
         sendFiles: ['send-files', 'off']
       }
@@ -4308,6 +4348,8 @@
         { tarjeta: 'sla-card', boton: 'save-sla', said: 'said-sla', claves: ['slaMinutes'] },
         { tarjeta: 'pq-card', boton: 'save-pq-hours', said: 'said-pq-hours',
           claves: ['projectQuestionHours'] },
+        { tarjeta: 'human-hold-card', boton: 'save-human-hold', said: 'said-human-hold',
+          claves: ['humanHoldHours'] },
         { tarjeta: 'files-card', boton: 'save-files', said: 'said-files',
           claves: ['sendFiles'] },
         { tarjeta: 'follow-up-card', boton: 'save-follow-up', said: 'said-follow-up',
@@ -4323,7 +4365,7 @@
       // pestana. Primero los avisos de Orca, que son la tarjeta de arriba.
       var CLAVES_AUTO = ['orcaNotices', 'ackMode', 'ackText', 'ackQuietMinutes', 'greetingMode',
         'greetingText', 'firstReply', 'slaMinutes', 'projectQuestionHours', 'followUp',
-        'sendFiles']
+        'sendFiles', 'humanHoldHours']
       var pintadas = {}
       var autoPedida = false
       function tarjetaLeida (c) {
@@ -4587,6 +4629,20 @@
         }
         el('pq-hours').value = String(Number(texto))
         guardarTarjeta(event.currentTarget, 'said-pq-hours', ['projectQuestionHours'])
+      })
+      // La toma humana (WAINBOX-92): un entero de 1 a 24, el mismo rango que valida wa-scope.
+      // Fuera de rango no se guarda y se dice.
+      var TOMA_MIN = 1, TOMA_MAX = 24
+      el('human-hold').value = CONTROLES.humanHoldHours[1]
+      el('save-human-hold').addEventListener('click', function (event) {
+        if (sinLeer('save-human-hold')) return
+        var texto = el('human-hold').value.trim()
+        if (!/^\d+$/.test(texto) || Number(texto) < TOMA_MIN || Number(texto) > TOMA_MAX) {
+          said('said-human-hold', t('humanHoldRange'), true)
+          return
+        }
+        el('human-hold').value = String(Number(texto))
+        guardarTarjeta(event.currentTarget, 'said-human-hold', ['humanHoldHours'])
       })
       // Los archivos del agente: on u off, en la clave plana `sendFiles`.
       el('save-files').addEventListener('click', function (event) {

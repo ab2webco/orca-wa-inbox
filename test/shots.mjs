@@ -504,13 +504,15 @@ const TABLERO_OTRO_CHAT = [
   })
 ]
 
-// casos-cli: una nota y una edicion en la historia, un recordatorio y un caso pospuesto.
+// casos-cli: una nota y una edicion en la historia, un recordatorio y un caso pospuesto. Y
+// la toma humana (WAINBOX-92): el 41 lo atiende el dueno, con su linea y Devolver al agente.
 const enMinutos = (n) => new Date(AHORA_MS + n * 60000).toISOString()
 const TABLERO_CASOS_CLI = [
   caso(41, 'clasificado', {
     title: 'Revisar la factura de octubre', prioridad: 'urgent', chat_name: 'Cliente Uno',
     updated_at: minutos(3), exceptions: [], proposal: null, jev: null,
-    reminder: { at: enMinutos(120), snoozed_until: null },
+    reminder: { at: enMinutos(120), snoozed_until: null, human_until: enMinutos(180) },
+    actions: ['atender', 'ignorar', 'cerrar', 'proyecto', 'soltar'],
     events: [
       { de: null, a: 'recibido', actor: 'automatizacion', que: 'message', at: minutos(30) },
       { de: 'recibido', a: 'clasificado', actor: 'agente', que: 'classified', args: ['card'],
@@ -520,7 +522,8 @@ const TABLERO_CASOS_CLI = [
       { de: 'clasificado', a: 'clasificado', actor: 'dueno', que: 'note',
         nota: 'El cliente llamo: la necesita antes del viernes, con el detalle por sede.',
         at: minutos(5) },
-      { de: 'clasificado', a: 'clasificado', actor: 'agente', que: 'reminder_set', at: minutos(3) }]
+      { de: 'clasificado', a: 'clasificado', actor: 'agente', que: 'reminder_set', at: minutos(3) },
+      { de: 'clasificado', a: 'clasificado', actor: 'dueno', que: 'human_hold', at: minutos(2) }]
   }),
   caso(42, 'recibido', {
     title: 'La nota credito del pedido anterior', chat_name: 'Facturacion — Cliente Norte',
@@ -2187,6 +2190,12 @@ const PANELES = [
     nombre: 'config-pregunta-horas', archivo: 'config.html', sub: 'pq-card', anchos: ANCHOS, enTodosLosAnchos: true,
     idiomas: ['pt'], datos: DATOS, pestana: 'aprobacion', espera: 300,
     guion: "document.getElementById('pq-hours').scrollIntoView({ block: 'center' })"
+  },
+  {
+    // WAINBOX-92: cuantas horas el agente se aparta de un caso que el dueno contesto.
+    nombre: 'config-toma-humana', archivo: 'config.html', sub: 'human-hold-card', anchos: ANCHOS,
+    enTodosLosAnchos: true, datos: DATOS, pestana: 'aprobacion', espera: 300,
+    guion: "document.getElementById('human-hold').scrollIntoView({ block: 'center' })"
   },
   {
     nombre: 'config-sidecar-reintentar', archivo: 'config.html', anchos: ANCHOS,
