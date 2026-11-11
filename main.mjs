@@ -13,7 +13,7 @@
  * app de escritorio y una sesion de WhatsApp Web conducida por el navegador— se
  * quitaron enteros, y con ellos el despachador de pestanas que vivia en este archivo.
  */
-import { execFile, spawn } from 'node:child_process'
+import { execFile, execFileSync, spawn } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
@@ -164,16 +164,21 @@ export function programarSalud(correr, cadaMs = SALUD_MS) {
  *
  *  `memoria` recuerda lo ultimo que se aviso: repetida la revision, el MISMO problema no
  *  vuelve a sacar la misma notificacion. Avisa cuando el problema cambia. */
-export async function checkSystem(orca, toolsDir = TOOLS, memoria = {}) {
+export async function checkSystem(orca, toolsDir = TOOLS, memoria = {},
+  { correr = run, python = PYTHON } = {}) {
+  // Un Windows sin Python que lo instala despues: esta vuelta lo vuelve a buscar.
+  python.reintentar()
   // El motivo se conserva: "no pude comprobar el sistema" sin la causa deja al usuario
   // en el mismo callejon que el spinner eterno.
   let porque = ''
+  let sinPython = false
   // `doctor` sale con 1 cuando falta algo REQUERIDO — que es justo lo que se le esta
   // preguntando. Rechazar por el codigo de salida tiraba su respuesta entera y una
   // maquina sin WhatsApp instalado se reportaba como "las herramientas no contestaron".
-  const result = await run(join(toolsDir, 'wa-read'), ['doctor', '--json'],
+  const result = await correr(join(toolsDir, 'wa-read'), ['doctor', '--json'],
     { timeoutMs: 30000 }).catch((error) => {
       porque = String(error?.message ?? error).slice(0, 200)
+      sinPython = motivoDe(error) === SIN_PYTHON
       return error?.stdout ? { stdout: error.stdout } : null
     })
   let checks = []
@@ -203,9 +208,15 @@ export async function checkSystem(orca, toolsDir = TOOLS, memoria = {}) {
 
   // El estado se PUBLICA siempre. El panel lo lee en `health` y no lo escribia nadie:
   // una maquina que no puede leer WhatsApp se veia exactamente igual que una sana.
+  // Sin Python el motivo es ese, no "las herramientas no respondieron": el usuario tiene
+  // que saber que le falta instalar algo, y que es (#78).
+  const mudo = sinPython
+    ? { problem: 'Python 3 was not found', problemCode: SIN_PYTHON,
+        detail: 'Install Python 3 from python.org (it brings the py launcher) or set ' +
+          `WA_INBOX_PYTHON to its full path.${porque ? ` ${porque}` : ''}`.slice(0, 300) }
+    : { problem: 'the plugin tools did not answer', problemCode: 'sin-herramientas', detail: porque }
   const salud = !legible
-    ? { ok: false, problem: 'the plugin tools did not answer',
-        problemCode: 'sin-herramientas', detail: porque, optional: [] }
+    ? { ok: false, ...mudo, optional: [] }
     : failed.length
       ? { ok: false,
           problem: failed[0].check,
@@ -216,18 +227,20 @@ export async function checkSystem(orca, toolsDir = TOOLS, memoria = {}) {
       : { ok: true, optional: opcional }
   await guardar(orca, HEALTH_KEY, salud)
 
-  const clave = !legible ? 'sin-herramientas'
+  const clave = !legible ? mudo.problemCode
     : accionables.map((c) => c.code || c.check).sort().join(',')
   const repetido = memoria.avisado === clave
   memoria.avisado = clave
 
   if (!legible) {
     if (repetido) return
-    await orca.host.call('notifications.show', {
-      title: 'Could not check the system',
-      body: `Could not run the plugin tools. Check that ${toolsDir} is executable.` +
-        (porque ? ` ${porque}` : '')
-    }).catch((error) => orca.log(`notification failed: ${error.message}`))
+    await orca.host.call('notifications.show', sinPython
+      ? { title: 'WhatsApp Inbox needs Python 3',
+          body: 'Install Python 3 from python.org, or set WA_INBOX_PYTHON to its full path.' }
+      : { title: 'Could not check the system',
+          body: `Could not run the plugin tools. Check that ${toolsDir} is executable.` +
+            (porque ? ` ${porque}` : '') }
+    ).catch((error) => orca.log(`notification failed: ${error.message}`))
     orca.log(`check: the tools did not answer${porque ? ` — ${porque}` : ''}`)
     return
   }
@@ -259,16 +272,70 @@ function lineaUtil(stderr) {
 // tienen que volver a buscarla cada uno por su lado.
 let ENV_HERRAMIENTAS = null
 
-// El interprete de Python en Windows, resuelto una vez (sidecar/src/herramienta.js). En
-// macOS y Linux no se resuelve ni se usa: el shebang de cada herramienta ya lo nombra.
-let PYTHON_WINDOWS = null
-const pythonDeWindows = () => (PYTHON_WINDOWS ??= resolverPython())
+/** El motivo estable de "no hay Python 3" en Windows. Distinto de 'sin-herramientas': las
+ *  herramientas estan, lo que falta es con que correrlas, y el panel lo dice asi (#78). */
+export const SIN_PYTHON = 'sin-python'
+
+/** Contesta si `cmd args` arranca y sale bien. Corto: corre una vez por proceso. */
+function contesta (cmd, args) {
+  try {
+    execFileSync(cmd, args, { stdio: 'ignore', timeout: 5000, windowsHide: true })
+    return true
+  } catch {
+    return false
+  }
+}
+
+/** El interprete de Windows, o null si no hay ninguno que conteste.
+ *
+ *  El orden de los candidatos vive en `resolverPython` (sidecar/src/herramienta.js); aca
+ *  solo se mira si alguno contesto, porque `resolverPython` cae a `python` igual, y ese
+ *  `python` puede ser el atajo de la tienda, que arranca y sale mal en vez de dar ENOENT.
+ *  Por eso "no hay Python" se decide al resolver y no por el error del lanzamiento. */
+export function encontrarPython ({ env = process.env, probar = contesta } = {}) {
+  if (String(env.WA_INBOX_PYTHON ?? '').trim()) return resolverPython({ env, probar })
+  let contesto = false
+  const python = resolverPython({ env, probar: (cmd, args) => (contesto = probar(cmd, args)) })
+  return contesto ? python : null
+}
+
+/** El interprete de este proceso: se busca una vez, pero un "no hay" no es para siempre.
+ *  `reintentar()` lo vuelve a buscar en la proxima vuelta solo si no lo habia encontrado:
+ *  instalar Python y esperar la salud alcanza, sin reiniciar Orca. */
+export function crearPythonDelProceso ({ encontrar = encontrarPython } = {}) {
+  let buscado = false
+  let valor = null
+  return {
+    actual () {
+      if (!buscado) { valor = encontrar(); buscado = true }
+      return valor
+    },
+    reintentar () {
+      if (buscado && valor === null) buscado = false
+    }
+  }
+}
+
+// En macOS y Linux no se busca ni se usa: el shebang de cada herramienta ya lo nombra.
+const PYTHON = crearPythonDelProceso()
 
 /** El mando real de `cmd args`: igual en macOS y Linux; en Windows, una herramienta del
- *  plugin corre con Python delante, porque Windows no lee el shebang (spawn ENOENT). */
-function mandoDe (cmd, args) {
-  if (process.platform !== 'win32') return { cmd, args }
-  return mandoHerramienta(cmd, args, { plataforma: 'win32', python: pythonDeWindows() })
+ *  plugin corre con Python delante, porque Windows no lee el shebang (spawn ENOENT). Si no
+ *  hay Python, el mando sale igual con `python` delante y marcado `sinPython`: el fallo
+ *  que venga despues lleva ese motivo y no "las herramientas no respondieron". */
+export function mandoDe (cmd, args, { plataforma = process.platform, python } = {}) {
+  if (plataforma !== 'win32') return { cmd, args }
+  const interprete = python === undefined ? PYTHON.actual() : python
+  const m = mandoHerramienta(cmd, args, { plataforma, python: interprete ?? ['python'] })
+  return interprete === null && m.cmd !== cmd ? { ...m, sinPython: true } : m
+}
+
+/** El env de la siembra (harness.mjs como subproceso). En Windows lleva el interprete, como
+ *  el sidecar: el arnes corre el `--help` de cada herramienta y no adivina con que. */
+export function envDeSiembra ({ plataforma = process.platform, env = process.env, python } = {}) {
+  if (plataforma !== 'win32') return { ...env, ELECTRON_RUN_AS_NODE: '1' }
+  const interprete = python === undefined ? PYTHON.actual() : python
+  return { ...env, ELECTRON_RUN_AS_NODE: '1', [PYTHON_ENV]: JSON.stringify(interprete ?? ['python']) }
 }
 
 /** `env` suma variables SOLO a este hijo: la llave del aprobador viaja asi, al
@@ -290,6 +357,7 @@ function run(cmd, args, { timeoutMs = 20000, env = null } = {}) {
           fallo.spawnCode = typeof error.code === 'string' ? error.code : null
           fallo.exitCode = typeof error.code === 'number' ? error.code : null
           fallo.timedOut = !!error.killed
+          if (m.sinPython) fallo.sinPython = true
           // Lo que alcanzo a decir sobrevive al rechazo: `wa-read doctor` sale con 1
           // cuando falta algo requerido y su JSON en stdout es justo la respuesta.
           fallo.stdout = stdout ?? ''
@@ -400,7 +468,8 @@ const PETICION_TTL_MS = 10 * 60 * 1000
 
 /** El motivo, en codigo corto. Las frases las arma el panel: el worker no sabe en
  *  que idioma esta el usuario, y una frase en el storage se congela en ese idioma. */
-function motivoDe(error) {
+export function motivoDe(error) {
+  if (error?.sinPython) return SIN_PYTHON
   if (error?.spawnCode === 'ENOENT') return 'sin-herramientas'
   // ERR_ACCESS_DENIED es como DENIEGA la valla de permisos de Node, y es el permiso
   // denegado que el worker se encuentra de verdad: EACCES/EPERM vienen del sistema de
@@ -1396,9 +1465,9 @@ function sembrarFuera(toolsDir, proyectos = null) {
       [guion, PLUGIN_DIR, toolsDir, ...(proyectos ? [JSON.stringify(proyectos)] : [])])
     execFile(mSiembra.cmd, mSiembra.args,
       // El worker es el helper de Electron: sin esto arrancaria una ventana en vez de
-      // un Node. Con node pelado —los chequeos— la variable sobra y no molesta.
-      { timeout: 120000, maxBuffer: 8 * 1024 * 1024,
-        env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' } },
+      // un Node. Con node pelado —los chequeos— la variable sobra y no molesta. En Windows
+      // tambien lleva el interprete: el arnes corre el `--help` de cada herramienta.
+      { timeout: 120000, maxBuffer: 8 * 1024 * 1024, env: envDeSiembra() },
       (error, stdout) => {
         const at = new Date().toISOString()
         try {
@@ -1781,7 +1850,7 @@ export function lanzarSidecar({ orca, scriptPath, authDir, toolsDir = TOOLS,
       env: { ...env, ELECTRON_RUN_AS_NODE: '1', WA_SIDECAR_AUTH_DIR: authDir,
         WA_SIDECAR_TOOLS_DIR: toolsDir,
         // En Windows el sidecar corre `wa-scope` con el mismo interprete que el worker.
-        ...(process.platform === 'win32' ? { [PYTHON_ENV]: JSON.stringify(pythonDeWindows()) } : {}),
+        ...(process.platform === 'win32' ? { [PYTHON_ENV]: JSON.stringify(PYTHON.actual() ?? ['python']) } : {}),
         ...envLinea },
       stdio: ['ignore', 'pipe', 'pipe']
     })
