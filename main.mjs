@@ -118,6 +118,8 @@ const JEV_VEREDICTO = Object.freeze({
 const JEV_ESPEJO_SCRIPT = join(PLUGIN_DIR, 'jev-espejo.mjs')
 // La llave del aprobador (approve-solo-dueno): la crea y la devuelve este script, sin valla.
 const APROBADOR_SCRIPT = join(PLUGIN_DIR, 'aprobador.mjs')
+// La vista previa de una foto del hilo (WAINBOX-87): la hace este script, sin valla.
+const HILO_SCRIPT = join(PLUGIN_DIR, 'hilo.mjs')
 // La bitacora de fallas del worker por linea (linea-viva, V4): la escribe este script, sin valla.
 const BITACORA_SCRIPT = join(PLUGIN_DIR, 'bitacora.mjs')
 // Cuantas veces se registra que la boveda no contesta: la revision corre cada 5 minutos
@@ -1152,6 +1154,43 @@ function llaveAprobador() {
           } catch {
             resolve(null)
           }
+        })
+    } catch {
+      resolve(null)
+    }
+  })
+}
+
+// Las vistas ya hechas, por ruta: un adjunto del almacen no cambia despues de bajado.
+const vistasHechas = new Map()
+const VISTAS_MAX = 200
+
+/** La vista previa de la foto en `ruta` como `data:image/...`, o null. La hace `hilo.mjs`
+ *  en un SUBPROCESO sin valla: el worker corre con `--permission` y `~/.wa-inbox/media`
+ *  queda fuera, asi que leerla aca lanzaba ERR_ACCESS_DENIED y el panel se quedaba sin
+ *  ninguna vista previa (WAINBOX-87). Nunca rechaza; un fallo no se guarda. */
+export function vistaSinValla(ruta) {
+  if (typeof ruta !== 'string' || !ruta) return Promise.resolve(null)
+  if (vistasHechas.has(ruta)) return Promise.resolve(vistasHechas.get(ruta))
+  return new Promise((resolve) => {
+    try {
+      const m = mandoSinValla(process.execPath, [HILO_SCRIPT, ruta])
+      execFile(m.cmd, m.args,
+        { timeout: 10000, maxBuffer: 256 * 1024,
+          env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' } },
+        (_error, stdout) => {
+          let vista = null
+          try {
+            const r = JSON.parse(stdout || 'null')
+            if (r?.ok === true && typeof r.vista === 'string' && r.vista.startsWith('data:image/')) {
+              vista = r.vista
+            }
+          } catch { /* sin vista */ }
+          if (vista) {
+            if (vistasHechas.size >= VISTAS_MAX) vistasHechas.delete(vistasHechas.keys().next().value)
+            vistasHechas.set(ruta, vista)
+          }
+          resolve(vista)
         })
     } catch {
       resolve(null)
@@ -3379,7 +3418,7 @@ export default function activate(orca) {
       [SCOPE_ACCION.GUARDAR]: (pedido) => guardarAlcance(pedido),
       [SCOPE_ACCION.REGLA_QUITAR]: (pedido) => quitarRegla(pedido),
       ...crearAccionesCaso({ run, motivoDe, lanzarTriage, llaveAprobador,
-        herramienta: (nombre) => tool(nombre) }),
+        vista: vistaSinValla, herramienta: (nombre) => tool(nombre) }),
       [CUENTAS_ACCION]: () => listarCuentas(),
       ...catalogo.acciones,
       [SKILLS_ACCION.ESTADO]: () => pedirSkills({ op: 'estado' }),

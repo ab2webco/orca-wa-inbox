@@ -21,7 +21,7 @@
  */
 import { join } from 'node:path'
 import { VARIABLE_APROBADOR, VARIABLE_ENVIO_PLUGIN } from './aprobador.mjs'
-import { hiloParaPanel } from './hilo.mjs'
+import { hiloParaPanel, vistaPrevia } from './hilo.mjs'
 
 /** Lo que el panel puede pedir. Son codigos estables: el panel los escribe y el worker
  *  los lee, asi que renombrar uno rompe el canal en silencio. */
@@ -184,7 +184,8 @@ const opcional = (valor, campo) => {
  * llave del plugin (aprobador.mjs), que viaja SOLO al hijo `wa-send --approve`: sin ella
  * `wa-send` niega la aprobacion.
  */
-export function crearAccionesCaso ({ run, herramienta, motivoDe, lanzarTriage, llaveAprobador }) {
+export function crearAccionesCaso ({ run, herramienta, motivoDe, lanzarTriage, llaveAprobador,
+  vista = vistaPrevia }) {
   /** `wa-scope caso <sub> ...`: devuelve las filas del JSON o lanza el rechazo. `env` va
    *  solo a ese hijo (la llave del aprobador, en la firma del dueno). */
   async function caso (args, env = null) {
@@ -434,11 +435,12 @@ export function crearAccionesCaso ({ run, herramienta, motivoDe, lanzarTriage, l
     }),
 
     // Los mensajes del caso y sus adjuntos, para leerlos en el panel. No firma ni mueve nada:
-    // solo `caso ver`. Las rutas se quedan en el worker (hilo.mjs).
+    // solo `caso ver`. Las rutas se quedan en el worker (hilo.mjs). La vista previa la da
+    // `vista`: en el worker vallado es `vistaSinValla` (main.mjs), que lee la foto fuera.
     [CASO_ACCION.HILO]: aceptarRechazo(async (pedido) => {
       const id = idDeCaso(pedido)
       const c = await ver(id)
-      const { mensajes, omitidos } = await hiloParaPanel(c.hilo)
+      const { mensajes, omitidos } = await hiloParaPanel(c.hilo, vista)
       return { ok: true, code: CASO_VEREDICTO.HILO, caseId: id, mensajes, omitidos }
     }),
 

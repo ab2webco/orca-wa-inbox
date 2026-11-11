@@ -44,12 +44,18 @@ Build the preview in a subprocess OUTSIDE the fence, same pattern as `aprobador.
 - [x] T0 Diagnosis + RED tests written (`test/worker.test.mjs`, block "WAINBOX-87", end of file):
       fenced child imports `main.mjs` `vistaSinValla` (does not exist yet) and asserts a `data:`
       preview; unit asserts the `hilo` action uses the injected `vista`.
-- [ ] T1 Observe RED: run `node test/worker.test.mjs` (slow, >10 min on this suite) and confirm
+- [x] T1 Observe RED: run `node test/worker.test.mjs` (slow, >10 min on this suite) and confirm
       only the 2 new WAINBOX-87 assertions fail (the "inside the fence -> no preview" one should pass).
-- [ ] T2 Implement steps 1-3 above; GREEN.
-- [ ] T3 `npm run check` without shots; then reduced shots of the case detail only
+- [x] T2 Implement steps 1-3 above; GREEN.
+- [x] T3 `npm run check` without shots; then reduced shots of the case detail only
       (WA_INBOX_SOLO/TEMA/ANCHO/IDIOMA) and look at them.
 - [ ] T4 Conventional commit(s), PR to main, report link + root cause to the lead. Do not merge.
+
+## Notes (T2-T3)
+- `hilo.mjs` CLI never prints the path; errors carry only the system code (like `aprobador.mjs`).
+- `vistaSinValla` caches only successes (max 200, by path); a failure is retried next open.
+- The shots use a stubbed `hilo` verdict, so they show the panel side only; the worker side is
+  covered by the fenced WAINBOX-87 test.
 
 ## Checks
 `node test/worker.test.mjs`, `npm run check` (shots reduced). Fake data only (public repo).
