@@ -6048,6 +6048,61 @@ console.log('\nworker: P9 — las reglas y el catalogo de cada linea')
     JSON.stringify(r3))
 }
 
+// ───────── WAINBOX-87: la vista previa se hace FUERA de la valla ─────────
+// El worker corre con `--permission` y solo lee la raiz del plugin y la del host. Las fotos
+// viven en ~/.wa-inbox/media: ahi `vistaPrevia` LANZA ERR_ACCESS_DENIED y `hiloParaPanel`
+// se lo traga, asi que en vivo ninguna imagen del caso traia su vista previa. La prueba de
+// P1 no lo veia porque corre sin valla.
+console.log('\nworker: la vista previa del hilo se hace fuera de la valla')
+{
+  const PNG_1X1 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
+  const media = realpathSync(mkdtempSync(join(tmpdir(), 'wa-inbox-media-')))
+  const foto = join(media, '3EB0FOTO.png')
+  writeFileSync(foto, Buffer.from(PNG_1X1, 'base64'))
+  const hilo = [{ stanza_id: 'S1', date: '2026-10-14 09:01', from_me: false, sender: 'Cliente Uno',
+    text: 'Les mando la foto', media: { type: 'imagen', bytes: 68, path: foto } }]
+  const raiz = realpathSync(PLUGIN_DIR)
+  const salida = await new Promise((resolve) => {
+    execFileNode(process.execPath,
+      ['--permission', `--allow-fs-read=${raiz}`, '--allow-child-process', '--input-type=module', '-e',
+        `const h = await import(${JSON.stringify(join(raiz, 'hilo.mjs'))})\n` +
+        `const m = await import(${JSON.stringify(join(raiz, 'main.mjs'))})\n` +
+        `const hilo = ${JSON.stringify(hilo)}\n` +
+        `process.stdout.write(JSON.stringify({ vallado: Boolean(process.permission),\n` +
+        `  dentro: await h.hiloParaPanel(hilo, h.vistaPrevia),\n` +
+        `  fuera: await h.hiloParaPanel(hilo, m.vistaSinValla) }))`],
+      { timeout: 60000 }, (error, stdout, stderr) => resolve({ error, stdout, stderr }))
+  })
+  let leido = null
+  try { leido = JSON.parse(salida.stdout || 'null') } catch { leido = null }
+  const adjunto = (lado) => leido?.[lado]?.mensajes?.[0]?.adjunto
+  ok('WAINBOX-87: dentro de la valla, leer la foto directo no da vista previa (lo visto en vivo)',
+    leido && leido.vallado === true && adjunto('dentro') && !adjunto('dentro').vista,
+    JSON.stringify(salida).slice(0, 400))
+  ok('WAINBOX-87: el worker vallado hace la vista previa en un subproceso sin valla',
+    adjunto('fuera')?.vista === 'data:image/png;base64,' + PNG_1X1,
+    JSON.stringify(salida).slice(0, 400))
+  ok('WAINBOX-87: y la ruta de la foto sigue sin llegar al panel',
+    leido && !JSON.stringify(leido.fuera).includes(media), JSON.stringify(leido?.fuera))
+  rmSync(media, { recursive: true, force: true })
+
+  // Y la accion `hilo` usa la vista que le da el worker, no la que lee el disco por su cuenta.
+  const { crearAccionesCaso } = await import('../acciones.mjs')
+  const pedidas = []
+  const acciones = crearAccionesCaso({
+    run: async () => ({ code: 0, stdout: JSON.stringify([{ case_id: 7, hilo }]), stderr: '' }),
+    herramienta: async (nombre) => nombre,
+    motivoDe: () => 'fallo',
+    lanzarTriage: () => {},
+    llaveAprobador: async () => null,
+    vista: async (ruta) => { pedidas.push(ruta); return 'data:image/png;base64,' + PNG_1X1 }
+  })
+  const v = await acciones.hilo({ caseId: 7 })
+  ok('WAINBOX-87: la accion hilo pide la vista previa a quien se la inyecta el worker',
+    pedidas.length === 1 && pedidas[0] === foto &&
+    v?.mensajes?.[0]?.adjunto?.vista === 'data:image/png;base64,' + PNG_1X1, JSON.stringify(v))
+}
+
 rmSync(RAIZ, { recursive: true, force: true })
 
 console.log(`\n${pruebas - fallos}/${pruebas} en verde`)
