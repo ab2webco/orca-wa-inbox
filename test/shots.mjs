@@ -114,6 +114,13 @@ const DATOS = {
       como: 'no engine: download the model in Settings > Voice, or install a local one ' +
         'with brew install whisper-cpp',
       howCode: 'transcribe-no-engine'
+    }, {
+      // WAINBOX-117: mensajes que la linea no pudo descifrar.
+      que: 'unreadable messages', code: 'unreadable-messages',
+      como: 'optional — 2 messages on local could not be read: WhatsApp never delivered ' +
+        'the content to this device. Open them on the phone to see what the customer ' +
+        'wrote. 1 message still waiting for the phone to resend it.',
+      howCode: 'messages-unreadable'
     }]
   },
   // Con `kind` y `last`, que es lo que publica `wa-read chats`: sin `kind` el selector

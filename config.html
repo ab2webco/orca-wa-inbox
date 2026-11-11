@@ -1966,6 +1966,11 @@
             'numero suyo, ejecute en la carpeta bin del plugin: wa-scope reclave ' +
             '--numero <ese numero, solo digitos>; se aplica en menos de un minuto',
           hStoreRekeyed: 'Conversaciones atribuidas a su numero',
+          // WAINBOX-117: lo que la linea no pudo descifrar y ya vencio el plazo. El
+          // conteo lo dice el CLI (`wa-read doctor`); aca va que hacer.
+          hUnreadable: 'Mensajes que no se pudieron leer',
+          howMessagesUnreadable: 'WhatsApp no le entrego a este equipo el contenido de ' +
+            'algunos mensajes de clientes. Abralos en el telefono para ver que escribieron',
           howStoreRekeyedLine: 'Lo que estaba guardado de antes de que cada numero ' +
             'tuviera su propia linea quedo con el numero de donde vino. No se borro nada',
           modeOff: 'Apagado', modeObserve: 'Solo leer', modeDraft: 'Le pregunto antes',
@@ -2586,6 +2591,9 @@
             'of yours, run in the plugin bin folder: wa-scope reclave --numero <that ' +
             'number, digits only>; it is applied within a minute',
           hStoreRekeyed: 'Conversations assigned to their number',
+          hUnreadable: 'Messages that could not be read',
+          howMessagesUnreadable: 'WhatsApp never delivered the content of some customer ' +
+            'messages to this device. Open them on the phone to see what they wrote',
           howStoreRekeyedLine: 'What was stored before each number had its own line ' +
             'now belongs to the number it came from. Nothing was deleted',
           modeOff: 'Off', modeObserve: 'Read only', modeDraft: 'Ask me first',
@@ -2734,6 +2742,9 @@
           'execute na pasta bin do plugin: wa-scope reclave --numero <esse numero, so ' +
           'digitos>; e aplicado em menos de um minuto',
         hStoreRekeyed: 'Conversas atribuidas ao seu numero',
+        hUnreadable: 'Mensagens que nao puderam ser lidas',
+        howMessagesUnreadable: 'O WhatsApp nao entregou a este equipamento o conteudo de ' +
+          'algumas mensagens de clientes. Abra-as no telefone para ver o que escreveram',
         howStoreRekeyedLine: 'O que estava guardado de antes de cada numero ter a sua ' +
           'propria linha ficou com o numero de onde veio. Nada foi apagado',
         modeOff: 'Desligado', modeObserve: 'So ler', modeDraft: 'Pergunto antes',
@@ -3477,6 +3488,8 @@
         'store-rekeyed': 'hStoreRekeyed',
         // Lo de antes que NO se pudo atribuir con certeza: pide una decision (T9f).
         'store-rekey-pending': 'hStoreRekeyPending',
+        // Lo que la linea no pudo descifrar (WAINBOX-117, `cmd_doctor`).
+        'unreadable-messages': 'hUnreadable',
         unknown: 'hUnknown'
       }
       // Aca solo entran codigos cuyo detalle es una FRASE. Un detalle que es dato crudo
@@ -3495,7 +3508,8 @@
         // Una subida que no borro ningun mensaje (T10): decir "se borro" asustaba.
         'store-migrated-clean': 'howStoreMigratedClean',
         'store-rekeyed-line': 'howStoreRekeyedLine',
-        'store-rekey-decide': 'howStoreRekeyDecide'
+        'store-rekey-decide': 'howStoreRekeyDecide',
+        'messages-unreadable': 'howMessagesUnreadable'
       }
       function porCodigo(mapa, code, respaldo) {
         var key = mapa[code]

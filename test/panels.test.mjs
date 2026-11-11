@@ -1808,6 +1808,27 @@ titulo('el codigo del CLI, dicho en el idioma del panel')
     /numero anterior/i.test(opcDecide) && /wa-scope reclave --numero/.test(opcDecide) &&
     !/cannot be matched/.test(opcDecide), opcDecide)
 
+  // WAINBOX-117: mensajes que la linea no pudo descifrar. El doctor manda la frase en
+  // ingles con el conteo; el panel la dice en su idioma y con que hacer.
+  const ilegibles = { ok: true, optional: [{
+    que: 'unreadable messages', code: 'unreadable-messages',
+    howCode: 'messages-unreadable',
+    como: 'optional — 2 messages on local could not be read: WhatsApp never delivered ' +
+      'the content to this device. Open them on the phone to see what the customer ' +
+      'wrote. 1 message still waiting for the phone to resend it.' }] }
+  for (const [idioma, etiqueta, accion] of [
+    ['es-419', 'Mensajes que no se pudieron leer', 'telefono'],
+    ['en-US', 'Messages that could not be read', 'phone'],
+    ['pt-BR', 'Mensagens que nao puderam ser lidas', 'telefone']
+  ]) {
+    const v = await montar('config.html', { health: ilegibles }, idioma)
+    await espera()
+    const texto = v.doc.getElementById('opcionales').textContent
+    ok(`los mensajes ilegibles se ven, y en ${idioma}`, texto.includes(etiqueta), texto)
+    ok(`y dice que hacer, en el idioma del panel (${idioma})`, texto.includes(accion) &&
+      (idioma === 'en-US' || !/never delivered/.test(texto)), texto)
+  }
+
   const pt = await montar('config.html', { health: salud }, 'pt-BR')
   await espera()
   ok('y en portugues tambien',
