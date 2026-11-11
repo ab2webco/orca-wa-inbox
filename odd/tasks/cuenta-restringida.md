@@ -11,8 +11,8 @@ Source: `docs/research/wainbox-69-baileys-audit.md` R1.
 
 `main.mjs`, `sidecar/src/index.js`, `sidecar/src/envio.js`, `bin/wa-send`,
 `scripts/check-clis` and their tests. The lead also cleared `activity.html` (banner) and
-`bin/wa-scope` (doctor line). `test/panels.test.mjs` belongs to another member and is not
-touched here: the banner is covered by a shot fixture (`actividad-restringida`).
+`bin/wa-scope` (doctor line), and later `test/panels.test.mjs` for the banner case. The banner
+also has a shot fixture (`actividad-restringida`).
 
 ## Mapping
 
