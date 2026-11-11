@@ -2111,6 +2111,27 @@ def revisa_restriccion(fallos: list) -> int:
     return hechas
 
 
+def revisa_sin_whatsapp(fallos: list) -> int:
+    """WAINBOX-79: el codigo de un numero que no esta en WhatsApp es el MISMO en el sidecar y
+    en `wa-send`. Si se renombra de un lado solo, el dueno lee "WhatsApp lo rechazo" y no
+    sabe que lo que esta mal es el numero."""
+    nodo = shutil.which("node")
+    if not nodo:
+        print("  aviso: sin node, no se comparo el numero sin WhatsApp", file=sys.stderr)
+        return 0
+    wa_send = cargar_modulo("wa_send_sin_wa", BIN / "wa-send")
+    js = subprocess.run(
+        [nodo, "--input-type=module", "-e",
+         "import { MOTIVO_SIN_WHATSAPP } from %r; process.stdout.write(MOTIVO_SIN_WHATSAPP)"
+         % (RAIZ / "sidecar" / "src" / "envio.js").as_uri()],
+        capture_output=True, text=True, timeout=120)
+    if (js.stdout or "").strip() != wa_send.MOTIVO_SIN_WHATSAPP:
+        fallos.append(f"el sidecar rechaza con {js.stdout.strip()!r} y wa-send traduce "
+                      f"{wa_send.MOTIVO_SIN_WHATSAPP!r}: el numero sin WhatsApp se leeria como "
+                      "un rechazo cualquiera")
+    return 1
+
+
 def revisa_reclave_local(fallos: list) -> int:
     """T9f: lo que colgaba de `local` en scope.db pasa al numero de su linea, al MISMO
     numero que anoto el sidecar en capture.db. Explicito: ningun comando de todos los
@@ -4244,6 +4265,7 @@ def main() -> int:
                       + revisa_roles(fallos)
                       + revisa_doctor_lid(fallos)
                       + revisa_restriccion(fallos)
+                      + revisa_sin_whatsapp(fallos)
                       + revisa_proyectos(fallos)
                       + revisa_varios_proyectos(fallos)
                       + revisa_rutas_y_proyectos_por_linea(fallos)

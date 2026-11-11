@@ -29,7 +29,7 @@ import { fileURLToPath } from 'node:url'
 
 import { abrirAlmacen, ENVIANDO_VENCE_S, rutaAlmacen } from '../sidecar/src/almacen.js'
 import { atenderSalida, contenidoDe, crearRestriccion, ENVIO, LATIDO_VENCE_MS, mensajeDeEnvio,
-  MOTIVO_RESTRINGIDA } from '../sidecar/src/envio.js'
+  MOTIVO_RESTRINGIDA, MOTIVO_SIN_WHATSAPP } from '../sidecar/src/envio.js'
 
 const RAIZ = join(dirname(fileURLToPath(import.meta.url)), '..')
 const WA_SEND = join(RAIZ, 'bin', 'wa-send')
@@ -1475,6 +1475,102 @@ console.log('\nwa-send: una linea restringida se dice con su codigo y una frase 
   ok('y la frase dice que hacer, con el codigo del sidecar',
     /restricted/.test(r.stderr) && /cuenta-restringida/.test(r.stderr) &&
     /existing chat/.test(r.stderr), r.stderr)
+  ok('no salio nada por el socket', socket.enviados.length === 0)
+  almacen.cerrar()
+}
+
+console.log('\nsidecar: un numero nuevo se mira con onWhatsApp antes de mandar (WAINBOX-79)')
+{
+  const LINEA = 'pn:15550004444'
+  const SIN_WA = '573000000000@s.whatsapp.net'
+  const CON_WA = '573000000001@s.whatsapp.net'
+  const MUDO = '573000000002@s.whatsapp.net'
+  const ENTRANTE = '573000000011@s.whatsapp.net'
+  const LID = '100000000000001@lid'
+  const home = nueva()
+  const almacen = abrirAlmacen(rutaAlmacen({ HOME: home }))
+  // Un chat que solo nos escribio a nosotros ya existe: no hace falta preguntar.
+  almacen.guardarMensaje({ cuenta: LINEA, chatJid: ENTRANTE, stanzaId: 'AJENO-1', ts: 100,
+    fromMe: 0, senderJid: ENTRANTE, senderName: null, body: 'hola', mediaTipo: null,
+    mediaBytes: null, mencionaMe: 0, citaMe: 0 })
+  const preguntados = []
+  // La forma de Baileys 7: los numeros que no estan en WhatsApp NO vuelven en la lista.
+  const existe = async (jid) => {
+    preguntados.push(jid)
+    return jid === CON_WA ? [{ jid: CON_WA, exists: true }] : []
+  }
+  for (const [reqId, chatJid] of [['NW-SIN', SIN_WA], ['NW-CON', CON_WA], ['NW-GRUPO', ALFA],
+    ['NW-LID', LID], ['NW-ENTRANTE', ENTRANTE]]) {
+    almacen.encolarEnvio({ reqId, cuenta: LINEA, chatJid, cuerpo: 'buenas',
+      estado: ENVIO.PENDIENTE })
+  }
+  const socket = socketFalso()
+  const r = await atenderSalida({ almacen, cuenta: LINEA, enviar: socket.enviar, existe })
+  const sin = almacen.verEnvio('NW-SIN')
+  ok('un numero que no esta en WhatsApp se cierra con numero-sin-whatsapp, sin intentarlo (TC-1)',
+    sin.estado === ENVIO.RECHAZADO && sin.motivo === MOTIVO_SIN_WHATSAPP &&
+    !socket.enviados.some((e) => e.jid === SIN_WA), JSON.stringify(sin))
+  ok('el codigo es el estable del ticket, y no lleva el numero (FR-6)',
+    MOTIVO_SIN_WHATSAPP === 'numero-sin-whatsapp' && !/\d{7,}/.test(sin.motivo || ''))
+  ok('un numero que si esta sale al jid encolado (TC-2)',
+    almacen.verEnvio('NW-CON').estado === ENVIO.ENVIADO &&
+    socket.enviados.some((e) => e.jid === CON_WA), JSON.stringify(socket.enviados))
+  ok('un grupo, un lid y un chat con historia no se preguntan (TC-4)',
+    preguntados.length === 2 && preguntados.includes(SIN_WA) && preguntados.includes(CON_WA) &&
+    ['NW-GRUPO', 'NW-LID', 'NW-ENTRANTE'].every((id) => almacen.verEnvio(id).estado === ENVIO.ENVIADO),
+    JSON.stringify(preguntados))
+  ok('y la cuenta lo separa', r.enviados === 4 && r.rechazados === 1, JSON.stringify(r))
+
+  // Despues de un envio suyo el chat ya no es nuevo: no se vuelve a preguntar.
+  almacen.encolarEnvio({ reqId: 'NW-CON-2', cuenta: LINEA, chatJid: CON_WA, cuerpo: 'otra',
+    estado: ENVIO.PENDIENTE })
+  preguntados.length = 0
+  await atenderSalida({ almacen, cuenta: LINEA, enviar: socket.enviar, existe })
+  ok('un chat al que ya se mando no se vuelve a preguntar (TC-4)',
+    preguntados.length === 0 && almacen.verEnvio('NW-CON-2').estado === ENVIO.ENVIADO)
+
+  // Una consulta que no contesta no es prueba de nada: se manda igual (FR-4).
+  const casos = [['NW-FALLA', async () => { throw new Error(`timeout ${MUDO}`) }, MUDO],
+    ['NW-NADA', async () => undefined, '573000000012@s.whatsapp.net'],
+    ['NW-SIN-FUNCION', undefined, '573000000013@s.whatsapp.net']]
+  for (const [reqId, consulta, chat] of casos) {
+    almacen.encolarEnvio({ reqId, cuenta: LINEA, chatJid: chat, cuerpo: 'buenas',
+      estado: ENVIO.PENDIENTE })
+    await atenderSalida({ almacen, cuenta: LINEA, enviar: socket.enviar, existe: consulta })
+    ok(`una consulta que no contesta (${reqId}) no frena el envio (TC-3)`,
+      almacen.verEnvio(reqId).estado === ENVIO.ENVIADO, JSON.stringify(almacen.verEnvio(reqId)))
+  }
+  almacen.cerrar()
+}
+
+console.log('\nwa-send: un numero que no esta en WhatsApp se dice con su codigo (TC-5)')
+{
+  const NUMERO = '573001112233@s.whatsapp.net'
+  const home = nueva()
+  autorizar(home, { jid: NUMERO, nombre: 'Cliente Beta', modo: 'responder' })
+  firmar(home, 'Asistente')
+  const almacen = abrirAlmacen(rutaAlmacen({ HOME: home }))
+  const socket = socketFalso()
+  const r = await new Promise((resolve) => {
+    almacen.latir()
+    const p = spawn(WA_SEND, ['Cliente Beta', 'hola, te escribo por lo del pedido', '--send'],
+      { env: entorno(home) })
+    let stderr = ''
+    p.stderr.on('data', (d) => { stderr += d })
+    const timer = setInterval(() => {
+      almacen.latir()
+      atenderSalida({ almacen, enviar: socket.enviar, existe: async () => [] }).catch(() => {})
+    }, 40)
+    p.on('close', (code) => {
+      clearInterval(timer)
+      resolve({ code, stderr, primera: stderr.trim().split('\n')[0] || '' })
+    })
+  })
+  ok('la primera linea es el codigo propio del numero sin WhatsApp',
+    r.primera === 'wa-send: send-not-on-whatsapp', r.stderr)
+  ok('y la frase dice que hacer, con el codigo del sidecar y sin el numero',
+    /not on WhatsApp/.test(r.stderr) && /numero-sin-whatsapp/.test(r.stderr) &&
+    !r.stderr.includes('573001112233'), r.stderr)
   ok('no salio nada por el socket', socket.enviados.length === 0)
   almacen.cerrar()
 }

@@ -48,6 +48,11 @@ export const ENVIO = Object.freeze({
 // deja al dueno leyendo "WhatsApp lo rechazo" sin saber que la linea esta frenada.
 export const MOTIVO_RESTRINGIDA = 'cuenta-restringida'
 
+// El motivo de un envio a un numero que no esta en WhatsApp (WAINBOX-79). Mismo contrato
+// que el de arriba: `bin/wa-send` lo traduce y `scripts/check-clis` compara los dos lados.
+// Es solo el codigo: el numero no viaja en el motivo, que termina en logs.
+export const MOTIVO_SIN_WHATSAPP = 'numero-sin-whatsapp'
+
 // Cada cuanto el sidecar mira la bandeja de salida y publica su latido. `wa-send` es un
 // proceso corto esperando un veredicto: un segundo es lo que separa "contesto enseguida"
 // de "parece colgado", y es un `select` sobre un indice, no una llamada al host.
@@ -134,7 +139,7 @@ export function contenidoDe (fila, leer = readFileSync) {
  */
 export async function atenderSalida ({ almacen, enviar, conectado = true,
   ahora = () => Date.now(), maximo = POR_VUELTA, cuenta, leer = readFileSync,
-  restringida = () => false } = {}) {
+  restringida = () => false, existe } = {}) {
   if (!almacen || typeof enviar !== 'function' || !conectado) return { enviados: 0, rechazados: 0 }
   // Cada numero, su linea: el socket solo manda lo encolado para SU cuenta. Lo de otro
   // numero queda pendiente hasta que ese numero se vuelva a vincular. `null` es "todavia
@@ -157,6 +162,14 @@ export async function atenderSalida ({ almacen, enviar, conectado = true,
     if (restringida() && !chatConSalida(almacen, fila)) {
       almacen.resolverEnvio(fila.req_id, { estado: ENVIO.RECHAZADO,
         motivo: MOTIVO_RESTRINGIDA, ahora: ahora() })
+      rechazados += 1
+      continue
+    }
+    // Un numero con el que la linea nunca hablo se mira antes: mandarle a uno que no esta
+    // en WhatsApp no trae un error claro, trae un mensaje que no llega a nadie.
+    if (numeroNuevo(almacen, fila) && await sinWhatsApp(existe, fila.chat_jid)) {
+      almacen.resolverEnvio(fila.req_id, { estado: ENVIO.RECHAZADO,
+        motivo: MOTIVO_SIN_WHATSAPP, ahora: ahora() })
       rechazados += 1
       continue
     }
@@ -185,6 +198,36 @@ export function chatConSalida (almacen, fila) {
   if (propio) return true
   return Boolean(almacen.con.prepare("select 1 from envio where account=? and chat_jid=? " +
     "and estado='enviado' limit 1").get(fila.account, fila.chat_jid))
+}
+
+/** Si el chat de esa fila es un telefono con el que la linea nunca hablo: un jid
+ *  `<digitos>@s.whatsapp.net` sin ningun mensaje en el almacen, entrante o propio, y sin un
+ *  envio que haya salido. Un grupo o un lid no se miran: `onWhatsApp` solo sabe de
+ *  telefonos (Baileys ignora los LID), y un chat con historia ya se sabe que existe. */
+export function numeroNuevo (almacen, fila) {
+  if (!/^\d+(:\d+)?@s\.whatsapp\.net$/.test(String(fila?.chat_jid ?? ''))) return false
+  const visto = almacen.con.prepare('select 1 from mensaje where account=? and chat_jid=? ' +
+    'limit 1').get(fila.account, fila.chat_jid)
+  if (visto) return false
+  return !almacen.con.prepare("select 1 from envio where account=? and chat_jid=? " +
+    "and estado='enviado' limit 1").get(fila.account, fila.chat_jid)
+}
+
+/** Si WhatsApp dice que ese numero NO esta. Solo un "no" explicito cuenta: Baileys 7
+ *  devuelve la lista sin los numeros que no estan (lib/Socket/socket.js, `onWhatsApp`),
+ *  asi que una lista sin ningun `exists: true` es el "no". Una consulta que falla, que no
+ *  devuelve lista o que no existe no es prueba de nada, y el envio se intenta: un "no esta"
+ *  falso frenaria un mensaje legitimo. */
+export async function sinWhatsApp (existe, jid) {
+  if (typeof existe !== 'function') return false
+  let lista
+  try {
+    lista = await existe(jid)
+  } catch {
+    return false
+  }
+  if (!Array.isArray(lista)) return false
+  return !lista.some((r) => r?.exists === true)
 }
 
 // Un tipo de restriccion es un codigo de Baileys (`ReachoutTimelockEnforcementType`,

@@ -1095,6 +1095,8 @@ async function iniciar () {
     drenando = true
     // Solo lo encolado para ESTE numero (`cuenta`): lo de otra linea espera a su numero.
     atenderSalida({ almacen, conectado, cuenta, restringida: () => restriccion.activa(),
+      // WAINBOX-79: un numero nuevo se mira antes de mandarle (ver `sinWhatsApp`).
+      existe: typeof socket.onWhatsApp === 'function' ? (jid) => socket.onWhatsApp(jid) : undefined,
       enviar: (jid, contenido) => socket.sendMessage(jid, contenido) })
       .catch((error) => avisarFallo('salida-sin-atender', error))
       .finally(() => { drenando = false })
