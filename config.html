@@ -1620,6 +1620,8 @@
           syncRetry: "Buscar de nuevo", syncAsked: "Buscando de nuevo…",
           syncNoTools: "No pude ejecutar las herramientas del plugin. Reinstalelo " +
             "desde el marketplace y vuelva a intentar.",
+          syncNoPython: "Falta Python 3 para ejecutar las herramientas del plugin. Instalelo " +
+            "desde python.org y vuelva a intentar.",
           syncNoPerm: "Las herramientas del plugin no tienen permiso para ejecutarse. " +
             "Reinstalelo desde el marketplace.",
           syncTimeout: "La lectura de WhatsApp tardo demasiado y se corto.",
@@ -1916,6 +1918,9 @@
           notReady: 'WhatsApp no esta conectado.',
           notReadyHow: 'Revise los requisitos aca abajo.',
           hNoTools: 'Las herramientas del plugin no contestaron',
+          hNoPython: 'Falta Python 3 en este equipo',
+          hNoPythonHow: 'En Windows las herramientas del plugin corren con Python 3. Instalelo ' +
+            'desde python.org (trae el lanzador py) o ponga su ruta completa en WA_INBOX_PYTHON.',
           hNoTransport: 'Enlace su linea de WhatsApp',
           hNoTransportHow: 'Escanee el codigo de la pestana Estado con el telefono de la ' +
             'linea que quiere usar. Hasta que lo haga, su agente no ve ninguna ' +
@@ -2252,6 +2257,8 @@
           syncRetry: "Look again", syncAsked: "Looking again…",
           syncNoTools: "I could not run the plugin's tools. Reinstall it from the " +
             "marketplace and try again.",
+          syncNoPython: "Python 3 is needed to run the plugin's tools. Install it from " +
+            "python.org and try again.",
           syncNoPerm: "The plugin's tools are not allowed to run. Reinstall it from " +
             "the marketplace.",
           syncTimeout: "Reading WhatsApp took too long and was cut off.",
@@ -2540,6 +2547,9 @@
           notReady: 'WhatsApp is not connected.',
           notReadyHow: 'Check the requirements below.',
           hNoTools: 'The plugin tools did not answer',
+          hNoPython: 'Python 3 is missing on this computer',
+          hNoPythonHow: 'On Windows the plugin tools run with Python 3. Install it from ' +
+            'python.org (it brings the py launcher) or set WA_INBOX_PYTHON to its full path.',
           hNoTransport: 'Link your WhatsApp line',
           hNoTransportHow: 'Scan the code in the Status tab with the phone of the line you want ' +
             'to use. Until you do, your agent sees no conversations.',
@@ -2686,6 +2696,9 @@
         pairingHowRestart: 'Reiniciando a conexao.',
         pairingHowUnknown: 'Motivo desconhecido.',
         hNoTools: 'As ferramentas do plugin nao responderam',
+        hNoPython: 'Falta o Python 3 neste computador',
+        hNoPythonHow: 'No Windows as ferramentas do plugin rodam com Python 3. Instale pelo ' +
+          'python.org (vem com o lancador py) ou ponha o caminho completo em WA_INBOX_PYTHON.',
         hNoTransport: 'Vincule a sua linha do WhatsApp',
         hNoTransportHow: 'Escaneie o codigo da aba Estado com o telefone da linha que voce ' +
           'quer usar. Ate fazer isso, o seu agente nao ve nenhuma conversa.',
@@ -2944,6 +2957,8 @@
         syncRetry: 'Procurar de novo', syncAsked: 'Procurando de novo…',
         syncNoTools: 'Nao consegui executar as ferramentas do plugin. Reinstale pelo ' +
           'marketplace e tente de novo.',
+        syncNoPython: 'Falta o Python 3 para executar as ferramentas do plugin. Instale pelo ' +
+          'python.org e tente de novo.',
         syncNoPerm: 'As ferramentas do plugin nao tem permissao para executar. ' +
           'Reinstale pelo marketplace.',
         syncTimeout: 'A leitura do WhatsApp demorou demais e foi cortada.',
@@ -3447,6 +3462,8 @@
         // en un panel en espanol. Mismo defecto que "both routes are off: turn the
         // desktop app or WhatsApp Web back on", que se fue con su seccion.
         'sin-herramientas': 'hNoTools',
+        // Windows sin Python 3: las herramientas estan, falta con que correrlas (#78).
+        'sin-python': 'hNoPython',
         transcribe: 'hTranscribe',
         // El tope del almacen mordio. No bloquea —lo desalojado es viejo— pero tiene
         // que verse: un desalojo callado es un caso que se pierde y se descubre
@@ -3466,6 +3483,7 @@
       // —una ruta, un tamano, el error de un proceso— no se traduce: se muestra.
       var HEALTH_HOW_KEY = {
         'no-transport': 'hNoTransportHow',
+        'sin-python': 'hNoPythonHow',
         'transport-silent': 'hTransportSilentHow',
         'transcribe-missing-tool': 'howTranscribeMissingTool',
         'transcribe-unknown': 'howTranscribeUnknown',
@@ -4621,6 +4639,7 @@
       function motivoTexto (estado) {
         var mapa = {
           'sin-herramientas': 'syncNoTools', 'sin-permiso': 'syncNoPerm',
+          'sin-python': 'syncNoPython',
           'demoro': 'syncTimeout', 'sin-registro': 'syncNoRecord'
         }
         return t(mapa[estado && estado.reason] || 'syncFailed')
@@ -4989,6 +5008,7 @@
       // en que idioma esta el usuario. Lo que el panel no conozca cae en el generico.
       var PROY_HOW_KEY = {
         'sin-cli-orca': 'projNoCli', 'sin-herramientas': 'projNoCli',
+        'sin-python': 'syncNoPython',
         'sin-permiso': 'projNoPerm', 'demoro': 'projSlow', 'fallo': 'projFail',
         'sin-json': 'projNoJson', 'sin-cambios': 'projNoChange',
         'proyecto-no-existe': 'projGone', 'catalogo-lleno': 'projFull',
@@ -5817,6 +5837,7 @@
       // es el unico que sabe en que idioma esta el usuario.
       var SCOPE_HOW_KEY = {
         'sin-herramientas': 'syncNoTools',
+        'sin-python': 'syncNoPython',
         'sin-permiso': 'syncNoPerm',
         // El worker rechazo la entrada que mando el panel: no es un fallo del host ni
         // algo que se arregle reintentando, asi que no se dice "intente de nuevo".
@@ -6152,6 +6173,7 @@
 
       var ROUTE_HOW_KEY = {
         'sin-herramientas': 'syncNoTools',
+        'sin-python': 'syncNoPython',
         'sin-permiso': 'syncNoPerm',
         'patron-invalido': 'routeRmBadPattern'
       }
