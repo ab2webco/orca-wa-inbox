@@ -14,6 +14,7 @@ import { execFile } from 'node:child_process'
 import { mkdtemp, readFile, rm, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, extname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 // Lo que entra en un mensaje del host (64 KB) con aire para el sobre del veredicto.
 export const PRESUPUESTO_BYTES = 56000
@@ -129,4 +130,21 @@ export async function hiloParaPanel (hilo, vista = vistaPrevia) {
     usado += coma + peso(m)
   }
   return { mensajes: elegidos, omitidos: lista.length - elegidos.length }
+}
+
+// `node hilo.mjs <ruta>`: la vista previa hecha FUERA de la valla del worker (WAINBOX-87).
+// El worker corre con `--permission` y no puede leer `~/.wa-inbox/media`; este script lo
+// lanza `vistaSinValla` (main.mjs) y contesta una linea JSON. Nunca imprime la ruta.
+if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+  let salida
+  try {
+    const ruta = process.argv[2]
+    if (typeof ruta !== 'string' || !ruta) throw Object.assign(new Error('sin ruta'), { code: 'E_ARGS' })
+    const vista = await vistaPrevia(ruta)
+    salida = typeof vista === 'string' ? { ok: true, vista } : { ok: false, motivo: 'sin-vista' }
+  } catch (error) {
+    // Solo el codigo del sistema: el mensaje de un error de fs lleva rutas.
+    salida = { ok: false, motivo: 'fallo', detalle: String(error?.code ?? error?.name ?? 'error') }
+  }
+  process.stdout.write(`${JSON.stringify(salida)}\n`)
 }
