@@ -10426,5 +10426,144 @@ titulo('config.html — linea-viva: el aviso de una linea sin atender')
   }
 }
 
+// WAINBOX-122 (odd/tasks/ajustes-rediseno.md): la pagina de ajustes se ve disenada y no
+// generada. Visual y textos nada mas: el cableado lo siguen cubriendo las pruebas de arriba.
+// Estas fijan el sistema compartido, empezando por Conversaciones.
+titulo('config.html — ajustes-rediseno (WAINBOX-122): Conversaciones con el sistema nuevo')
+await seccion(async () => {
+  const storage = {
+    projects: PROYECTOS_PRUEBA,
+    scope: {
+      '1@g.us': { chatName: 'Soporte Norte', mode: 'responder', workspace: 'alfa-demo' },
+      '2@g.us': { chatName: 'Operaciones Demo', mode: 'borrador', workspace: 'beta-demo' }
+    },
+    routes: [{ pattern: 'andes', workspace: 'beta-demo' }]
+  }
+  const { window, doc } = await montar('config.html', storage, 'es-419')
+  await espera()
+  const vista = doc.getElementById('view-chats')
+  const css = [...doc.querySelectorAll('style')].map((s) => s.textContent).join('\n')
+  const estilo = (n) => window.getComputedStyle(n)
+
+  // Titulos: en la letra del cuerpo, sin mayusculas espaciadas (Hallmark, piso 9).
+  const h2 = vista.querySelector('h2')
+  ok('R1: los titulos de seccion no van en mayusculas espaciadas',
+    h2 && estilo(h2).textTransform !== 'uppercase', h2 && estilo(h2).textTransform)
+
+  // Las acciones de cada fila son botones de verdad, no enlaces subrayados.
+  const acciones = [...doc.querySelectorAll('#scope-wrap [data-edit], #scope-wrap [data-rm], #routes-wrap [data-rrm]')]
+  ok('R1: hay acciones de fila que mirar', acciones.length === 5, String(acciones.length))
+  ok('R1: Editar y Quitar son botones de fila, no enlaces subrayados',
+    acciones.length > 0 && acciones.every((b) => b.classList.contains('btn-fila') &&
+      !b.classList.contains('link') && b.getAttribute('type') === 'button'),
+    acciones.map((b) => b.className).join(' | '))
+
+  // El modo: rojo solo para peligro. Automatico es el mas fuerte, pero no una alarma.
+  const reglaResponder = (css.match(/\.pill\.responder\s*\{[^}]*\}/g) || []).join(' ')
+  ok('R1: el modo Automatico no se pinta con --destructive',
+    reglaResponder !== '' && !/--destructive/.test(reglaResponder), reglaResponder)
+  ok('R1: Automatico va sobre --primary, el unico acento',
+    /--primary/.test(reglaResponder), reglaResponder)
+
+  // Las explicaciones largas, detras de "Como funciona", con sus mismas palabras.
+  const largas = ['workspaceHint', 'pqHelp', 'chatInstrHelp', 'chatAutoHelp', 'chatFilesHelp',
+    'chatApHelp', 'routesHelp']
+  const fuera = largas.filter((k) => {
+    const n = vista.querySelector(`[data-t="${k}"]`)
+    return !n || !n.closest('details.como')
+  })
+  ok('R1: cada explicacion larga vive dentro de un "Como funciona"', fuera.length === 0,
+    `fuera = ${JSON.stringify(fuera)}`)
+  const resumenes = [...vista.querySelectorAll('details.como > summary')]
+  ok('R1: el desplegable se llama "Como funciona"',
+    resumenes.length >= 4 && resumenes.every((s) => s.textContent.trim() === 'Como funciona'),
+    resumenes.map((s) => s.textContent).join(' | '))
+
+  // Lo que queda a la vista es UNA linea corta por control.
+  const aLaVistaLargas = [...vista.querySelectorAll('.hint[data-t], .hint#workspace-hint')]
+    .filter((n) => !n.closest('details') && !n.hidden && n.textContent.length > 90)
+    .map((n) => n.textContent)
+  ok('R1: ninguna pista visible pasa de una linea corta (90 caracteres)',
+    aLaVistaLargas.length === 0, JSON.stringify(aLaVistaLargas))
+
+  // El formulario agrupado con titulos de verdad.
+  const grupos = [...doc.querySelectorAll('#scope-form .grupo')]
+  ok('R1: el formulario va en grupos con titulo propio',
+    grupos.length >= 5 && grupos.every((g) => g.querySelector(':scope > h3')),
+    grupos.map((g) => g.querySelector('h3')?.textContent).join(' | '))
+  ok('R1: el modo sigue nombrado por su titulo',
+    doc.getElementById('mode').getAttribute('aria-labelledby') === 'mode-label' &&
+    !!doc.getElementById('mode-label').textContent.trim())
+
+  // Campos de una frase: un ancho legible, no todo el panel.
+  const angostos = ['chat-tone', 'chat-ack-text', 'chat-greeting-text']
+    .filter((id) => estilo(doc.getElementById(id)).maxWidth === 'none' ||
+      !estilo(doc.getElementById(id)).maxWidth)
+  ok('R1: los campos de una frase tienen un ancho tope', angostos.length === 0,
+    JSON.stringify(angostos))
+
+  // Guardar cierra el formulario, siempre en el mismo lugar.
+  const pie = doc.getElementById('save-scope').closest('.actions')
+  ok('R1: Guardar cierra el formulario en su pie',
+    pie && pie.classList.contains('pie') && pie === doc.getElementById('scope-form').lastElementChild,
+    pie && pie.className)
+})
+await seccion(async () => {
+  // Los textos nuevos, en los tres idiomas y cortos.
+  const { window } = await montar('config.html')
+  const S = window.STRINGS
+  const nuevas = ['howItWorks', 'grpChat', 'grpVoice', 'grpAuto', 'workspaceShort', 'pqShort',
+    'chatInstrShort', 'chatAutoShort', 'chatFilesShort', 'chatApShort', 'routesShort']
+  const faltan = nuevas.filter((k) => !S.es[k] || !S.en[k] || !S.pt[k] || S.pt[k] === S.en[k])
+  ok('R1: los textos nuevos existen en es, en y pt propio', faltan.length === 0,
+    `faltan = ${JSON.stringify(faltan)}`)
+  const largos = nuevas.filter((k) => ['es', 'en', 'pt'].some((l) => (S[l][k] || '').length > 90))
+  ok('R1: cada texto nuevo cabe en una linea corta', largos.length === 0, JSON.stringify(largos))
+  for (const [idioma, re] of [['en-US', /^How it works$/], ['pt-BR', /^Como funciona$/]]) {
+    const { doc } = await montar('config.html', {}, idioma)
+    await espera()
+    const s = doc.querySelector('#view-chats details.como > summary')
+    ok(`R1: "Como funciona" traducido (${idioma})`, !!s && re.test(s.textContent.trim()),
+      s && s.textContent)
+  }
+})
+
+titulo('config.html — ajustes-rediseno (WAINBOX-122): el mismo sistema en todas las pestanas')
+await seccion(async () => {
+  const { window, doc } = await montar('config.html', { projects: PROYECTOS_PRUEBA,
+    owners: [{ jid: '100000000000001@lid', name: 'Ana Ejemplo' }] }, 'es-419')
+  await espera()
+  const vistas = [...doc.querySelectorAll('[role="tabpanel"]')]
+  ok('R3: hay siete pestanas que mirar', vistas.length === 7, String(vistas.length))
+  // Una ayuda fija (sin id: nadie la reescribe) se lee en una linea; la larga va en
+  // "Como funciona" con sus mismas palabras.
+  const largas = vistas.flatMap((v) => [...v.querySelectorAll('p[data-t]')]
+    .filter((n) => /^hint( lead)?$/.test(n.className) && !n.id && !n.closest('details') &&
+      n.textContent.length > 90)
+    .map((n) => `${v.id}: ${n.dataset.t}`))
+  ok('R3: ninguna ayuda fija a la vista pasa de una linea corta, en ninguna pestana',
+    largas.length === 0, JSON.stringify(largas))
+  // Una seccion no abre con un desplegable a secas: primero dice que es, en una linea.
+  const sinBajada = [...doc.querySelectorAll('section > h2 + details.como')]
+    .map((n) => n.parentElement.id || n.previousElementSibling.dataset.t)
+  ok('R3: toda seccion con "Como funciona" tiene antes su linea corta',
+    sinBajada.length === 0, JSON.stringify(sinBajada))
+  // Ningun titulo en mayusculas espaciadas y ninguna accion subrayada.
+  const css = [...doc.querySelectorAll('style')].map((s) => s.textContent).join('\n')
+  ok('R3: no queda ninguna etiqueta en mayusculas espaciadas',
+    !/text-transform:\s*uppercase/.test(css), (css.match(/[^}]*text-transform:\s*uppercase[^}]*\}/g) || []).join(' '))
+  const regla = (css.match(/button\.link\s*\{[^}]*\}/) || [''])[0]
+  ok('R3: las acciones `.link` se ven como botones, no como enlaces subrayados',
+    regla !== '' && !/underline/.test(regla) && /border:\s*1px solid/.test(regla), regla)
+  // Las listas de reglas, sin vinetas dibujadas a mano.
+  ok('R3: las reglas no llevan vinetas dibujadas', !/\.rules li::before/.test(css))
+  const S = window.STRINGS
+  const cortas = ['skillsShort', 'approvalShort', 'autoShort', 'linesShort', 'ownersShort', 'projectsShort']
+  const faltan = cortas.filter((k) => ['es', 'en', 'pt'].some((l) => !S[l][k] || S[l][k].length > 90) ||
+    S.pt[k] === S.en[k])
+  ok('R3: las bajadas cortas existen en los tres idiomas y caben en una linea', faltan.length === 0,
+    JSON.stringify(faltan))
+})
+
 titulo(`${pruebas - fallos}/${pruebas} en verde`)
 process.exit(fallos ? 1 : 0)

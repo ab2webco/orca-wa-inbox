@@ -4,6 +4,12 @@
     <meta charset="utf-8" />
     <title>WhatsApp Inbox</title>
     <style>
+      /* Hallmark · redesign: full · scope: app · shape: app screen · theme: brand (los tokens
+         del host de Orca, sin color propio) · copy: taste-skill (una linea por control). */
+      /* Critica (WAINBOX-122): la pagina se leia generada -etiquetas en mayusculas
+         espaciadas, tres lineas de ayuda bajo cada campo, rojo en cada fila Automatico y
+         enlaces subrayados por acciones-. Ahora: titulos en la letra del cuerpo, grupos con
+         titulo, ayuda larga detras de "Como funciona" y el rojo solo para peligro. */
       /* El host inyecta una lista corta de tokens en el <style> del shell
          (PANEL_DESIGN_TOKEN_ALLOWLIST, orca-oss src/shared/plugins/plugin-panel-shell.ts:34)
          y pone light/dark en <html>. Nada mas llega aca: ni utilidades de Tailwind,
@@ -14,6 +20,10 @@
         /* De los radios solo viene --radius. md se calcula con el mismo factor que
            main.css:122, para no inventar un radio por elemento. */
         --radius-md: calc(var(--radius, 0.625rem) * 0.8);
+        /* Una sola escala de espacios para todo el panel (WAINBOX-122). */
+        --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px; --sp-5: 24px; --sp-6: 32px;
+        /* Los campos que llevan una frase no estiran el panel entero. */
+        --campo-frase: 32rem;
         /* Respaldos para cuando el host no inyecta nada (host viejo, o el arnes
            jsdom). Son los valores reales de main.css, no un gris inventado: antes
            eran solo oscuros y el panel salia ilegible en cuanto el tema era claro. */
@@ -54,7 +64,7 @@
         color: var(--foreground, var(--fb-foreground));
         background: var(--background, var(--fb-background));
       }
-      .wrap { max-width: 760px; }
+      .wrap { max-width: 880px; }
       h1 { font-size: 13px; font-weight: 600; margin: 0; padding: 12px 12px 0;
            letter-spacing: -0.01em; }
       .sub:first-child { margin-top: 0; }
@@ -66,15 +76,19 @@
          panel/header-toolbar.tsx:196, checks-panel-content.tsx:4503). Este panel
          hace lo mismo: una caja redondeada por seccion se veia como otra app.
          El relleno horizontal es 12 px, que es el px-3 de la casa. */
-      section { padding: 12px; margin: 0;
+      section { padding: var(--sp-5) 12px; margin: 0;
                 border-top: 1px solid var(--border, var(--fb-border)); }
-      /* Etiqueta meta de 11 px: el STYLEGUIDE la fija en 600 y 0.05em, igual que
-         PortsPanel.tsx:336. */
-      h2 { font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em;
-           color: var(--muted-foreground, var(--fb-muted-foreground));
-           margin: 0 0 10px; font-weight: 600; }
-      label, .label { display: block; font-size: 12px; margin: 12px 0 4px;
-              color: var(--muted-foreground, var(--fb-muted-foreground)); }
+      /* WAINBOX-122: el titulo de seccion es un titulo, no una etiqueta meta. Antes iba en
+         11 px, mayusculas y 0.05em, igual en todas las secciones, y la pagina entera se
+         leia como una lista de rotulos grises. Ahora la letra del cuerpo, un paso mas
+         grande, en el color del texto y sin mayusculas espaciadas (Hallmark, piso 9). */
+      h2 { font-size: 15px; letter-spacing: -0.005em; line-height: 1.3;
+           color: var(--foreground, var(--fb-foreground));
+           margin: 0 0 var(--sp-1); font-weight: 600; }
+      h3 { font-size: 13px; font-weight: 600; margin: 0; line-height: 1.35;
+           color: var(--foreground, var(--fb-foreground)); }
+      label, .label { display: block; font-size: 12px; font-weight: 500; margin: 14px 0 6px;
+              color: var(--foreground, var(--fb-foreground)); }
       section > h2 + label, section > h2 + .label { margin-top: 0; }
       [hidden] { display: none !important; }
       /* Campos como el primitivo Input de Orca: fondo transparente, filete de
@@ -113,13 +127,15 @@
       button.primary:hover { background: var(--primary, var(--fb-primary));
                              color: var(--primary-foreground, var(--fb-primary-foreground));
                              filter: brightness(1.12); }
-      /* Subrayado siempre, no solo en hover: en tema claro --primary es casi negro,
-         asi que sin subrayar Editar/Quitar no se leen como algo clickeable. */
-      button.link { border: 0; background: none; padding: 0; margin-left: 10px;
-                    color: var(--primary, var(--fb-primary)); font-size: 11px; font-weight: 400;
-                    text-decoration: underline; text-underline-offset: 2px; }
-      button.link:hover { background: none; color: var(--primary, var(--fb-primary));
-                          text-decoration-thickness: 2px; }
+      /* WAINBOX-122: las acciones de fila ya no son enlaces subrayados sino botones chicos
+         con filete, los mismos que `.btn-fila`. La clase `link` queda porque la usan los
+         que pintan las filas; lo que cambia es como se ve. */
+      button.link { font-size: 12px; font-weight: 500; padding: 4px 10px; min-height: 28px;
+                    margin-left: 6px; background: transparent;
+                    color: var(--foreground, var(--fb-foreground));
+                    border: 1px solid var(--border, var(--fb-border)); }
+      button.link:hover { background: var(--accent, var(--fb-accent));
+                          color: var(--accent-foreground, var(--fb-accent-foreground)); }
       /* Pestanas (T17). Mismo dibujo que las del tablero (activity.html): subrayado en
          --primary, que es el token de enfasis. Se envuelven en vez de desplazarse: una
          pestana que queda fuera de la vista a 320 px no existe para quien no la ve. */
@@ -135,20 +151,76 @@
              font-weight: 600; border-bottom-color: var(--primary, var(--fb-primary)); }
       .tab:focus-visible { outline: 2px solid var(--ring, var(--fb-ring)); outline-offset: -2px; }
       [role="tabpanel"] > section:first-child { border-top: 0; }
-      .hint.lead { margin: 0 0 10px; }
+      .hint.lead { margin: 0 0 var(--sp-4); font-size: 12px; }
+      section > h2 + .hint.lead + details.como { margin: calc(var(--sp-4) * -1 + var(--sp-1)) 0 var(--sp-4); }
+
+      /* WAINBOX-122: los grupos del formulario. En pantalla ancha, el titulo a la izquierda
+         y los controles a la derecha, como una hoja de ajustes; angosto, uno sobre otro. */
+      .grupo { padding: var(--sp-5) 0 0; margin-top: var(--sp-5);
+               border-top: 1px solid var(--border, var(--fb-border)); }
+      section > h2 + .grupo { margin-top: var(--sp-3); padding-top: var(--sp-3); border-top: 0; }
+      .grupo > h3 { margin-bottom: var(--sp-3); }
+      .grupo > h3 + label, .grupo > h3 + .label, .grupo > h3 + .seg,
+      .grupo > h3 + .hint { margin-top: 0; }
+      @media (min-width: 720px) {
+        .grupo { display: grid; grid-template-columns: 11rem minmax(0, 1fr);
+                 column-gap: var(--sp-5); align-items: start; }
+        .grupo > * { grid-column: 2; }
+        .grupo > .seg, .grupo .seg { justify-self: start; }
+        .grupo > h3 { grid-column: 1; grid-row: 1 / span 40; margin: 0; padding-top: 1px; }
+      }
+
+      /* "Como funciona": la explicacion entera, con sus mismas palabras, a un clic. */
+      details.como { margin: var(--sp-1) 0 0; font-size: 11px; }
+      details.como > summary { display: inline-flex; align-items: center; gap: 6px;
+        cursor: pointer; list-style: none; padding: 2px 0; border-radius: 4px;
+        color: var(--muted-foreground, var(--fb-muted-foreground)); }
+      details.como > summary::-webkit-details-marker { display: none; }
+      details.como > summary::before { content: ''; width: 0; height: 0;
+        border-style: solid; border-width: 4px 0 4px 5px;
+        border-color: transparent transparent transparent currentColor;
+        transition: transform 120ms ease; }
+      details.como[open] > summary::before { transform: rotate(90deg); }
+      details.como > summary:hover { color: var(--foreground, var(--fb-foreground)); }
+      details.como > summary:focus-visible { outline: 2px solid var(--ring, var(--fb-ring));
+        outline-offset: 2px; }
+      details.como > .hint { margin: var(--sp-1) 0 0; padding-left: 11px; max-width: 64ch;
+        border-left: 1px solid var(--border, var(--fb-border)); }
+
+      /* El boton de Guardar cierra su formulario, siempre en el mismo lugar. */
+      section.card > .actions:last-child { margin-top: var(--sp-4); }
+      .actions.pie { margin-top: var(--sp-5); padding-top: var(--sp-4);
+        border-top: 1px solid var(--border, var(--fb-border)); }
+
+      /* Las acciones de una fila: botones chicos de verdad, no enlaces subrayados. */
+      button.btn-fila { font-size: 12px; font-weight: 500; padding: 4px 10px; min-height: 28px;
+        background: transparent; color: var(--foreground, var(--fb-foreground));
+        border: 1px solid var(--border, var(--fb-border)); }
+      button.btn-fila:hover { background: var(--accent, var(--fb-accent));
+        color: var(--accent-foreground, var(--fb-accent-foreground)); }
+
+      #chat-tone, #chat-ack-text, #chat-greeting-text, #r-match { max-width: var(--campo-frase); }
+      #chat-instructions { max-width: 44rem; }
 
       /* Grupos de botones en vez de selects: la lista de un select nativo no se abre en el
          panel de Orca (iframe con sandbox). Un renglon de opciones que se envuelve, con
          la elegida en --primary — la unica superficie de enfasis de la allowlist. */
-      .seg { display: flex; flex-wrap: wrap; gap: 4px; }
+      /* WAINBOX-122: un control segmentado de verdad. Un riel en --muted y la opcion
+         elegida levantada sobre el fondo de la pagina; antes era una fila de pastillas
+         sueltas con la elegida en --primary, que gritaba en cada renglon del formulario. */
+      .seg { display: inline-flex; flex-wrap: wrap; gap: 2px; padding: 2px; max-width: 100%;
+             border-radius: var(--radius-md); background: var(--muted, var(--fb-muted)); }
       .seg + input, .seg + textarea { margin-top: 8px; }
-      .seg button { padding: 5px 10px; font-weight: 400; background: transparent;
-                    color: var(--foreground, var(--fb-foreground)); }
-      .seg button:hover { background: var(--accent, var(--fb-accent)); }
+      .seg + input, .seg + textarea { display: block; }
+      .seg button { padding: 4px 11px; font-weight: 500; background: transparent;
+                    border-color: transparent; border-radius: calc(var(--radius-md) * 0.75);
+                    color: var(--muted-foreground, var(--fb-muted-foreground)); }
+      .seg button:hover { background: transparent; color: var(--foreground, var(--fb-foreground)); }
       .seg button[aria-pressed="true"], .seg button[aria-pressed="true"]:hover {
-        background: var(--primary, var(--fb-primary));
-        color: var(--primary-foreground, var(--fb-primary-foreground));
-        border-color: transparent; font-weight: 500; }
+        background: var(--background, var(--fb-background));
+        color: var(--foreground, var(--fb-foreground));
+        border-color: var(--border, var(--fb-border));
+        box-shadow: 0 1px 2px rgb(0 0 0 / 0.12); font-weight: 600; }
       /* Las cuentas de Claude del bot: una por renglon, el correo y debajo su estado. */
       .seg.cuentas { flex-direction: column; align-items: stretch; }
       .seg.cuentas button { display: flex; flex-direction: column; align-items: flex-start;
@@ -169,15 +241,13 @@
                     background: var(--background, var(--fb-background));
                     box-shadow: 0 6px 20px rgb(0 0 0 / 0.18); }
       .combo-group { padding: 6px 8px 2px; font-size: 11px; font-weight: 600;
-                     text-transform: uppercase; letter-spacing: 0.05em;
                      color: var(--muted-foreground, var(--fb-muted-foreground)); }
       .combo-opt { display: flex; gap: 8px; align-items: baseline; padding: 6px 8px;
                    border-radius: calc(var(--radius-md) * 0.75); cursor: pointer;
                    color: var(--foreground, var(--fb-foreground)); }
       .combo-opt[aria-selected="true"] { background: var(--accent, var(--fb-accent));
                    color: var(--accent-foreground, var(--fb-accent-foreground)); }
-      .combo-kind { flex: none; font-size: 10px; text-transform: uppercase;
-                    letter-spacing: 0.04em; padding: 0 5px; border-radius: 4px;
+      .combo-kind { flex: none; font-size: 10px; padding: 0 5px; border-radius: 4px;
                     border: 1px solid var(--border, var(--fb-border));
                     color: var(--muted-foreground, var(--fb-muted-foreground)); }
       .combo-name { min-width: 0; overflow-wrap: anywhere; }
@@ -203,12 +273,9 @@
       /* Las personas de la conversacion (roles-por-numero): un bloque del formulario con su
          titulo meta, como una seccion, y una fila por persona con su rol a la derecha. Un
          grupo grande no empuja Guardar fuera de la vista: la lista se desplaza sola. */
-      .people { margin: 16px 0 4px; padding: 12px 0 10px;
-                border-top: 1px solid var(--border, var(--fb-border));
-                border-bottom: 1px solid var(--border, var(--fb-border)); }
-      .people-titulo { display: block; font-size: 11px; font-weight: 600;
-                       text-transform: uppercase; letter-spacing: 0.05em;
-                       color: var(--muted-foreground, var(--fb-muted-foreground)); }
+      .people { margin: 16px 0 4px; }
+      .people-titulo { display: block; font-size: 12px; font-weight: 500;
+                       color: var(--foreground, var(--fb-foreground)); }
       .people > .hint { margin: 4px 0 0; }
       #people-search-wrap label { margin-top: 10px; }
       /* El contador es una region viva: tiene que estar pintado ANTES de cambiar, o el
@@ -279,24 +346,36 @@
       .checklist .tag { font-size: 11px; color: var(--muted-foreground, var(--fb-muted-foreground)); }
       .checklist button.link { margin-left: 0; white-space: nowrap; }
       .checklist .done { padding: 7px 0 0; font-size: 12px; font-weight: 500; }
-      .rules li { position: relative; padding: 5px 0 5px 16px; font-size: 12px; line-height: 1.5; }
+      /* WAINBOX-122: las reglas como lista de verdad: una por renglon, con filete, sin
+         vinetas, el nombre en negrita y la frase al lado. */
+      .rules { border-top: 1px solid var(--border, var(--fb-border)); max-width: 72ch; }
+      .rules li { position: relative; padding: 8px 0; font-size: 12px; line-height: 1.5;
+                  border-bottom: 1px solid var(--border, var(--fb-border)); }
+      .rules li b { font-weight: 600; }
+      details.como > .rules { margin: var(--sp-2) 0 0 11px; }
       .rules + .hint.lead { margin-top: 12px; }
       /* Los niveles por regla (T22.3): el nombre de la regla arriba de sus tres botones. */
-      .ap-reglas { margin-top: 4px; }
-      .ap-regla { display: block; margin: 8px 0 4px; font-size: 12px;
-                  color: var(--muted-foreground, var(--fb-muted-foreground)); }
+      .ap-reglas { margin-top: var(--sp-3); display: grid; grid-template-columns: minmax(0, 1fr);
+                   row-gap: 4px; }
+      .ap-regla { display: block; margin: 8px 0 0; font-size: 12px; font-weight: 500;
+                  color: var(--foreground, var(--fb-foreground)); }
+      @media (min-width: 560px) {
+        .ap-reglas { grid-template-columns: 13rem minmax(0, 1fr); row-gap: 8px;
+                     align-items: center; }
+        .ap-regla { margin: 0; }
+        .ap-reglas .seg { justify-self: start; }
+      }
       /* Los numeros del dueno: nombre e id, y el id se parte donde haga falta a 320 px. */
       .owner-id { display: block; font-size: 11px; overflow-wrap: anywhere;
                   color: var(--muted-foreground, var(--fb-muted-foreground)); }
-      .rules li::before { content: '\25CF'; position: absolute; left: 2px; top: 5px;
-                          font-size: 8px; color: var(--muted-foreground, var(--fb-muted-foreground)); }
+
 
       /* Una regla de antes (Plane) se marca como tal: ya no se usa, pero borrarla
          callado seria perder lo que el dueno configuro. */
-      .legacy { display: inline-block; margin-left: 6px; padding: 0 6px; font-size: 10px;
-                border-radius: 9999px; border: 1px dashed currentColor;
+      .legacy { display: inline-block; margin-left: 6px; padding: 1px 7px; font-size: 10px;
+                font-weight: 500; border-radius: 9999px;
                 background: var(--muted, var(--fb-muted));
-                color: var(--foreground, var(--fb-foreground)); }
+                color: var(--muted-foreground, var(--fb-muted-foreground)); }
       tr.vieja td:first-child, tr.vieja td:nth-child(2) {
         color: var(--muted-foreground, var(--fb-muted-foreground)); }
       /* Un jid no tiene espacios donde partir, y a 320 px se sale del panel. Se parte
@@ -325,8 +404,12 @@
       th { text-align: left; font-weight: 500;
            color: var(--muted-foreground, var(--fb-muted-foreground));
            padding: 5px 8px 5px 0; border-bottom: 1px solid var(--border, var(--fb-border)); }
-      td { padding: 7px 8px 7px 0; border-bottom: 1px solid var(--border, var(--fb-border));
-           vertical-align: top; }
+      td { padding: 9px 8px 9px 0; border-bottom: 1px solid var(--border, var(--fb-border));
+           vertical-align: middle; }
+      /* Un proyecto con nombre largo se corta con puntos y no empuja la fila. */
+      #scope-wrap td:nth-child(2) { max-width: 14rem; overflow: hidden; text-overflow: ellipsis;
+           white-space: nowrap; }
+      #scope-wrap td:first-child { font-weight: 500; }
       tr:last-child td { border-bottom: 0; }
       td.acts { text-align: right; white-space: nowrap; }
       /* A 320 px una tabla de 4 columnas no cabe, y partir palabra deja pastillas que
@@ -352,16 +435,21 @@
          base — texto apagado, sin filete —, "observar" suma filete y texto pleno,
          "borrador" es una superficie --accent, y solo "responder" (el unico que
          manda mensajes de verdad) usa --destructive. */
-      .pill { display: inline-block; padding: 1px 8px; border-radius: 9999px; font-size: 11px;
+      .pill { display: inline-block; padding: 2px 9px; border-radius: 9999px; font-size: 11px;
+              font-weight: 500; white-space: nowrap;
               border: 1px solid transparent;
               color: var(--muted-foreground, var(--fb-muted-foreground)); }
       .pill.observar { border-color: var(--border, var(--fb-border));
                        color: var(--foreground, var(--fb-foreground)); }
       .pill.borrador { background: var(--accent, var(--fb-accent));
                        color: var(--accent-foreground, var(--fb-accent-foreground)); }
-      .pill.responder { border-color: var(--destructive, var(--fb-destructive));
-                        color: var(--destructive, var(--fb-destructive)); font-weight: 600; }
-      td.acts button + button { margin-left: 10px; }
+      /* WAINBOX-122: Automatico ya no es rojo. Es el modo que mas hace, y por eso el mas
+         fuerte de la escala -lleno en --primary, el unico acento-, pero no es un peligro:
+         el rojo queda para lo que de verdad lo es (borrar, desvincular, un fallo). */
+      .pill.responder { background: var(--primary, var(--fb-primary));
+                        color: var(--primary-foreground, var(--fb-primary-foreground));
+                        font-weight: 600; }
+      td.acts button + button { margin-left: 6px; }
       @media (max-width: 420px) { td.acts button + button { margin-left: 8px; } }
       .empty { color: var(--muted-foreground, var(--fb-muted-foreground));
                font-size: 12px; padding: 10px 0; }
@@ -600,7 +688,8 @@
              principal es el codigo QR que hay que escanear, como siempre. -->
         <section id="lineas-card">
           <h2 data-t="linesLegend"></h2>
-          <p class="hint lead" data-t="linesHelp"></p>
+          <p class="hint lead" data-t="linesShort"></p>
+          <details class="como"><summary data-t="howItWorks"></summary><p class="hint" data-t="linesHelp"></p></details>
           <div class="linea linea-principal" id="linea-principal">
             <div class="linea-cab" id="linea-principal-cab" hidden>
               <span class="linea-num" id="linea-principal-num"></span>
@@ -662,6 +751,10 @@
              escribe, el proyecto con el mismo buscador, y el modo con botones. -->
         <section class="card" id="scope-form">
           <h2 id="scope-form-title" data-t="formLegend"></h2>
+          <!-- WAINBOX-122: el formulario va en grupos con titulo propio; cada control lleva
+               una linea corta y la explicacion entera queda detras de "Como funciona". -->
+          <div class="grupo">
+          <h3 data-t="grpChat"></h3>
           <label for="chat-search" data-t="chatLabel"></label>
           <div class="combo-row">
             <div class="combo">
@@ -714,6 +807,7 @@
           <button type="button" class="link ws-agregar" id="workspace-add" hidden
                   data-t="workspaceAdd"></button>
           <p class="hint" id="workspace-hint"></p>
+          <details class="como"><summary data-t="howItWorks"></summary><p class="hint" data-t="workspaceHint"></p></details>
           <!-- A quien pregunta el agente "A o B?" cuando duda (M5): solo con dos o mas. -->
           <div id="project-question-wrap" hidden>
             <span class="label" id="chat-project-question-label" data-t="pqLabel"></span>
@@ -723,7 +817,8 @@
               <button type="button" data-value="writer" data-t="pqWriter"></button>
               <button type="button" data-value="owner" data-t="pqOwner"></button>
             </div>
-            <p class="hint" data-t="pqHelp"></p>
+            <p class="hint" data-t="pqShort"></p>
+            <details class="como"><summary data-t="howItWorks"></summary><p class="hint" data-t="pqHelp"></p></details>
           </div>
 
           <!-- Las personas de la conversacion y su rol (roles-por-numero, M11). El rol sale
@@ -744,7 +839,10 @@
             <p class="empty" id="people-empty" hidden></p>
           </div>
 
-          <span class="label" id="mode-label" data-t="permLabel"></span>
+          </div>
+
+          <div class="grupo">
+          <h3 id="mode-label" data-t="permLabel"></h3>
           <div class="seg" id="mode" role="group" aria-labelledby="mode-label">
             <button type="button" data-value="off" data-t="modeOff"></button>
             <button type="button" data-value="observar" data-t="modeObserve"></button>
@@ -752,12 +850,20 @@
             <button type="button" data-value="responder" data-t="modeReply"></button>
           </div>
           <p class="hint" id="mode-desc"></p>
+          </div>
 
+          <div class="grupo">
+          <h3 data-t="grpVoice"></h3>
           <label for="chat-tone" data-t="chatToneLabel"></label>
           <input id="chat-tone" data-t-ph="chatTonePh" />
           <label for="chat-instructions" data-t="chatInstrLabel"></label>
           <textarea id="chat-instructions" rows="3" data-t-ph="chatInstrPh"></textarea>
-          <p class="hint" data-t="chatInstrHelp"></p>
+          <p class="hint" data-t="chatInstrShort"></p>
+          <details class="como"><summary data-t="howItWorks"></summary><p class="hint" data-t="chatInstrHelp"></p></details>
+          </div>
+
+          <div class="grupo">
+          <h3 data-t="grpAuto"></h3>
           <span class="label" id="chat-ack-label" data-t="ackLabel"></span>
           <div class="seg" id="chat-ack" role="group" aria-labelledby="chat-ack-label">
             <button type="button" data-value="default" data-t="autoDefault"></button>
@@ -783,7 +889,8 @@
                     data-t="frFallback"></span><span class="beta">Beta</span></button>
           </div>
           <p class="hint approval-warn" id="chat-first-reply-warn" data-t="frWarn" hidden></p>
-          <p class="hint" data-t="chatAutoHelp"></p>
+          <p class="hint" data-t="chatAutoShort"></p>
+          <details class="como"><summary data-t="howItWorks"></summary><p class="hint" data-t="chatAutoHelp"></p></details>
           <span class="label" id="chat-send-files-label" data-t="filesLabel"></span>
           <div class="seg" id="chat-send-files" role="group" aria-labelledby="chat-send-files-label"
                aria-describedby="chat-send-files-help">
@@ -791,10 +898,14 @@
             <button type="button" data-value="on" data-t="autoOn"></button>
             <button type="button" data-value="off" data-t="autoOff"></button>
           </div>
-          <p class="hint" id="chat-send-files-help" data-t="chatFilesHelp"></p>
+          <p class="hint" id="chat-send-files-help" data-t="chatFilesShort"></p>
+          <details class="como"><summary data-t="howItWorks"></summary><p class="hint" data-t="chatFilesHelp"></p></details>
+          </div>
           <!-- T22.3: cada regla de aprobacion con su nivel en ESTA conversacion. Grupos de
                botones como el modo: un select nativo no se abre en el panel de Orca. -->
-          <span class="label" data-t="chatApLabel"></span>
+          <div class="grupo">
+          <h3 data-t="chatApLabel"></h3>
+          <p class="hint" data-t="chatApShort"></p>
           <div class="ap-reglas">
             <span class="ap-regla" id="chat-ap-money-label" data-t="apRuleMoney"></span>
             <div class="seg" id="chat-ap-money" role="group" aria-labelledby="chat-ap-money-label">
@@ -821,8 +932,9 @@
               <button type="button" data-value="allow" data-t="apLvlAllow"></button>
             </div>
           </div>
-          <p class="hint" data-t="chatApHelp"></p>
-          <div class="actions">
+          <details class="como"><summary data-t="howItWorks"></summary><p class="hint" data-t="chatApHelp"></p></details>
+          </div>
+          <div class="actions pie">
             <button class="primary" id="save-scope" data-t="save"></button>
             <button id="cancel-edit" hidden data-t="cancelEdit"></button>
             <span class="said" id="said-scope"></span>
@@ -833,7 +945,8 @@
              la palabra del mensaje decide el proyecto. Las viejas de Plane se marcan. -->
         <section class="card" id="routes-card">
           <h2 data-t="routesLegend"></h2>
-          <p class="hint lead" data-t="routesHelp"></p>
+          <p class="hint lead" data-t="routesShort"></p>
+          <details class="como"><summary data-t="howItWorks"></summary><p class="hint" data-t="routesHelp"></p></details>
           <div class="row dos">
             <div>
               <label for="r-match" data-t="routeMatch"></label>
@@ -854,7 +967,7 @@
           </div>
           <p class="hint" id="route-hint"></p>
           <div class="actions">
-            <button class="primary" id="save-route" data-t="addRoute"></button>
+            <button type="button" id="save-route" data-t="addRoute"></button>
             <span class="said" id="said-route"></span>
           </div>
           <p class="hint" id="routes-legacy-help" hidden data-t="routeLegacyHelp"></p>
@@ -869,7 +982,8 @@
       <div id="view-proyectos" role="tabpanel" aria-labelledby="tab-proyectos" hidden>
         <section id="projects-card">
           <h2 data-t="projectsLegend"></h2>
-          <p class="hint lead" data-t="projectsHelp"></p>
+          <p class="hint lead" data-t="projectsShort"></p>
+          <details class="como"><summary data-t="howItWorks"></summary><p class="hint" data-t="projectsHelp"></p></details>
           <div id="projects-wrap"></div>
           <div class="actions">
             <button id="projects-refresh" data-t="projectsRefresh"></button>
@@ -887,7 +1001,8 @@
         <section>
           <h2 data-t="approvalLegend"></h2>
           <div id="exceptions">
-            <p class="hint lead" data-t="approvalIntro"></p>
+            <p class="hint lead" data-t="approvalShort"></p>
+          <details class="como"><summary data-t="howItWorks"></summary><p class="hint" data-t="approvalIntro"></p></details>
             <ul class="rules">
               <li data-t="apMoney"></li>
               <li data-t="apCredential"></li>
@@ -895,7 +1010,8 @@
               <li data-t="apJev"></li>
               <li data-t="apDraft"></li>
             </ul>
-            <p class="hint lead" data-t="apLevelsIntro"></p>
+            <details class="como"><summary data-t="howItWorks"></summary>
+            <p class="hint" data-t="apLevelsIntro"></p>
             <ul class="rules">
               <li data-t="apLvlAskDesc"></li>
               <li data-t="apLvlAgentDesc"></li>
@@ -903,6 +1019,7 @@
               <li data-t="apFixed"></li>
             </ul>
             <p class="hint" data-t="approvalNote"></p>
+            </details>
           </div>
         </section>
 
@@ -910,7 +1027,8 @@
              conversaciones, por el id que dejo WhatsApp. Nunca se escribe un numero. -->
         <section class="card" id="owners-card">
           <h2 data-t="ownersLegend"></h2>
-          <p class="hint lead" data-t="ownersIntro"></p>
+          <p class="hint lead" data-t="ownersShort"></p>
+          <details class="como"><summary data-t="howItWorks"></summary><p class="hint" data-t="ownersIntro"></p></details>
           <div id="owners-wrap"></div>
           <label for="owner-search" data-t="ownersAddLabel"></label>
           <div class="combo">
@@ -920,14 +1038,14 @@
             <div class="combo-list" id="owner-list" role="listbox" hidden
                  data-t-label="ownersAddLabel"></div>
           </div>
-          <p class="hint" data-t="ownersHelp"></p>
+          <details class="como"><summary data-t="howItWorks"></summary><p class="hint" data-t="ownersHelp"></p></details>
           <!-- El numero de aprobacion (T14): uno de los de arriba, o ninguno. Grupo de
                botones y no un select: la lista nativa no se abre en el panel de Orca. -->
           <span class="label" id="approval-number-label" data-t="approvalNumberLabel"></span>
           <div class="seg" id="approval-number" role="group"
                aria-labelledby="approval-number-label"></div>
           <p class="hint approval-warn" id="approval-warn" hidden></p>
-          <p class="hint" data-t="approvalNumberHelp"></p>
+          <details class="como"><summary data-t="howItWorks"></summary><p class="hint" data-t="approvalNumberHelp"></p></details>
           <p class="hint" id="approval-main-line" hidden></p>
           <div class="actions">
             <button class="primary" id="save-owners" data-t="saveCard"></button>
@@ -996,7 +1114,7 @@
               <input id="orca-quiet-end" type="time" step="60" />
             </div>
           </div>
-          <p class="hint" data-t="orcaQuietHelp"></p>
+          <details class="como"><summary data-t="howItWorks"></summary><p class="hint" data-t="orcaQuietHelp"></p></details>
           <div class="fr-num">
             <label for="orca-cap" data-t="orcaCapLabel"></label>
             <input id="orca-cap" type="number" min="1" max="60" step="1" inputmode="numeric"
@@ -1012,7 +1130,8 @@
         <!-- Respuestas automaticas: lo unico que el motor contesta solo, sin el agente. -->
         <section class="card" id="auto-card">
           <h2 id="auto-legend-h" data-t="autoLegend"></h2>
-          <p class="hint lead" data-t="autoIntro"></p>
+          <p class="hint lead" data-t="autoShort"></p>
+          <details class="como"><summary data-t="howItWorks"></summary><p class="hint" data-t="autoIntro"></p></details>
           <span class="label" id="ack-mode-label" data-t="ackLabel"></span>
           <div class="seg" id="ack-mode" role="group" aria-labelledby="ack-mode-label">
             <button type="button" data-value="on" data-t="autoOn"></button>
@@ -1039,7 +1158,7 @@
             <button type="button" data-value="model_with_ack_fallback"><span
                     data-t="frFallback"></span><span class="beta">Beta</span></button>
           </div>
-          <p class="hint" data-t="firstReplyHelp"></p>
+          <details class="como"><summary data-t="howItWorks"></summary><p class="hint" data-t="firstReplyHelp"></p></details>
           <p class="hint approval-warn" id="first-reply-warn" data-t="frWarn" hidden></p>
           <div class="fr-nums" id="fr-nums" hidden>
             <div class="fr-num" id="fr-fallback-row">
@@ -1063,7 +1182,7 @@
             <button type="button" data-value="off" data-t="autoOff"></button>
           </div>
           <input id="greeting-text" data-t-ph="greetingPh" />
-          <p class="hint" data-t="autoTextHelp"></p>
+          <details class="como"><summary data-t="howItWorks"></summary><p class="hint" data-t="autoTextHelp"></p></details>
           <div class="actions">
             <button class="primary" id="save-auto" data-t="saveCard"></button>
             <span class="said" id="said-auto"></span>
@@ -1176,7 +1295,7 @@
           <label for="jev-key" data-t="jevKeyLabel"></label>
           <input id="jev-key" type="password" autocomplete="off" autocapitalize="off"
                  spellcheck="false" data-t-ph="jevKeyPh" />
-          <p class="hint" data-t="jevKeyHelp"></p>
+          <details class="como"><summary data-t="howItWorks"></summary><p class="hint" data-t="jevKeyHelp"></p></details>
           <div class="actions">
             <button id="jev-save-key" data-t="jevSaveKey"></button>
             <button id="jev-remove-key" hidden data-t="jevRemoveKey"></button>
@@ -1205,7 +1324,7 @@
           <p class="hint" data-t="agentHelp"></p>
           <label for="owner" data-t="ownerLabel"></label>
           <input id="owner" data-t-ph="ownerPh" />
-          <p class="hint" data-t="ownerHelp"></p>
+          <details class="como"><summary data-t="howItWorks"></summary><p class="hint" data-t="ownerHelp"></p></details>
           <label for="tone" data-t="toneLabel"></label>
           <textarea id="tone" rows="3" data-t-ph="tonePh"></textarea>
           <p class="hint" data-t="toneHelp"></p>
@@ -1240,8 +1359,9 @@
       <div id="view-skills" role="tabpanel" aria-labelledby="tab-skills" hidden>
         <section id="skills-card">
           <h2 data-t="skillsLegend"></h2>
-          <p class="hint lead" data-t="skillsHelp"></p>
-          <p class="hint" data-t="skillsMachineNote"></p>
+          <p class="hint lead" data-t="skillsShort"></p>
+          <details class="como"><summary data-t="howItWorks"></summary><p class="hint" data-t="skillsHelp"></p>
+            <p class="hint" data-t="skillsMachineNote"></p></details>
           <!-- Lo unico de cada linea (todo-por-linea, P7): por cual linea avisan las skills.
                Se guarda en `skillsLine` (null es la principal); lo lee `wa-scope owner`. -->
           <div class="switch-row" id="skills-line-row" hidden>
@@ -1257,7 +1377,7 @@
             <span class="said" id="said-skills"></span>
           </div>
           <p class="hint" data-t="skillsEditNote"></p>
-          <p class="hint" data-t="skillsRepoNote"></p>
+          <details class="como"><summary data-t="howItWorks"></summary><p class="hint" data-t="skillsRepoNote"></p></details>
         </section>
       </div>
 
@@ -1270,7 +1390,7 @@
             <button type="button" data-value="local" data-t="trLocal"></button>
             <button type="button" data-value="off" data-t="trOff"></button>
           </div>
-          <p class="hint" data-t="transcribeHelp"></p>
+          <details class="como"><summary data-t="howItWorks"></summary><p class="hint" data-t="transcribeHelp"></p></details>
           <span class="label" id="lang-label" data-t="langLabel"></span>
           <div class="seg" id="lang" role="group" aria-labelledby="lang-label">
             <button type="button" data-value="auto" data-t="langAuto"></button>
@@ -1284,7 +1404,7 @@
             <button type="button" data-value="optima" data-t="qualityOptima"></button>
             <button type="button" data-value="minima" data-t="qualityMinima"></button>
           </div>
-          <p class="hint" data-t="qualityHelp"></p>
+          <details class="como"><summary data-t="howItWorks"></summary><p class="hint" data-t="qualityHelp"></p></details>
           <div class="actions">
             <button class="primary" id="save-voice" data-t="saveCard"></button>
             <span class="said" id="said-voice"></span>
@@ -1303,7 +1423,7 @@
             <button type="button" data-value="90" data-t="days90"></button>
             <button type="button" data-value="0" data-t="days0"></button>
           </div>
-          <p class="hint" data-t="daysHelp"></p>
+          <details class="como"><summary data-t="howItWorks"></summary><p class="hint" data-t="daysHelp"></p></details>
           <span class="label" id="sync-minutes-label" data-t="syncLabel"></span>
           <div class="seg" id="sync-minutes" role="group" aria-labelledby="sync-minutes-label">
             <button type="button" data-value="2" data-t="sync2"></button>
@@ -1313,7 +1433,7 @@
             <button type="button" data-value="30" data-t="sync30"></button>
             <button type="button" data-value="60" data-t="sync60"></button>
           </div>
-          <p class="hint" data-t="syncHelp"></p>
+          <details class="como"><summary data-t="howItWorks"></summary><p class="hint" data-t="syncHelp"></p></details>
           <p class="hint" id="triage-pace" aria-live="polite" hidden></p>
           <div class="actions">
             <button class="primary" id="save-reading" data-t="saveCard"></button>
@@ -1591,6 +1711,22 @@
           chatFetchDone: "Pidiendo la lista. Puede tardar unos segundos.",
           chatCount: "{n} de {total}", chatNoMatch: "Ninguna coincide con eso",
           kindGroup: 'Grupo', kindDirect: 'Directo',
+          skillsShort: 'Le ensenan a sus agentes de Claude Code a usar este plugin.',
+          approvalShort: 'Su agente responde solo y le pregunta antes solo por estas reglas.',
+          autoShort: 'Lo que su agente envia solo, en las conversaciones en Automatico.',
+          linesShort: 'Cada linea es un numero de WhatsApp vinculado a este equipo.',
+          ownersShort: 'Lo que usted escribe desde estos numeros cuenta como una orden suya.',
+          projectsShort: 'Las carpetas donde se hace el trabajo. Solo estas le llegan al agente.',
+          howItWorks: 'Como funciona',
+          grpChat: 'Conversacion y proyectos', grpVoice: 'Como responde',
+          grpAuto: 'Mensajes automaticos',
+          workspaceShort: 'Donde se hace el trabajo de esta conversacion.',
+          pqShort: 'A quien pregunta el agente cuando duda entre proyectos.',
+          chatInstrShort: 'Lo que hace en esta conversacion. Manda sobre lo general.',
+          chatAutoShort: 'Solo salen con la conversacion en Automatico.',
+          chatFilesShort: 'Cada archivo espera su aprobacion antes de salir.',
+          chatApShort: 'Quien decide cuando una respuesta toca uno de estos temas.',
+          routesShort: 'Si el mensaje dice la palabra, el caso va a ese proyecto.',
           scopeLegend: 'Conversaciones autorizadas',
           scopeHelp: 'Su agente solo ve las que estan aca. Cada una tiene su modo y uno o varios ' +
             'proyectos.',
@@ -2235,6 +2371,22 @@
           chatFetchDone: "Asking for the list. It can take a few seconds.",
           chatCount: "{n} of {total}", chatNoMatch: "Nothing matches that",
           kindGroup: 'Group', kindDirect: 'Direct',
+          skillsShort: 'They teach your Claude Code agents to use this plugin.',
+          approvalShort: 'Your agent replies on its own and asks you first only for these rules.',
+          autoShort: 'What your agent sends on its own, in conversations on Automatic.',
+          linesShort: 'Each line is a WhatsApp number linked to this machine.',
+          ownersShort: 'What you write from these numbers counts as your order.',
+          projectsShort: 'The folders where the work happens. Only these reach the agent.',
+          howItWorks: 'How it works',
+          grpChat: 'Conversation and projects', grpVoice: 'How it replies',
+          grpAuto: 'Automatic messages',
+          workspaceShort: 'Where the work of this conversation happens.',
+          pqShort: 'Who the agent asks when it is unsure between projects.',
+          chatInstrShort: 'What it does in this conversation. Overrides the default.',
+          chatAutoShort: 'Only sent while the conversation is on Automatic.',
+          chatFilesShort: 'Each file waits for your approval before it goes out.',
+          chatApShort: 'Who decides when a reply touches one of these.',
+          routesShort: 'When a message says the word, the case goes to that project.',
           scopeLegend: 'Allowed conversations',
           scopeHelp: 'Your agent only sees the ones listed here. Each has its mode and one or ' +
             'more projects.',
@@ -2992,6 +3144,22 @@
         routeRmFail: 'Nao foi possivel remover a regra, entao ela continua valendo. Tente de novo.',
         routeRmBadPattern: 'Essa regra nao tem um texto valido, entao nao foi removida.',
         kindGroup: 'Grupo', kindDirect: 'Direto',
+        skillsShort: 'Ensinam os seus agentes do Claude Code a usar este plugin.',
+        approvalShort: 'O seu agente responde sozinho e so pergunta antes por estas regras.',
+        autoShort: 'O que o seu agente envia sozinho, nas conversas em Automatico.',
+        linesShort: 'Cada linha e um numero de WhatsApp vinculado a esta maquina.',
+        ownersShort: 'O que voce escreve destes numeros conta como uma ordem sua.',
+        projectsShort: 'As pastas onde se faz o trabalho. So estas chegam ao agente.',
+        howItWorks: 'Como funciona',
+        grpChat: 'Conversa e projetos', grpVoice: 'Como responde',
+        grpAuto: 'Mensagens automaticas',
+        workspaceShort: 'Onde se faz o trabalho desta conversa.',
+        pqShort: 'A quem o agente pergunta quando fica em duvida entre projetos.',
+        chatInstrShort: 'O que faz nesta conversa. Manda sobre o geral.',
+        chatAutoShort: 'So saem com a conversa em Automatico.',
+        chatFilesShort: 'Cada arquivo espera a sua aprovacao antes de sair.',
+        chatApShort: 'Quem decide quando uma resposta toca um destes temas.',
+        routesShort: 'Se a mensagem diz a palavra, o caso vai para esse projeto.',
         scopeLegend: 'Conversas autorizadas',
         scopeHelp: 'O seu agente so ve as que estao aqui. Cada uma tem o seu modo e um ou mais ' +
           'projetos.',
@@ -5299,7 +5467,7 @@
         }
         if (forzar || !comboProyecto.escribiendo()) mostrarFila(0)
         comboProyecto.refrescar()
-        el('workspace-hint').textContent = t(proyectos.length ? 'workspaceHint'
+        el('workspace-hint').textContent = t(proyectos.length ? 'workspaceShort'
           : 'workspaceHintNoProjects')
         // La regla solo apunta a un proyecto del catalogo: uno quitado se suelta.
         var rs = el('r-workspace')
@@ -5483,8 +5651,9 @@
               '<span class="pill ' + esc(e.mode || 'off') + '">' +
               esc(porCodigo(MODE_KEY, e.mode || 'off', e.mode)) +
               '</span></td><td class="acts">' +
-              '<button class="link" data-edit="' + esc(key) + '">' + t('edit') + '</button>' +
-              '<button class="link" data-rm="' + esc(key) + '">' + t('remove') + '</button>' +
+              '<button type="button" class="btn-fila" data-edit="' + esc(key) + '">' + t('edit') +
+              '</button><button type="button" class="btn-fila" data-rm="' + esc(key) + '">' +
+              t('remove') + '</button>' +
               '</td></tr>'
           }).join('') + '</tbody></table>'
 
@@ -6173,7 +6342,7 @@
                   esc(r.target || '—') + '<span class="legacy">' + esc(t('routeLegacy')) +
                   '</span>'
                 : nombreDeProyecto(r.workspace)) + '</td>' +
-              '<td class="acts"><button class="link" data-rrm="' + i + '">' +
+              '<td class="acts"><button type="button" class="btn-fila" data-rrm="' + i + '">' +
               t('remove') + '</button></td></tr>'
           }).join('') + '</tbody></table>'
 
