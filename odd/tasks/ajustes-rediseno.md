@@ -60,5 +60,15 @@ fields, same calls, same validations. Visual and copy only.
         that Numeros and Avisos de Orca are both visible at once in Su aprobacion. With one
         view at a time that cannot hold by design, so the test now opens each card's view
         before looking, as the owner would. Its assertions are unchanged.
-- [ ] **R5b** Decision gate with round 2; wait for the owner.
-- [ ] **R4** Shots of every tab at 1440/768/390/320, light and dark, via `WA_INBOX_SOLO=config`.
+- [x] **R5b** Decision gate with round 2: the owner approved it. Descartar in the save bar
+      is a follow-up, not in this PR.
+- [x] **R4** Shots of every tab and view (`WA_INBOX_SOLO=config-tab-`, 13 states) at
+      1440/768/390/320, light and dark, in Spanish: 104 captures with no overflow and no JS
+      errors. Shots that open a card in a non-first view take `sub:`.
+
+## Follow-ups
+
+- Descartar in the save bar (needs each card's saved values re-read).
+- Copy that still points "above" across views (e.g. the Avisos de Orca warning "elija uno en
+  la tarjeta de arriba" now lives in another view, Numeros).
+- Some dynamic hints with an `id` are still long (e.g. the acknowledgement minutes help).

@@ -667,6 +667,14 @@
       /* Conversaciones: la lista con su boton, y el formulario en un panel lateral. */
       #scope-add { float: right; margin: 0 0 var(--sp-3) var(--sp-4); white-space: nowrap; }
       #scope-wrap { clear: both; }
+      /* Angosto, el boton va debajo de la bajada y no a su lado: flotando, partia la frase. */
+      @media (max-width: 520px) {
+        #scope-list { display: flex; flex-direction: column; }
+        #scope-list > * { order: 3; }
+        #scope-list > h2 { order: 0; }
+        #scope-list > .hint.lead { order: 1; }
+        #scope-add { order: 2; float: none; align-self: flex-start; margin: 0 0 var(--sp-4); }
+      }
       .panel-lateral { display: none; }
       .panel-lateral.abierto { display: block; position: fixed; top: 0; right: 0; bottom: 0;
         width: min(560px, 100%); overflow-y: auto; overscroll-behavior: contain; z-index: 30;
