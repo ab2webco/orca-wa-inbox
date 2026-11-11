@@ -6862,6 +6862,123 @@ titulo('activity.html — tablero: lo que llega con el puntero apretado se pinta
     mensajeDe(doc, 4)?.textContent)
 }
 
+// ── WAINBOX-88: el tablero se queda quieto al refrescar ──
+// El dueno vio el tablero inestable al refrescar: con UN caso cambiado se reconstruia todo,
+// las columnas volvian arriba, el foco se iba, el detalle abierto se rearmaba (y sus
+// imagenes con el), dos relecturas a la vez podian pintar la vieja encima de la nueva, y
+// dos casos con la misma hora se cambiaban de lugar segun como llegaban.
+titulo('activity.html — tablero: refrescar con cambios no reconstruye lo que no cambio (WAINBOX-88)')
+{
+  const storage = { board: tablero([tarjeta({ case_id: 3 }), tarjeta({ case_id: 6, title: 'Otro caso' })]) }
+  const { window, doc } = await abrirTablero(storage)
+  const tres = doc.querySelector('.card[data-case="3"]')
+  storage.board = tablero([tarjeta({ case_id: 3 }), tarjeta({ case_id: 6, title: 'Otro caso, cambiado' })])
+  window.dispatchEvent(new window.Event('focus'))
+  await espera()
+  ok('r1: la tarjeta que no cambio es el mismo nodo tras el refresco',
+    doc.querySelector('.card[data-case="3"]') === tres)
+  ok('r1: y la que cambio muestra lo nuevo',
+    /cambiado/.test(doc.querySelector('.card[data-case="6"]')?.textContent || ''))
+}
+{
+  const muchas = (titulo6) => tablero([1, 2, 3, 4, 5].map((n) => tarjeta({ case_id: n, title: 'Caso ' + n }))
+    .concat([tarjeta({ case_id: 6, stage: 'recibido', proposal: null, exceptions: [], title: titulo6 })]))
+  const storage = { board: muchas('Nuevo') }
+  const { window, doc } = await abrirTablero(storage)
+  const cuerpo = () => doc.querySelector('.col[data-stage="decision"] .col-body')
+  cuerpo().scrollTop = 40
+  doc.getElementById('board-cols').scrollLeft = 30
+  storage.board = muchas('Nuevo, cambiado')
+  window.dispatchEvent(new window.Event('focus'))
+  await espera()
+  ok('r2: la columna que el dueno bajo sigue donde estaba',
+    cuerpo().scrollTop === 40, String(cuerpo().scrollTop))
+  ok('r2: y el tablero no vuelve al principio a lo ancho',
+    doc.getElementById('board-cols').scrollLeft === 30, String(doc.getElementById('board-cols').scrollLeft))
+}
+{
+  const storage = { board: tablero([tarjeta({ case_id: 3 }), tarjeta({ case_id: 6 })]) }
+  const { window, doc } = await abrirTablero(storage)
+  doc.querySelector('.card[data-case="3"]').focus()
+  storage.board = tablero([tarjeta({ case_id: 3, title: 'Titulo nuevo' }), tarjeta({ case_id: 6 })])
+  window.dispatchEvent(new window.Event('focus'))
+  await espera()
+  const activo = doc.activeElement
+  ok('r3: el foco sigue en la tarjeta aunque ella misma cambio',
+    activo && activo.matches && activo.matches('.card[data-case="3"]') &&
+      /Titulo nuevo/.test(activo.textContent), activo && activo.outerHTML.slice(0, 80))
+}
+{
+  const storage = { board: tablero([tarjeta({ case_id: 3 }), tarjeta({ case_id: 6 })]) }
+  const { window, doc } = await abrirTablero(storage)
+  abrirDetalle(doc, 3)
+  await espera()
+  const titulo3 = detalle(doc).querySelector('.det-title')
+  detalle(doc).scrollTop = 25
+  storage.board = tablero([tarjeta({ case_id: 3 }), tarjeta({ case_id: 6, title: 'Cambia el otro' })])
+  window.dispatchEvent(new window.Event('focus'))
+  await espera()
+  ok('r4: el detalle abierto no se rearma si su caso no cambio',
+    detalle(doc).querySelector('.det-title') === titulo3 && !detalle(doc).hidden)
+  ok('r4: y conserva donde lo dejo el dueno', detalle(doc).scrollTop === 25, String(detalle(doc).scrollTop))
+  storage.board = tablero([tarjeta({ case_id: 3, summary: 'Ahora dice otra cosa.' }), tarjeta({ case_id: 6 })])
+  window.dispatchEvent(new window.Event('focus'))
+  await espera()
+  ok('r4: si su caso cambio, el detalle muestra lo nuevo y no salta arriba',
+    /otra cosa/.test(detalle(doc).textContent) && detalle(doc).scrollTop === 25,
+    String(detalle(doc).scrollTop))
+}
+{
+  // Dos relecturas a la vez: la primera tarda y lee lo viejo; la segunda llega antes con lo
+  // nuevo. Sin coalescer, la primera aterrizaba despues y pintaba lo viejo encima.
+  let lento = false
+  const gancho = (d) => {
+    if (lento && d.action === 'storage.get' && d.params?.key === 'board') { lento = false; return { __demora: 400 } }
+    return undefined
+  }
+  const storage = { board: tablero([tarjeta({ case_id: 3, title: 'Viejo' })]) }
+  const { window, doc } = await montar('activity.html', storage, 'es-419', gancho)
+  await espera()
+  lento = true
+  window.dispatchEvent(new window.Event('focus'))
+  // El host lee al recibir: lo nuevo se escribe recien cuando la lectura lenta ya leyo.
+  await hastaPanel(() => !lento, 2000)
+  storage.board = tablero([tarjeta({ case_id: 3, title: 'Nuevo' })])
+  window.dispatchEvent(new window.Event('focus'))
+  await new Promise((r) => setTimeout(r, 900))
+  await espera()
+  ok('r5: una relectura lenta no pinta lo viejo encima de lo nuevo',
+    /Nuevo/.test(doc.querySelector('.card[data-case="3"]')?.textContent || ''),
+    doc.querySelector('.card[data-case="3"]')?.textContent)
+}
+{
+  // Volver al panel dispara foco y visibilidad juntos, y el boton se suma: una sola
+  // relectura en vuelo y, como mucho, una mas con lo ultimo.
+  const { window, doc, enviados } = await abrirTablero({ board: tablero([tarjeta({ case_id: 3 })]) })
+  const antes = enviados.filter((d) => d.action === 'storage.get' && d.params?.key === 'board').length
+  window.dispatchEvent(new window.Event('focus'))
+  doc.dispatchEvent(new window.Event('visibilitychange'))
+  window.dispatchEvent(new window.Event('focus'))
+  doc.getElementById('refresh').click()
+  await espera()
+  await new Promise((r) => setTimeout(r, 200))
+  const lecturas = enviados.filter((d) => d.action === 'storage.get' && d.params?.key === 'board').length - antes
+  ok('r6: cuatro disparos juntos no son cuatro relecturas', lecturas <= 2, String(lecturas))
+}
+{
+  // Dos casos con la misma hora: el orden no depende de como los escribio `wa-scope`.
+  const a = tarjeta({ case_id: 7, title: 'Siete', updated_at: '2026-11-10T10:00:00Z' })
+  const b = tarjeta({ case_id: 9, title: 'Nueve', updated_at: '2026-11-10T10:00:00Z' })
+  const storage = { board: tablero([a, b]) }
+  const { window, doc } = await abrirTablero(storage)
+  const primero = visibles(doc).join()
+  storage.board = tablero([b, a])
+  window.dispatchEvent(new window.Event('focus'))
+  await espera()
+  ok('r7: el orden de dos casos empatados no salta entre refrescos',
+    visibles(doc).join() === primero, `${primero} -> ${visibles(doc).join()}`)
+}
+
 titulo('activity.html — tablero: lo que depende del reloj se repinta aunque nada mas cambie')
 /** Corre el reloj del panel `ms` hacia adelante (solo `Date.now`, que es lo que lee). */
 const adelantarReloj = (window, ms) => {
