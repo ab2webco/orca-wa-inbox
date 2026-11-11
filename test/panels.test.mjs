@@ -6869,10 +6869,12 @@ titulo('activity.html — tablero: lo que llega con el puntero apretado se pinta
 // dos casos con la misma hora se cambiaban de lugar segun como llegaban.
 titulo('activity.html — tablero: refrescar con cambios no reconstruye lo que no cambio (WAINBOX-88)')
 {
-  const storage = { board: tablero([tarjeta({ case_id: 3 }), tarjeta({ case_id: 6, title: 'Otro caso' })]) }
+  // El caso que no cambio llega igual, con su misma hora: es lo que escribe `wa-scope`.
+  const quieto = tarjeta({ case_id: 3 })
+  const storage = { board: tablero([quieto, tarjeta({ case_id: 6, title: 'Otro caso' })]) }
   const { window, doc } = await abrirTablero(storage)
   const tres = doc.querySelector('.card[data-case="3"]')
-  storage.board = tablero([tarjeta({ case_id: 3 }), tarjeta({ case_id: 6, title: 'Otro caso, cambiado' })])
+  storage.board = tablero([structuredClone(quieto), tarjeta({ case_id: 6, title: 'Otro caso, cambiado' })])
   window.dispatchEvent(new window.Event('focus'))
   await espera()
   ok('r1: la tarjeta que no cambio es el mismo nodo tras el refresco',
@@ -6909,13 +6911,14 @@ titulo('activity.html — tablero: refrescar con cambios no reconstruye lo que n
       /Titulo nuevo/.test(activo.textContent), activo && activo.outerHTML.slice(0, 80))
 }
 {
-  const storage = { board: tablero([tarjeta({ case_id: 3 }), tarjeta({ case_id: 6 })]) }
+  const quieto = tarjeta({ case_id: 3 })
+  const storage = { board: tablero([quieto, tarjeta({ case_id: 6 })]) }
   const { window, doc } = await abrirTablero(storage)
   abrirDetalle(doc, 3)
   await espera()
   const titulo3 = detalle(doc).querySelector('.det-title')
   detalle(doc).scrollTop = 25
-  storage.board = tablero([tarjeta({ case_id: 3 }), tarjeta({ case_id: 6, title: 'Cambia el otro' })])
+  storage.board = tablero([structuredClone(quieto), tarjeta({ case_id: 6, title: 'Cambia el otro' })])
   window.dispatchEvent(new window.Event('focus'))
   await espera()
   ok('r4: el detalle abierto no se rearma si su caso no cambio',

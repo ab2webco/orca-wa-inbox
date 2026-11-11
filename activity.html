@@ -2542,6 +2542,13 @@
        *  `counts` manda sobre las tarjetas (cuenta todo, no solo lo enviado); si las
        *  tarjetas de otro numero se descartaron, ya no es del mismo universo y se cuenta
        *  lo que se ve. */
+      /** Dos casos con la misma hora quedan siempre en el mismo orden: el numero mas bajo
+       *  primero. Sin esto el orden era el de la clave, y `wa-scope` no lo promete, asi que
+       *  dos tarjetas empatadas se cambiaban de lugar entre un refresco y otro. */
+      function empate (a, b) {
+        return (Number(a.case_id) || 0) - (Number(b.case_id) || 0)
+      }
+
       function modeloTablero (board) {
         if (!esObjeto(board)) return { estado: 'sin-datos' }
         if (board.v !== 1) return { estado: 'version', v: board.v == null ? '?' : board.v }
@@ -2557,7 +2564,7 @@
         })
         ETAPAS.forEach(function (e) {
           porEtapa[e].sort(function (a, b) {
-            return (Date.parse(b.updated_at) || 0) - (Date.parse(a.updated_at) || 0)
+            return (Date.parse(b.updated_at) || 0) - (Date.parse(a.updated_at) || 0) || empate(a, b)
           })
         })
         // Cuantos casos hay de verdad, sin periodo: un periodo sin nada terminado no es un
@@ -2573,7 +2580,7 @@
         var desde = desdePeriodo(periodo)
         FINALES.forEach(function (e) {
           porEtapa[e] = porEtapa[e].filter(function (c) { return desde === null || entradaDe(c) >= desde })
-          porEtapa[e].sort(function (a, b) { return entradaDe(b) - entradaDe(a) })
+          porEtapa[e].sort(function (a, b) { return entradaDe(b) - entradaDe(a) || empate(a, b) })
         })
         // Las cuentas de lo terminado son las del periodo (`period_counts`, que cuenta todo);
         // sin ellas, lo que se ve. En "Todo" valen las de siempre.
@@ -3745,6 +3752,8 @@
       function hacerAbrible (nodo, c) {
         var id = String(c.case_id)
         nodo.dataset.case = id
+        // El dato que la dibujo: con el dibujo, decide si al repintar vuelve el mismo nodo.
+        nodo.__dato = c
         nodo.tabIndex = 0
         nodo.setAttribute('aria-controls', 'board-detail')
         nodo.setAttribute('aria-expanded', seleccion === id ? 'true' : 'false')
@@ -4232,6 +4241,100 @@
       }
 
       function pintarTablero (board) {
+        var antes = fotoTablero()
+        try { pintarTableroNuevo(board) } finally { conservarTablero(antes) }
+      }
+
+      // ── Repintar sin sacudir (WAINBOX-88) ──
+      // Cuando algo cambia, `pintarTableroNuevo` arma el tablero de cero; lo de aca devuelve
+      // a la pagina lo que no cambio. Una tarjeta igual (mismo dato, mismo dibujo) vuelve a
+      // ser el nodo que estaba: el puntero, el foco y lo que el navegador ya cargo siguen
+      // ahi. Lo que si cambio llega nuevo, en su lugar. Y lo que el dueno movio -cuanto bajo
+      // cada columna, el tablero a lo ancho, el detalle- queda donde lo dejo.
+      var FOCO_ENFOCABLE = 'button, input, textarea, select, a[href], [tabindex]'
+
+      /** Lo que hay en pantalla antes de repintar. */
+      function fotoTablero () {
+        var foto = { cartas: {}, scroll: {}, detalle: null, foco: null }
+        var cuerpo = el('board-body')
+        Array.prototype.forEach.call(cuerpo.querySelectorAll('.card[data-case]'), function (n) {
+          if (n.__dato === undefined) return
+          foto.cartas[claveCarta(n)] = { nodo: n, firma: firmaNodo(n, n.__dato) }
+        })
+        Array.prototype.forEach.call(el('board-cols').querySelectorAll('.col[data-stage] > .col-body'), function (b) {
+          foto.scroll[b.parentNode.dataset.stage] = b.scrollTop
+        })
+        foto.colsX = el('board-cols').scrollLeft
+        foto.chipsX = el('board-chips').scrollLeft
+        var det = el('board-detail')
+        if (!det.hidden && det.dataset.case && det.__dato !== undefined) {
+          foto.detalle = { caso: det.dataset.case, firma: firmaNodo(det, det.__dato, true),
+            hijos: Array.prototype.slice.call(det.childNodes), y: det.scrollTop }
+        }
+        // El foco: el nodo, y como volver a encontrarlo si lo reemplazan (su caso o su
+        // etapa, y el lugar que ocupa entre lo enfocable de ahi).
+        var activo = document.activeElement
+        var zona = activo && activo !== document.body && (cuerpo.contains(activo) || el('board-chips').contains(activo))
+        if (zona) {
+          var dueno = activo.closest('[data-case], [data-etapa]')
+          if (dueno) {
+            var lista = [dueno].concat(Array.prototype.slice.call(dueno.querySelectorAll(FOCO_ENFOCABLE)))
+            foto.foco = { nodo: activo, enDetalle: el('board-detail').contains(activo),
+              sel: dueno.dataset.case ? '.card[data-case="' + dueno.dataset.case + '"]'
+                : '[data-etapa="' + dueno.dataset.etapa + '"]',
+              lugar: lista.indexOf(activo) }
+          }
+        }
+        return foto
+      }
+
+      function claveCarta (n) { return (n.classList.contains('fila') ? 'f' : 't') + n.dataset.case }
+
+      /** Igual dato e igual dibujo. De la tarjeta cuenta el nodo entero (su `aria-expanded`
+       *  vive en ella); del detalle, lo de adentro: la caja es siempre la misma. */
+      function firmaNodo (n, dato, adentro) {
+        try { return JSON.stringify(dato) + '\u0000' + (adentro ? n.innerHTML : n.outerHTML) } catch (e) { return null }
+      }
+
+      /** Despues de pintar: lo que no cambio vuelve a ser lo que estaba. */
+      function conservarTablero (foto) {
+        var cuerpo = el('board-body')
+        Array.prototype.forEach.call(cuerpo.querySelectorAll('.card[data-case]'), function (n) {
+          var viejo = foto.cartas[claveCarta(n)]
+          if (!viejo || viejo.nodo === n || viejo.firma === null) return
+          if (viejo.firma === firmaNodo(n, n.__dato)) n.parentNode.replaceChild(viejo.nodo, n)
+        })
+        var det = el('board-detail')
+        var mismoCaso = foto.detalle && !det.hidden && det.dataset.case === foto.detalle.caso
+        if (mismoCaso && foto.detalle.firma !== null && foto.detalle.firma === firmaNodo(det, det.__dato, true)) {
+          det.textContent = ''
+          foto.detalle.hijos.forEach(function (h) { det.appendChild(h) })
+        }
+        if (mismoCaso) det.scrollTop = foto.detalle.y
+        Array.prototype.forEach.call(el('board-cols').querySelectorAll('.col[data-stage] > .col-body'), function (b) {
+          var y = foto.scroll[b.parentNode.dataset.stage]
+          if (y) b.scrollTop = y
+        })
+        if (foto.colsX) el('board-cols').scrollLeft = foto.colsX
+        if (foto.chipsX) el('board-chips').scrollLeft = foto.chipsX
+        var f = foto.foco
+        // Si alguien ya movio el foco a otra parte (abrir un caso lo lleva a la X), se respeta.
+        if (f && (document.activeElement === document.body || !document.activeElement)) {
+          var destino = f.nodo.isConnected ? f.nodo : null
+          if (!destino) {
+            var dueno = f.enDetalle ? (det.hidden ? null : det) : document.querySelector('#board-body ' + f.sel + ', #board-chips ' + f.sel)
+            if (dueno) {
+              var lista = [dueno].concat(Array.prototype.slice.call(dueno.querySelectorAll(FOCO_ENFOCABLE)))
+              destino = lista[f.lugar] || (f.lugar > 0 ? null : dueno)
+            }
+          }
+          if (destino && destino.focus) {
+            try { destino.focus({ preventScroll: true }) } catch (e) { destino.focus() }
+          }
+        }
+      }
+
+      function pintarTableroNuevo (board) {
         var m = modeloTablero(board)
         var cols = el('board-cols')
         var lista = el('board-list')
@@ -4325,6 +4428,7 @@
         el('board-bar').hidden = !conCasos
         el('board-body').hidden = !conCasos
         renderDetalle(detalleDe)
+        el('board-detail').__dato = detalleDe || undefined
         ubicarDetalle()
         if (m.estado === 'ok' || m.estado === 'vacio') {
           var edad = hace(m.actualizado)
@@ -5108,7 +5212,25 @@
         fila.hidden = false
       }
 
+      // Una sola relectura a la vez (WAINBOX-88). Volver al panel dispara foco y visibilidad
+      // juntos, y el sondeo y el boton se suman: cada uno leia por su cuenta, se pintaba
+      // varias veces seguidas, y si la primera tardaba mas aterrizaba DESPUES con lo viejo.
+      // Lo que llega con una en vuelo se junta en UNA mas, que lee cuando la otra termino.
+      var recargaEnVuelo = null
+      var recargaOtraVez = false
       function reload() {
+        if (recargaEnVuelo) { recargaOtraVez = true; return recargaEnVuelo }
+        var fin = function () {
+          recargaEnVuelo = null
+          if (!recargaOtraVez) return
+          recargaOtraVez = false
+          return reload()
+        }
+        recargaEnVuelo = Promise.resolve().then(releer).then(fin, fin)
+        return recargaEnVuelo
+      }
+
+      function releer() {
         // Mirando otra linea, lo suyo sale de `porLinea` en una sola lectura y no de las
         // claves de la principal.
         var otra = otraLineaVista()
@@ -5141,7 +5263,7 @@
           renderVistaLineas(stored(results[2]), estados)
           // La linea que se eligio pudo dejar de estar entre una vuelta y otra.
           var sigue = otraLineaVista()
-          if (otra && (!sigue || sigue.cuenta !== otra.cuenta)) return reload()
+          if (otra && (!sigue || sigue.cuenta !== otra.cuenta)) return releer()
           if (otra) otra = sigue
           if (otra) {
             var propio = esObjeto(stored(results[10])) ? stored(results[10])[otra.cuenta] : null
