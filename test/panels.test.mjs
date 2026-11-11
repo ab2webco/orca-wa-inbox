@@ -2324,6 +2324,9 @@ titulo('config.html — ajustes sin lectura: lo de fabrica no se presenta como l
     }
     return true
   }
+  // WAINBOX-122 R5: Su aprobacion muestra un bloque a la vez; se abre la vista de cada
+  // tarjeta antes de mirarla, como lo haria el dueno.
+  const verVista = (id) => doc.querySelector(`.subnav button[aria-controls="${id}"]`)?.click()
   let cerrado = true
   const { window, doc, storage, enviados } = await montar('config.html', guardado(), 'es-419',
     (d) => cerrado && d.action === 'storage.get' && SIN_LEER.includes(d.params.key)
@@ -2336,6 +2339,7 @@ titulo('config.html — ajustes sin lectura: lo de fabrica no se presenta como l
   storage.workerBeat = { at: new Date(real() + 31000).toISOString() }
   await new Promise((r) => setTimeout(r, 2800))
 
+  verVista('owners-card')
   const duenos = doc.getElementById('owners-wrap')
   ok('sin lectura, la tarjeta de confianza no dice "Todavia no eligio ningun numero"',
     !(seVe(duenos) && /no eligio/i.test(duenos.textContent)), duenos.textContent)
@@ -2343,6 +2347,7 @@ titulo('config.html — ajustes sin lectura: lo de fabrica no se presenta como l
   ok('sin lectura, el numero de aprobacion no se ofrece como "No avisar" y nada mas',
     !(seVe(numero) && numero.querySelectorAll('button').length <= 1),
     [...numero.querySelectorAll('button')].map((b) => b.textContent).join(' | '))
+  verVista('orca-notices-card')
   const apagados = ['orca-waiting', 'orca-finished', 'orca-automation']
     .filter((id) => seVe(doc.getElementById(id)) &&
       doc.getElementById(id).getAttribute('aria-checked') !== 'true')
@@ -2351,6 +2356,7 @@ titulo('config.html — ajustes sin lectura: lo de fabrica no se presenta como l
   ok('sin lectura, no se avisa "sin numero de aprobacion"',
     !seVe(doc.getElementById('orca-no-number')))
   for (const id of ['owners-card', 'orca-notices-card']) {
+    verVista(id)
     const aviso = doc.querySelector(`#${id} .leyendo`)
     ok(`#${id}: dice que todavia esta leyendo lo guardado`,
       !!aviso && seVe(aviso) && /leyendo/i.test(aviso.textContent), aviso?.textContent)
@@ -2375,12 +2381,14 @@ titulo('config.html — ajustes sin lectura: lo de fabrica no se presenta como l
   // El host vuelve a contestar: el panel lo pide solo, sin que nadie recargue ni apriete.
   cerrado = false
   await new Promise((r) => setTimeout(r, 4000))
+  verVista('owners-card')
   ok('cuando el host contesta, aparecen los numeros de confianza guardados',
     seVe(duenos) && duenos.textContent.includes('Ana Ejemplo'), duenos.textContent)
   ok('y el numero de aprobacion guardado, apretado',
     seVe(numero) &&
       numero.querySelector('button[aria-pressed="true"]')?.dataset.value === DUENO,
     numero.innerHTML.slice(0, 200))
+  verVista('orca-notices-card')
   ok('y los tres avisos de Orca encendidos',
     ['orca-waiting', 'orca-finished', 'orca-automation'].every((id) =>
       seVe(doc.getElementById(id)) &&
@@ -10425,6 +10433,247 @@ titulo('config.html — linea-viva: el aviso de una linea sin atender')
       JSON.stringify([filas(es.doc), filas(en.doc), filas(pt.doc)]))
   }
 }
+
+// WAINBOX-122 (odd/tasks/ajustes-rediseno.md): la pagina de ajustes se ve disenada y no
+// generada. Visual y textos nada mas: el cableado lo siguen cubriendo las pruebas de arriba.
+// Estas fijan el sistema compartido, empezando por Conversaciones.
+titulo('config.html — ajustes-rediseno (WAINBOX-122): Conversaciones con el sistema nuevo')
+await seccion(async () => {
+  const storage = {
+    projects: PROYECTOS_PRUEBA,
+    scope: {
+      '1@g.us': { chatName: 'Soporte Norte', mode: 'responder', workspace: 'alfa-demo' },
+      '2@g.us': { chatName: 'Operaciones Demo', mode: 'borrador', workspace: 'beta-demo' }
+    },
+    routes: [{ pattern: 'andes', workspace: 'beta-demo' }]
+  }
+  const { window, doc } = await montar('config.html', storage, 'es-419')
+  await espera()
+  const vista = doc.getElementById('view-chats')
+  const css = [...doc.querySelectorAll('style')].map((s) => s.textContent).join('\n')
+  const estilo = (n) => window.getComputedStyle(n)
+
+  // Titulos: en la letra del cuerpo, sin mayusculas espaciadas (Hallmark, piso 9).
+  const h2 = vista.querySelector('h2')
+  ok('R1: los titulos de seccion no van en mayusculas espaciadas',
+    h2 && estilo(h2).textTransform !== 'uppercase', h2 && estilo(h2).textTransform)
+
+  // Las acciones de cada fila son botones de verdad, no enlaces subrayados.
+  const acciones = [...doc.querySelectorAll('#scope-wrap [data-edit], #scope-wrap [data-rm], #routes-wrap [data-rrm]')]
+  ok('R1: hay acciones de fila que mirar', acciones.length === 5, String(acciones.length))
+  ok('R1: Editar y Quitar son botones de fila, no enlaces subrayados',
+    acciones.length > 0 && acciones.every((b) => b.classList.contains('btn-fila') &&
+      !b.classList.contains('link') && b.getAttribute('type') === 'button'),
+    acciones.map((b) => b.className).join(' | '))
+
+  // El modo: rojo solo para peligro. Automatico es el mas fuerte, pero no una alarma.
+  const reglaResponder = (css.match(/\.pill\.responder\s*\{[^}]*\}/g) || []).join(' ')
+  ok('R1: el modo Automatico no se pinta con --destructive',
+    reglaResponder !== '' && !/--destructive/.test(reglaResponder), reglaResponder)
+  ok('R1: Automatico va sobre --primary, el unico acento',
+    /--primary/.test(reglaResponder), reglaResponder)
+
+  // Las explicaciones largas, detras de "Como funciona", con sus mismas palabras.
+  const largas = ['workspaceHint', 'pqHelp', 'chatInstrHelp', 'chatAutoHelp', 'chatFilesHelp',
+    'chatApHelp', 'routesHelp']
+  const fuera = largas.filter((k) => {
+    const n = vista.querySelector(`[data-t="${k}"]`)
+    return !n || !n.closest('details.como')
+  })
+  ok('R1: cada explicacion larga vive dentro de un "Como funciona"', fuera.length === 0,
+    `fuera = ${JSON.stringify(fuera)}`)
+  const resumenes = [...vista.querySelectorAll('details.como > summary')]
+  ok('R1: el desplegable se llama "Como funciona"',
+    resumenes.length >= 4 && resumenes.every((s) => s.textContent.trim() === 'Como funciona'),
+    resumenes.map((s) => s.textContent).join(' | '))
+
+  // Lo que queda a la vista es UNA linea corta por control.
+  const aLaVistaLargas = [...vista.querySelectorAll('.hint[data-t], .hint#workspace-hint')]
+    .filter((n) => !n.closest('details') && !n.hidden && n.textContent.length > 90)
+    .map((n) => n.textContent)
+  ok('R1: ninguna pista visible pasa de una linea corta (90 caracteres)',
+    aLaVistaLargas.length === 0, JSON.stringify(aLaVistaLargas))
+
+  // El formulario agrupado con titulos de verdad.
+  const grupos = [...doc.querySelectorAll('#scope-form .grupo')]
+  ok('R1: el formulario va en grupos con titulo propio',
+    grupos.length >= 5 && grupos.every((g) => g.querySelector(':scope > h3')),
+    grupos.map((g) => g.querySelector('h3')?.textContent).join(' | '))
+  ok('R1: el modo sigue nombrado por su titulo',
+    doc.getElementById('mode').getAttribute('aria-labelledby') === 'mode-label' &&
+    !!doc.getElementById('mode-label').textContent.trim())
+
+  // Campos de una frase: un ancho legible, no todo el panel.
+  const angostos = ['chat-tone', 'chat-ack-text', 'chat-greeting-text']
+    .filter((id) => estilo(doc.getElementById(id)).maxWidth === 'none' ||
+      !estilo(doc.getElementById(id)).maxWidth)
+  ok('R1: los campos de una frase tienen un ancho tope', angostos.length === 0,
+    JSON.stringify(angostos))
+
+  // Guardar cierra el formulario, siempre en el mismo lugar.
+  const pie = doc.getElementById('save-scope').closest('.actions')
+  ok('R1: Guardar cierra el formulario en su pie',
+    pie && pie.classList.contains('pie') && pie === doc.getElementById('scope-form').lastElementChild,
+    pie && pie.className)
+})
+await seccion(async () => {
+  // Los textos nuevos, en los tres idiomas y cortos.
+  const { window } = await montar('config.html')
+  const S = window.STRINGS
+  const nuevas = ['howItWorks', 'grpChat', 'grpVoice', 'grpAuto', 'workspaceShort', 'pqShort',
+    'chatInstrShort', 'chatAutoShort', 'chatFilesShort', 'chatApShort', 'routesShort']
+  const faltan = nuevas.filter((k) => !S.es[k] || !S.en[k] || !S.pt[k] || S.pt[k] === S.en[k])
+  ok('R1: los textos nuevos existen en es, en y pt propio', faltan.length === 0,
+    `faltan = ${JSON.stringify(faltan)}`)
+  const largos = nuevas.filter((k) => ['es', 'en', 'pt'].some((l) => (S[l][k] || '').length > 90))
+  ok('R1: cada texto nuevo cabe en una linea corta', largos.length === 0, JSON.stringify(largos))
+  for (const [idioma, re] of [['en-US', /^How it works$/], ['pt-BR', /^Como funciona$/]]) {
+    const { doc } = await montar('config.html', {}, idioma)
+    await espera()
+    const s = doc.querySelector('#view-chats details.como > summary')
+    ok(`R1: "Como funciona" traducido (${idioma})`, !!s && re.test(s.textContent.trim()),
+      s && s.textContent)
+  }
+})
+
+titulo('config.html — ajustes-rediseno (WAINBOX-122): el mismo sistema en todas las pestanas')
+await seccion(async () => {
+  const { window, doc } = await montar('config.html', { projects: PROYECTOS_PRUEBA,
+    owners: [{ jid: '100000000000001@lid', name: 'Ana Ejemplo' }] }, 'es-419')
+  await espera()
+  const vistas = [...doc.querySelectorAll('[role="tabpanel"]')]
+  ok('R3: hay siete pestanas que mirar', vistas.length === 7, String(vistas.length))
+  // Una ayuda fija (sin id: nadie la reescribe) se lee en una linea; la larga va en
+  // "Como funciona" con sus mismas palabras.
+  const largas = vistas.flatMap((v) => [...v.querySelectorAll('p[data-t]')]
+    .filter((n) => /^hint( lead)?$/.test(n.className) && !n.id && !n.closest('details') &&
+      n.textContent.length > 90)
+    .map((n) => `${v.id}: ${n.dataset.t}`))
+  ok('R3: ninguna ayuda fija a la vista pasa de una linea corta, en ninguna pestana',
+    largas.length === 0, JSON.stringify(largas))
+  // Una seccion no abre con un desplegable a secas: primero dice que es, en una linea.
+  const sinBajada = [...doc.querySelectorAll('section > h2 + details.como')]
+    .map((n) => n.parentElement.id || n.previousElementSibling.dataset.t)
+  ok('R3: toda seccion con "Como funciona" tiene antes su linea corta',
+    sinBajada.length === 0, JSON.stringify(sinBajada))
+  // Ningun titulo en mayusculas espaciadas y ninguna accion subrayada.
+  const css = [...doc.querySelectorAll('style')].map((s) => s.textContent).join('\n')
+  ok('R3: no queda ninguna etiqueta en mayusculas espaciadas',
+    !/text-transform:\s*uppercase/.test(css), (css.match(/[^}]*text-transform:\s*uppercase[^}]*\}/g) || []).join(' '))
+  const regla = (css.match(/button\.link\s*\{[^}]*\}/) || [''])[0]
+  ok('R3: las acciones `.link` se ven como botones, no como enlaces subrayados',
+    regla !== '' && !/underline/.test(regla) && /border:\s*1px solid/.test(regla), regla)
+  // Las listas de reglas, sin vinetas dibujadas a mano.
+  ok('R3: las reglas no llevan vinetas dibujadas', !/\.rules li::before/.test(css))
+  const S = window.STRINGS
+  const cortas = ['skillsShort', 'approvalShort', 'autoShort', 'linesShort', 'ownersShort', 'projectsShort']
+  const faltan = cortas.filter((k) => ['es', 'en', 'pt'].some((l) => !S[l][k] || S[l][k].length > 90) ||
+    S.pt[k] === S.en[k])
+  ok('R3: las bajadas cortas existen en los tres idiomas y caben en una linea', faltan.length === 0,
+    JSON.stringify(faltan))
+})
+
+// R5 (el dueno: "reestructurar, no reestilar"): ninguna pestana es una pagina larga de
+// bloques apilados. Cada bloque es una vista con su sub-navegacion, cada vista guarda en
+// UN lugar, Conversaciones es la lista con el formulario en un panel lateral y Estado un
+// tablero de tarjetas. El cableado no cambia: mismos ids, mismos handlers.
+titulo('config.html — ajustes-rediseno (WAINBOX-122): estructura por vistas')
+await seccion(async () => {
+  const storage = { projects: PROYECTOS_PRUEBA,
+    scope: { '1@g.us': { chatName: 'Soporte Norte', mode: 'responder', workspace: 'alfa-demo' } } }
+  const { window, doc } = await montar('config.html', storage, 'es-419')
+  await espera()
+  const vistasDe = (tab) => [...doc.querySelectorAll(`#view-${tab} > section:not(.panel-lateral)`)]
+  const aLaVista = (tab) => vistasDe(tab).filter((s) => !s.classList.contains('sub-oculta'))
+  const ESPERADAS = { aprobacion: 9, chats: 2, agente: 2, avanzado: 2 }
+  for (const [tab, n] of Object.entries(ESPERADAS)) {
+    const botones = [...doc.querySelectorAll(`#view-${tab} .subnav button`)]
+    ok(`R5: ${tab} tiene una sub-navegacion con una entrada por bloque`,
+      botones.length === n && vistasDe(tab).length === n, `${botones.length} botones, ${vistasDe(tab).length} bloques`)
+    ok(`R5: ${tab} muestra un solo bloque a la vez`, aLaVista(tab).length === 1,
+      aLaVista(tab).map((s) => s.id).join(','))
+    ok(`R5: ${tab}: cada entrada tiene su nombre`, botones.every((b) => b.textContent.trim().length > 1),
+      botones.map((b) => b.textContent).join(' | '))
+  }
+  for (const tab of ['estado', 'proyectos', 'skills']) {
+    ok(`R5: ${tab} no lleva sub-navegacion (un solo bloque o un tablero)`,
+      !doc.querySelector(`#view-${tab} .subnav`))
+  }
+  ok('R5: Estado es un tablero de tarjetas', doc.getElementById('view-estado').classList.contains('tablero'))
+
+  // Apretar una entrada muestra su bloque, esconde los demas y la marca.
+  doc.getElementById('tab-aprobacion').click()
+  const entradas = [...doc.querySelectorAll('#view-aprobacion .subnav button')]
+  const nombres = entradas.map((b) => b.textContent.trim())
+  ok('R5: Su aprobacion empieza por Reglas y Numeros', nombres[0] === 'Reglas' && nombres[1] === 'Numeros',
+    JSON.stringify(nombres))
+  const jev = entradas.find((b) => b.getAttribute('aria-controls') === 'jev-card')
+  jev && jev.click()
+  ok('R5: apretar Jev muestra solo Jev',
+    aLaVista('aprobacion').length === 1 && aLaVista('aprobacion')[0].id === 'jev-card' &&
+    jev.getAttribute('aria-current') === 'true' &&
+    entradas.filter((b) => b.getAttribute('aria-current') === 'true').length === 1,
+    aLaVista('aprobacion').map((s) => s.id).join(','))
+
+  // Una sola forma de guardar: cada vista tiene a lo sumo un Guardar, en una barra fija.
+  const masDeUno = [...doc.querySelectorAll('[role="tabpanel"] > section')]
+    .filter((s) => s.querySelectorAll('.actions button.primary').length > 1).map((s) => s.id)
+  ok('R5: ninguna vista tiene mas de un Guardar', masDeUno.length === 0, JSON.stringify(masDeUno))
+  const css = [...doc.querySelectorAll('style')].map((s) => s.textContent).join('\n')
+  ok('R5: la barra de guardar queda fija abajo de su vista',
+    /\.barra-guardar\s*\{[^}]*position:\s*sticky[^}]*bottom:\s*0/.test(css))
+  const barras = [...doc.querySelectorAll('section.card .actions')]
+    .filter((a) => a.querySelector('button.primary'))
+  ok('R5: cada Guardar de tarjeta vive en una barra-guardar',
+    barras.length >= 10 && barras.every((a) => a.classList.contains('barra-guardar')),
+    barras.filter((a) => !a.classList.contains('barra-guardar')).map((a) => a.closest('section').id).join(','))
+  // Lo que cambio y no se guardo se dice en la barra; guardar lo limpia.
+  doc.getElementById('tab-agente').click()
+  const barraAgente = doc.getElementById('save-agent').closest('.barra-guardar')
+  ok('R5: sin cambios la barra no avisa nada', barraAgente && !barraAgente.classList.contains('sucio'))
+  escribir(doc, 'agent', 'Otro Nombre')
+  ok('R5: un cambio sin guardar se marca en la barra', barraAgente.classList.contains('sucio'))
+  doc.getElementById('save-agent').click()
+  ok('R5: guardar limpia la marca', !barraAgente.classList.contains('sucio'))
+
+  // Conversaciones: la lista manda; agregar y editar abren un panel lateral.
+  doc.getElementById('tab-chats').click()
+  const panel = doc.getElementById('scope-form')
+  ok('R5: el formulario es un panel lateral cerrado al entrar',
+    panel.classList.contains('panel-lateral') && !panel.classList.contains('abierto') &&
+    panel.getAttribute('role') === 'dialog' && panel.getAttribute('aria-labelledby') === 'scope-form-title')
+  doc.getElementById('scope-add').click()
+  ok('R5: Agregar abre el panel con el buscador enfocado',
+    panel.classList.contains('abierto') && doc.activeElement === doc.getElementById('chat-search'))
+  doc.getElementById('scope-close').click()
+  ok('R5: Cerrar lo cierra y devuelve el foco a Agregar',
+    !panel.classList.contains('abierto') && doc.activeElement === doc.getElementById('scope-add'))
+  doc.querySelector('#scope-wrap [data-edit]').click()
+  ok('R5: Editar abre el panel con la conversacion cargada',
+    panel.classList.contains('abierto') && doc.getElementById('chat-search').readOnly === true)
+  doc.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+  ok('R5: Escape cierra el panel', !panel.classList.contains('abierto'))
+  doc.querySelector('#scope-wrap [data-edit]').click()
+  doc.getElementById('cancel-edit').click()
+  ok('R5: Cancelar edicion tambien lo cierra', !panel.classList.contains('abierto'))
+
+  // Desde Estado, "Encender Jev" lleva a la vista de Jev y no al primer bloque.
+  const S = window.STRINGS
+  const nuevas = ['subRules', 'subOwners', 'subChats', 'scopeAdd', 'closePanel', 'unsaved']
+  const faltan = nuevas.filter((k) => !S.es[k] || !S.en[k] || !S.pt[k] || S.pt[k] === S.en[k] && k !== 'subChats')
+  ok('R5: los textos nuevos existen en es, en y pt', faltan.length === 0, JSON.stringify(faltan))
+})
+await seccion(async () => {
+  // El paso de "Lo que falta" que lleva a Jev abre la vista de Jev.
+  const { doc } = await montar('config.html', { projects: PROYECTOS_PRUEBA }, 'es-419')
+  await espera()
+  const ir = doc.querySelector('#checklist [data-ir="aprobacion"]')
+  ir && ir.click()
+  const visible = [...doc.querySelectorAll('#view-aprobacion > section')].filter((s) => !s.classList.contains('sub-oculta'))
+  ok('R5: "Encender Jev" abre Su aprobacion en la vista de Jev',
+    !!ir && !doc.getElementById('view-aprobacion').hidden && visible.length === 1 && visible[0].id === 'jev-card',
+    visible.map((s) => s.id).join(','))
+})
 
 titulo(`${pruebas - fallos}/${pruebas} en verde`)
 process.exit(fallos ? 1 : 0)
