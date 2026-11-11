@@ -2858,13 +2858,59 @@ def revisa_mando_herramienta(fallos: list) -> int:
         if obtenido != esperado:
             fallos.append(f"mando_herramienta({ruta!r}, so={so!r}) = {obtenido!r}, "
                           f"esperaba {esperado!r}")
-    patron = re.compile(r"\[\s*(WA_READ|WA_SEND|WA_SCOPE|transcriptor_cli\(\)|exe)\s*,")
-    for nombre in ("wa-scope", "wa-read", "wa-send"):
-        for n, linea in enumerate((BIN / nombre).read_text(encoding="utf-8").splitlines(), 1):
+    # Los nombres fijos, y ademas cualquier variable que se arme con la ruta de una hermana
+    # (`wa_read = os.path.join(..., "wa-read")`): `wa_chats` y los ajustes de wa-transcribe
+    # la armaban en una variable local y se escapaban de la lista fija (#78).
+    fijos = ["WA_READ", "WA_SEND", "WA_SCOPE", r"transcriptor_cli\(\)", "exe"]
+    arma = re.compile(r"^\s*(\w+)\s*=\s*os\.path\.join\(.*\"wa-(?:read|scope|send|transcribe)\"\)")
+    for nombre in ("wa-scope", "wa-read", "wa-send", "wa-transcribe"):
+        lineas = (BIN / nombre).read_text(encoding="utf-8").splitlines()
+        armadas = {m.group(1) for m in map(arma.match, lineas) if m}
+        # En wa-transcribe `exe` es whisper, un binario de afuera: ahi solo cuentan las armadas.
+        propios = [] if nombre == "wa-transcribe" else fijos
+        nombres = "|".join(propios + sorted(re.escape(a) for a in armadas))
+        patron = re.compile(r"\[\s*(?:" + nombres + r")\s*,")
+        for n, linea in enumerate(lineas, 1):
             if patron.search(linea):
                 vistos += 1
                 fallos.append(f"bin/{nombre}:{n} lanza una hermana por su ruta, sin "
                               f"mando_herramienta: en Windows no arranca: {linea.strip()}")
+    return vistos
+
+
+# Los lanzamientos de Node que NO son una herramienta del plugin, con su razon. Cada uno
+# lleva cuantas veces aparece: un segundo `execFile(cmd, ...)` en el mismo archivo es nuevo
+# y tiene que pasar por el lanzador o sumarse aca con su razon.
+LANZAMIENTOS_CRUDOS = {
+    ("main.mjs", "cmd"): (1, "contesta(): prueba `py`/`python --version` al buscar el interprete"),
+    ("hilo.mjs", "cmd"): (1, "las vistas previas de adjuntos corren sips/ffmpeg, no un wa-*"),
+}
+
+
+def revisa_lanzamientos_node(fallos: list, raiz=RAIZ) -> int:
+    """Ningun `.mjs` del worker lanza una ruta cruda: pasa por un `mando*` (`m.cmd`).
+
+    En Windows una herramienta `wa-*` lanzada por su ruta da ENOENT: el shebang no existe
+    ahi. El arnes lo hacia en `corre()` y la siembra quedaba sin referencia (#78). Se miran
+    los `.mjs` de la raiz; `sidecar/` tiene su propio lanzador y su propia prueba."""
+    llamada = re.compile(r"\b(?:execFile|execFileSync|spawn|spawnSync|spawnFn)\(\s*([^,()]+?)\s*,")
+    vistos = 0
+    contados = {}
+    for ruta in sorted(pathlib.Path(raiz).glob("*.mjs")):
+        for n, linea in enumerate(ruta.read_text(encoding="utf-8").splitlines(), 1):
+            if linea.lstrip().startswith(("//", "*")):
+                continue
+            for m in llamada.finditer(linea):
+                vistos += 1
+                primero = m.group(1)
+                if re.fullmatch(r"\w+\.cmd", primero):
+                    continue
+                clave = (ruta.name, primero)
+                contados[clave] = contados.get(clave, 0) + 1
+                tope = LANZAMIENTOS_CRUDOS.get(clave, (0, ""))[0]
+                if contados[clave] > tope:
+                    fallos.append(f"{ruta.name}:{n} lanza `{primero}` crudo, sin un mando*: en "
+                                  f"Windows una herramienta wa-* asi no arranca: {linea.strip()}")
     return vistos
 
 
@@ -4126,6 +4172,7 @@ def main() -> int:
                       + revisa_firma_del_panel(fallos)
                       + revisa_casa_del_runtime(fallos)
                       + revisa_mando_herramienta(fallos)
+                      + revisa_lanzamientos_node(fallos)
                       + revisa_juicio(fallos)
                       + revisa_rol_del_juicio(fallos)
                       + revisa_linea_por_numero(fallos)

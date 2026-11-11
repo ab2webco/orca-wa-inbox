@@ -19,7 +19,7 @@ import argparse, json, os, shlex, shutil, subprocess, sys, tempfile
 # nombre corto `orca`, que en Linux es el lector de pantalla de GNOME.
 sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from wa_settings import orca_cli_path, user_data_roots  # noqa: E402
+from wa_settings import mando_herramienta, orca_cli_path, user_data_roots  # noqa: E402
 
 CONFIG_KEYS = ("transcribe", "transcribe_model", "transcribe_lang")
 
@@ -52,7 +52,7 @@ def ajustes():
         _AJUSTES = {}
         cli = os.path.join(os.path.dirname(os.path.abspath(__file__)), "wa-scope")
         try:
-            p = subprocess.run([cli, "config", "--json"], capture_output=True,
+            p = subprocess.run([*mando_herramienta(cli), "config", "--json"], capture_output=True,
                                text=True, timeout=30)
             if p.returncode == 0:
                 _AJUSTES = {r["key"]: r["value"] for r in json.loads(p.stdout or "[]")
