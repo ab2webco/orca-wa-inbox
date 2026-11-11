@@ -143,5 +143,47 @@ console.log('\nsidecar: el arbol del plugin sigue dentro del tope de Orca')
     symlinks === 0, `${symlinks} symlinks encontrados`)
 }
 
+// WAINBOX-111: el sidecar empaqueta libsignal (GPL-3.0), asi que el plugin entero es
+// GPL-3.0. Publicar sin LICENSE o sin la licencia en package.json incumple la GPL §4-§6.
+/** Lo que le falta a `dir` para declarar la licencia; vacio si no falta nada. */
+function faltasDeLicencia (dir) {
+  const faltas = []
+  const licencia = join(dir, 'LICENSE')
+  if (!existsSync(licencia)) {
+    faltas.push('falta LICENSE en la raiz del plugin (texto GPL-3.0 de https://www.gnu.org/licenses/gpl-3.0.txt)')
+  } else if (!/GNU GENERAL PUBLIC LICENSE\s+Version 3, 29 June 2007/.test(readFileSync(licencia, 'utf8'))) {
+    faltas.push('LICENSE no es el texto de la GPL-3.0')
+  }
+  let licenciaPkg
+  try {
+    licenciaPkg = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8')).license
+  } catch {}
+  if (licenciaPkg !== 'GPL-3.0-only') {
+    faltas.push(`package.json: "license" debe ser "GPL-3.0-only" (hay ${JSON.stringify(licenciaPkg)})`)
+  }
+  return faltas
+}
+
+console.log('\nlicencia: el plugin declara la GPL-3.0')
+{
+  const faltas = faltasDeLicencia(PLUGIN_DIR)
+  ok('LICENSE y package.json declaran GPL-3.0-only', faltas.length === 0, faltas.join('; '))
+
+  const dir = mkdtempSync(join(tmpdir(), 'wa-licencia-'))
+  try {
+    writeFileSync(join(dir, 'package.json'), JSON.stringify({ license: 'GPL-3.0-only' }))
+    const sinLicencia = faltasDeLicencia(dir)
+    ok('un arbol sin LICENSE falla nombrando el archivo',
+      sinLicencia.length === 1 && sinLicencia[0].includes('LICENSE'), JSON.stringify(sinLicencia))
+    writeFileSync(join(dir, 'LICENSE'), 'GNU GENERAL PUBLIC LICENSE\n  Version 3, 29 June 2007\n')
+    writeFileSync(join(dir, 'package.json'), '{}')
+    const sinCampo = faltasDeLicencia(dir)
+    ok('un package.json sin "license" falla nombrando el campo',
+      sinCampo.length === 1 && sinCampo[0].includes('"license"'), JSON.stringify(sinCampo))
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+}
+
 console.log(`\n${pruebas - fallos}/${pruebas} en verde`)
 process.exit(fallos ? 1 : 0)
