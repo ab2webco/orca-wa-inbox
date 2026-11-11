@@ -364,6 +364,7 @@ AJUSTES_DE_LINEA = ("agentName", "ownerName", "tone", "owners", "approvalNumber"
                     "syncMinutes",
                     "jevEnabled",
                     "followUp",
+                    "humanHoldHours",
                     )
 # Los ajustes de linea que otra linea NUNCA toma de la raiz: sin uno propio valen los de
 # fabrica. Los avisos de Orca son los mismos eventos para todas las lineas; heredarlos

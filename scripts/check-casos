@@ -17061,6 +17061,7 @@ AJUSTES_DE_PRUEBA = (
     ("greetingText", "greeting_text", "Hola desde la principal", "Hola desde la segunda"),
     ("slaMinutes", "sla_first_reply_minutes", "15", "45"),
     ("projectQuestionHours", "project_question_hours", "24", "6"),
+    ("humanHoldHours", "human_hold_hours", "4", "8"),
     ("inboxDays", "inbox_days", "7", "1"),
     ("transcribeLang", "transcribe_lang", "es", "en"),
 )

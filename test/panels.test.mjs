@@ -8180,6 +8180,48 @@ await seccion(async () => {
     guardada.doc.getElementById('pq-hours').value)
 })
 
+titulo('config.html — WAINBOX-92: cuantas horas el agente se aparta de un caso que usted atiende')
+await seccion(async () => {
+  const { doc, storage } = await montar('config.html', {}, 'es-419')
+  await espera()
+  doc.getElementById('tab-aprobacion').click()
+  await espera(); await espera()
+  const campo = doc.getElementById('human-hold')
+  ok('el campo existe en Su aprobacion, entero de 1 a 24', !!campo && !!campo.closest('#view-aprobacion') &&
+    campo.type === 'number' && campo.min === '1' && campo.max === '24' && campo.step === '1',
+    String(!!campo))
+  ok('sin nada guardado muestra 4', campo?.value === '4', campo?.value)
+  ok('con etiqueta y una pista que dice que pasa',
+    (doc.querySelector('label[for="human-hold"]')?.textContent || '').trim().length > 3 &&
+    /usted/i.test(doc.getElementById('human-hold-help')?.textContent || '') &&
+    campo?.getAttribute('aria-describedby') === 'human-hold-help',
+    doc.getElementById('human-hold-help')?.textContent)
+  escribir(doc, 'human-hold', '8')
+  doc.getElementById('save-human-hold').click()
+  await espera(); await espera()
+  ok('guardar escribe la clave plana en texto', storage.humanHoldHours === '8',
+    String(storage.humanHoldHours))
+  for (const malo of ['0', '25', '2.5', 'un dia', '']) {
+    escribir(doc, 'human-hold', malo)
+    doc.getElementById('save-human-hold').click()
+    await espera(); await espera()
+    ok(`"${malo}" no se guarda y lo dice`, storage.humanHoldHours === '8' &&
+      doc.getElementById('said-human-hold').className.includes('bad'),
+      `${storage.humanHoldHours} ${doc.getElementById('said-human-hold').textContent}`)
+  }
+  const guardada = await montar('config.html', { humanHoldHours: '12' }, 'es-419')
+  await espera()
+  guardada.doc.getElementById('tab-aprobacion').click()
+  await espera(); await espera()
+  ok('al abrir la pestana pinta la guardada', guardada.doc.getElementById('human-hold').value === '12',
+    guardada.doc.getElementById('human-hold').value)
+  const S = guardada.window.STRINGS
+  const nuevas = ['humanHoldLegend', 'humanHoldLabel', 'humanHoldHelp', 'humanHoldRange']
+  ok('los textos existen en espanol, ingles y portugues propio',
+    nuevas.every((k) => S.es[k] && S.en[k] && S.pt[k] && S.pt[k] !== S.en[k]),
+    JSON.stringify(nuevas.map((k) => [k, !!S.es[k], !!S.en[k], !!S.pt[k]])))
+})
+
 const textoArchivos = (doc, sel) => (doc.querySelector(sel)?.textContent || '').trim()
 titulo('config.html — caso-adjuntos: si el agente puede adjuntar archivos, global y por chat')
 await seccion(async () => {
@@ -10642,7 +10684,7 @@ await seccion(async () => {
   await espera()
   const vistasDe = (tab) => [...doc.querySelectorAll(`#view-${tab} > section:not(.panel-lateral)`)]
   const aLaVista = (tab) => vistasDe(tab).filter((s) => !s.classList.contains('sub-oculta'))
-  const ESPERADAS = { aprobacion: 9, chats: 2, agente: 2, avanzado: 2 }
+  const ESPERADAS = { aprobacion: 10, chats: 2, agente: 2, avanzado: 2 }
   for (const [tab, n] of Object.entries(ESPERADAS)) {
     const botones = [...doc.querySelectorAll(`#view-${tab} .subnav button`)]
     ok(`R5: ${tab} tiene una sub-navegacion con una entrada por bloque`,

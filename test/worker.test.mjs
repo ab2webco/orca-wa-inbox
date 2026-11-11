@@ -5876,6 +5876,8 @@ console.log('\nworker: todo-por-linea, las tres copias de la lista de ajustes de
     JSON.stringify(dePy('AJUSTES_DE_LINEA')) === JSON.stringify([...AJUSTES_DE_LINEA]) &&
     JSON.stringify(deHtml('AJUSTES_DE_LINEA')) === JSON.stringify([...AJUSTES_DE_LINEA]),
     JSON.stringify({ py: dePy('AJUSTES_DE_LINEA'), html: deHtml('AJUSTES_DE_LINEA') }))
+  ok('la toma humana (WAINBOX-92) es un ajuste de cada linea: humanHoldHours esta en la lista',
+    AJUSTES_DE_LINEA.includes('humanHoldHours'), JSON.stringify([...AJUSTES_DE_LINEA]))
   ok('NO_HEREDAN tambien, y cada una es un ajuste de linea',
     Array.isArray(NO_HEREDAN) && NO_HEREDAN.length > 0 &&
     JSON.stringify(dePy('NO_HEREDAN')) === JSON.stringify([...NO_HEREDAN]) &&
