@@ -17,9 +17,9 @@ import { decidirTrasCierre, calcularEsperaMs, intentoTrasEvento, mensajeQr, qrVe
   PARCHES_DE_LIBRETA, CIERRES_REPETIDOS_TOPE, CIERRES_VENTANA_MS,
   QR_ROTACION_MS, QR_VIGENCIA_MS, SALIDA, LATIDO_LINEA_MS, mensajeLatido,
   ALMACEN_LATIDO_MS, anotarLinea, LINEA_SECUNDARIA_ENV, CUENTA_PREVIA_ENV, rutaRegistro,
-  authDeSocket, curarLinea, versionDeWhatsApp
+  authDeSocket, curarLinea, versionDeWhatsApp, consultarRestriccion, anotarRestriccion
 } from '../sidecar/src/index.js'
-import { crearCacheDeReintentos } from '../sidecar/src/envio.js'
+import { crearCacheDeReintentos, crearRestriccion } from '../sidecar/src/envio.js'
 import { crearRegistro, FALLO_DE_DESCIFRADO } from '../sidecar/src/registro.js'
 import { readFileSync, existsSync, writeFileSync } from 'node:fs'
 import { crearAlcance, LINEA_ENV, correr as correrAlcance } from '../sidecar/src/alcance.js'
@@ -704,6 +704,88 @@ console.log('\nsidecar: en Windows wa-scope corre con el interprete que paso el 
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
+}
+
+console.log('\nWAINBOX-75: al abrir se consulta la restriccion de la linea, una vez cada cosa')
+{
+  // TC-3: las dos consultas de Baileys, una vez cada una, y su resultado emitido.
+  const llamadas = { bloqueo: 0, cupo: 0 }
+  const fin = new Date(1_800_000_000_000 + 3_600_000)
+  const sock = {
+    async fetchAccountReachoutTimelock () {
+      llamadas.bloqueo += 1
+      return { isActive: true, timeEnforcementEnds: fin, enforcementType: 'BIZ_QUALITY' }
+    },
+    async fetchNewChatMessageCap () {
+      llamadas.cupo += 1
+      return { total_quota: 20, used_quota: 5, capping_status: 'NONE' }
+    }
+  }
+  const emitidos = []
+  const errores = []
+  const restriccion = crearRestriccion({ ahora: () => 1_800_000_000_000 })
+  await consultarRestriccion({ sock, restriccion, emitir: (m) => emitidos.push(m),
+    emitirError: (code, detail) => errores.push({ code, detail }) })
+  ok('cada consulta se hace exactamente una vez',
+    llamadas.bloqueo === 1 && llamadas.cupo === 1, JSON.stringify(llamadas))
+  ok('y su resultado sale como restriccion',
+    emitidos.some((m) => m.type === 'restriccion' && m.origen === 'bloqueo' && m.activa === true &&
+      m.hasta === fin.getTime()) &&
+    emitidos.some((m) => m.type === 'restriccion' && m.origen === 'cupo' && m.restante === 15),
+    JSON.stringify(emitidos))
+  ok('sin errores', errores.length === 0, JSON.stringify(errores))
+
+  // TC-4: una consulta que falla no tumba la sesion: se dice con su codigo, sin el jid.
+  const emitidos2 = []
+  const errores2 = []
+  let otra = 0
+  await consultarRestriccion({
+    sock: {
+      async fetchAccountReachoutTimelock () { throw new Error('fallo 573001112233@s.whatsapp.net') },
+      async fetchNewChatMessageCap () { otra += 1; return { total_quota: 3, used_quota: 0 } }
+    },
+    restriccion: crearRestriccion(),
+    emitir: (m) => emitidos2.push(m),
+    emitirError: (code, detail) => errores2.push({ code, detail })
+  })
+  ok('una consulta que falla emite restriccion-sin-leer',
+    errores2.length === 1 && errores2[0].code === 'restriccion-sin-leer', JSON.stringify(errores2))
+  ok('sin el numero de nadie en el detalle', !/573001112233/.test(errores2[0]?.detail ?? ''),
+    errores2[0]?.detail)
+  ok('y la otra consulta sigue', otra === 1 && emitidos2.some((m) => m.origen === 'cupo'))
+
+  // Un socket sin las consultas (Baileys 6) no es un error.
+  const errores3 = []
+  await consultarRestriccion({ sock: {}, restriccion: crearRestriccion(), emitir: () => {},
+    emitirError: (code) => errores3.push(code) })
+  ok('un socket sin las consultas no se queja', errores3.length === 0, JSON.stringify(errores3))
+
+  // Lo que se emite tambien queda en el almacen de la linea: `wa-scope doctor` lo lee alla.
+  const home = mkdtempSync(join(tmpdir(), 'wa-restriccion-'))
+  const almacen = abrirAlmacen(rutaAlmacen({ HOME: home }))
+  anotarRestriccion({ almacen, cuenta: 'pn:15550004444',
+    mensaje: emitidos.find((m) => m.origen === 'bloqueo') })
+  const guardado = JSON.parse(almacen.con.prepare('select value from store_meta where key=?')
+    .get('restriccion@pn:15550004444')?.value ?? 'null')
+  ok('el bloqueo queda en el almacen, por linea',
+    guardado?.bloqueo?.activa === true && guardado.bloqueo.hasta === fin.getTime(),
+    JSON.stringify(guardado))
+  almacen.cerrar()
+  rmSync(home, { recursive: true, force: true })
+
+  // Y el cableado: el `open` consulta, `connection.update` lee el bloqueo, y se escucha el
+  // cupo. Sin esto la funcion pura existiria y nadie la llamaria.
+  const fuente = readFileSync(new URL('../sidecar/src/index.js', import.meta.url), 'utf8')
+  const alAbrir = fuente.slice(fuente.indexOf("if (connection === 'open') {"),
+    fuente.indexOf("if (connection === 'connecting') {"))
+  ok('el open consulta la restriccion', /consultarRestriccion\(/.test(alAbrir), alAbrir.slice(0, 200))
+  ok('connection.update lee reachoutTimeLock', /reachoutTimeLock/.test(fuente))
+  ok('y se escucha message-capping.update', /sock\.ev\.on\('message-capping\.update'/.test(fuente))
+  const latido = fuente.slice(fuente.indexOf('const latirLinea = () => {'),
+    fuente.indexOf('latirLinea()\n'))
+  ok('el latido de la linea vence la restriccion', /restriccion\.revisar\(/.test(latido),
+    latido.slice(0, 200))
+  ok('el drenado pasa la compuerta', /restringida: \(\) => restriccion\.activa\(\)/.test(fuente))
 }
 
 console.log(`\n${pruebas - fallos}/${pruebas} en verde`)

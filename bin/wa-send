@@ -176,6 +176,21 @@ SIN_TRANSPORTE_DETALLE = (
     "line lives in the plugin; open Orca and check the panel.")
 # WhatsApp vio el mensaje y lo rechazo. El intento SALIO, asi que no se reintenta solo.
 RECHAZADO = "send-rejected"
+# La linea esta restringida por WhatsApp y el envio iba a un chat sin mensajes nuestros
+# (WAINBOX-75). No es un rechazo cualquiera: el mensaje no salio, reintentar no sirve
+# hasta que se levante, y una respuesta en un chat existente si se intenta. El codigo
+# del sidecar (`MOTIVO_RESTRINGIDA` en `sidecar/src/envio.js`) es el MISMO que este, y
+# `scripts/check-clis` los compara.
+RESTRINGIDA = "send-account-restricted"
+MOTIVO_RESTRINGIDA = "cuenta-restringida"
+# La MISMA frase que `wa-scope doctor` (RESTRINGIDA_FRASE alla); `scripts/check-clis` las
+# compara.
+RESTRINGIDA_FRASE = ("WhatsApp does not let this line start new chats right now; replies in "
+                     "an existing chat still go out.")
+RESTRINGIDA_DETALLE = (
+    f"the WhatsApp line is restricted (cuenta-restringida), so nothing was sent. "
+    f"{RESTRINGIDA_FRASE} Wait for the restriction to end (the panel and `wa-scope doctor` "
+    "show until when).")
 # El sidecar late pero no contesto a tiempo. La peticion queda en pie: se vuelve a
 # preguntar con el MISMO --id, que es lo que impide mandar dos veces.
 SIN_VEREDICTO = "send-timeout"
@@ -549,6 +564,14 @@ def esperar(con, req_id, plazo_s):
         time.sleep(SONDEO_S)
 
 
+def niega_rechazo(fila):
+    """Un `rechazado`, con su codigo: la linea restringida tiene el suyo."""
+    if fila["motivo"] == MOTIVO_RESTRINGIDA:
+        niega(RESTRINGIDA, RESTRINGIDA_DETALLE)
+    niega(RECHAZADO, f"WhatsApp refused it: {fila['motivo'] or 'no reason given'}. "
+                     "Nothing was delivered.")
+
+
 def veredicto(con, req_id, plazo_s, salida_json, cuenta=None):
     """Espera, y traduce lo que haya pasado a la salida de esta CLI."""
     fila = esperar(con, req_id, plazo_s)
@@ -561,8 +584,7 @@ def veredicto(con, req_id, plazo_s, salida_json, cuenta=None):
               f"no verdict in {plazo_s:g}s. The request is still queued: ask again with "
               f"--id {req_id} and it will NOT be sent twice.")
     if fila["estado"] == RECHAZADO_:
-        niega(RECHAZADO, f"WhatsApp refused it: {fila['motivo'] or 'no reason given'}. "
-                         "Nothing was delivered.")
+        niega_rechazo(fila)
     if fila["estado"] == CANCELADO_:
         niega(CANCELADO, f"this draft was cancelled ({fila['motivo'] or 'no reason given'}): "
                          "nothing was sent and it cannot be approved.")
@@ -893,8 +915,7 @@ def aprobar(req_id, plazo_s, salida_json, por):
                 f"already sent · {fila['chat_name']} · {req_id}{entrega_texto(fila)}")
         sys.exit(0)
     if fila["estado"] == RECHAZADO_:
-        niega(RECHAZADO, f"WhatsApp refused it: {fila['motivo'] or 'no reason given'}. "
-                         "Nothing was delivered.")
+        niega_rechazo(fila)
     if fila["estado"] == CANCELADO_:
         niega(CANCELADO, f"this draft was cancelled ({fila['motivo'] or 'no reason given'}): "
                          "nothing was sent and it cannot be approved.")

@@ -784,6 +784,9 @@
          sobre cuanto puede actuar el agente. Sin esto, "no hay nada pendiente" y "no
          estoy conectado" se leen igual. -->
     <p class="meta nota" id="linea"></p>
+    <!-- WhatsApp restringio la linea (WAINBOX-75): sin esto se veia sana y sus envios a
+         chats nuevos fallaban con un error generico. -->
+    <p class="meta nota stale" id="restringida" role="status" hidden></p>
     <p class="meta nota" id="cobertura"></p>
 
     <!-- La bandeja se fue: el panel es el tablero. Lo que pedia decision es la columna
@@ -880,7 +883,7 @@
       // que en el renderer de Electron refleja el idioma del app.
       var STRINGS = {
         es: {"title": "WhatsApp", "nothingAuthorized1": "Tiene 1 conversacion configurada y esta en off.", "nothingAuthorized": "Tiene {n} conversaciones configuradas y todas en off.", "nothingMapped": "Todavia no ha autorizado ninguna conversacion.", "runNever": "Su agente todavia no ha revisado.", "runNow": "Revisando ahora…", "runCut": "La revision arranco y no volvio", "runFailed": "La ultima revision fallo", "runLast": "Ultima revision {hora}", "runLastNoTime": "Ultima revision", "runNone": "nada pendiente", "runAgent1": "1 caso para el agente", "runAgent": "{n} casos para el agente", "runOwner1": "1 espera su decision", "runOwner": "{n} esperan su decision", "histReopened": "Reabierto", "histPrev": "Ver historia anterior", "escLead": "El agente lo dejo a su decision", "escWhy": "Motivo", "escJev": "Jev lo ve como", "escAsks": "El agente le pregunta", "escHow": "No hay una respuesta redactada. Use Editar y enviar para responder usted.", "noData": "sin datos — corra <code>wa-scope sync</code>", "running": "corriendo", "refreshTitle": "Releer lo guardado",
-                                                                                    "lineaConectada": "Linea conectada", "lineaConectando": "Conectando la linea\u2026", "lineaSinVincular": "Falta escanear el codigo QR en Ajustes", "lineaCaida": "La linea esta caida", "syncLineaNueva": "esperando el primer sync de esta linea\u2026", "lineaSinSenal": "La linea no da senal desde las {hora}", "cobertura": "El agente actua sobre {n} de {total} conversaciones", "coberturaSinTotal": "El agente actua sobre {n} conversaciones",                                           "stageRecibido": "Recibido",
+                                                                                    "lineaConectada": "Linea conectada", "lineaConectando": "Conectando la linea\u2026", "lineaSinVincular": "Falta escanear el codigo QR en Ajustes", "lineaCaida": "La linea esta caida", "syncLineaNueva": "esperando el primer sync de esta linea\u2026", "lineaSinSenal": "La linea no da senal desde las {hora}", "restringidaHasta": "WhatsApp restringio esta linea hasta {hora}: no puede abrir chats nuevos. Las respuestas en chats existentes siguen saliendo; espera a que termine.", "restringidaSinFin": "WhatsApp restringio esta linea: no puede abrir chats nuevos. Las respuestas en chats existentes siguen saliendo; espera a que termine.", "cupoAgotado": "La linea agoto su cupo de chats nuevos: no puede abrir chats nuevos hasta {hora}. Las respuestas en chats existentes siguen saliendo.", "cobertura": "El agente actua sobre {n} de {total} conversaciones", "coberturaSinTotal": "El agente actua sobre {n} conversaciones",                                           "stageRecibido": "Recibido",
               "stageClasificado": "Clasificado",
               "stageDecision": "Su decision",
               "stageTrabajo": "En trabajo",
@@ -1271,7 +1274,7 @@
               "acErrDemoro": "La accion tardo demasiado y se corto. Revise el tablero antes de repetirla.",
               "acErrFallo": "La accion fallo. Revise el tablero antes de repetirla."},
         en: {"title": "WhatsApp", "nothingAuthorized1": "You have 1 conversation set up and it is off.", "nothingAuthorized": "You have {n} conversations set up and all of them are off.", "nothingMapped": "No conversation is authorized yet.", "runNever": "Your agent has not checked yet.", "runNow": "Checking now…", "runCut": "The run started and never came back", "runFailed": "Last run failed", "runLast": "Last run {hora}", "runLastNoTime": "Last run", "runNone": "nothing pending", "runAgent1": "1 case for the agent", "runAgent": "{n} cases for the agent", "runOwner1": "1 waiting for your decision", "runOwner": "{n} waiting for your decision", "histReopened": "Reopened", "histPrev": "Show earlier history", "escLead": "The agent left it to your decision", "escWhy": "Reason", "escJev": "Jev reads it as", "escAsks": "The agent asks you", "escHow": "There is no drafted reply. Use Edit and send to answer yourself.", "noData": "no data — run <code>wa-scope sync</code>", "running": "running", "refreshTitle": "Re-read what is stored",
-                                                                                    "lineaConectada": "Line connected", "lineaConectando": "Connecting the line\u2026", "lineaSinVincular": "The QR code still has to be scanned in Settings", "lineaCaida": "The line is down", "syncLineaNueva": "waiting for this line\u2019s first sync\u2026", "lineaSinSenal": "No signal from the line since {hora}", "cobertura": "Your agent acts on {n} of {total} conversations", "coberturaSinTotal": "Your agent acts on {n} conversations",                                           "stageRecibido": "Received",
+                                                                                    "lineaConectada": "Line connected", "lineaConectando": "Connecting the line\u2026", "lineaSinVincular": "The QR code still has to be scanned in Settings", "lineaCaida": "The line is down", "syncLineaNueva": "waiting for this line\u2019s first sync\u2026", "lineaSinSenal": "No signal from the line since {hora}", "restringidaHasta": "WhatsApp restricted this line until {hora}: it cannot start new chats. Replies in existing chats still go out; wait for it to end.", "restringidaSinFin": "WhatsApp restricted this line: it cannot start new chats. Replies in existing chats still go out; wait for it to end.", "cupoAgotado": "This line used up its new-chat quota: it cannot start new chats until {hora}. Replies in existing chats still go out.", "cobertura": "Your agent acts on {n} of {total} conversations", "coberturaSinTotal": "Your agent acts on {n} conversations",                                           "stageRecibido": "Received",
               "stageClasificado": "Classified",
               "stageDecision": "Your decision",
               "stageTrabajo": "In progress",
@@ -1662,7 +1665,7 @@
               "acErrDemoro": "The action took too long and was cut off. Check the board before repeating it.",
               "acErrFallo": "The action failed. Check the board before repeating it."},
         pt: {"title": "WhatsApp", "nothingAuthorized1": "Voce tem 1 conversa configurada e ela esta em off.", "nothingAuthorized": "Voce tem {n} conversas configuradas e todas em off.", "nothingMapped": "Nenhuma conversa autorizada ainda.", "runNever": "Seu agente ainda nao revisou.", "runNow": "Revisando agora…", "runCut": "A revisao comecou e nao voltou", "runFailed": "A ultima revisao falhou", "runLast": "Ultima revisao {hora}", "runLastNoTime": "Ultima revisao", "runNone": "nada pendente", "runAgent1": "1 caso para o agente", "runAgent": "{n} casos para o agente", "runOwner1": "1 aguarda sua decisao", "runOwner": "{n} aguardam sua decisao", "histReopened": "Reaberto", "histPrev": "Ver historico anterior", "escLead": "O agente deixou para a sua decisao", "escWhy": "Motivo", "escJev": "Jev ve como", "escAsks": "O agente pergunta", "escHow": "Nao ha resposta redigida. Use Editar e enviar para responder voce mesmo.", "noData": "sem dados — rode <code>wa-scope sync</code>", "running": "rodando", "refreshTitle": "Reler o que esta salvo",
-                                                                                    "lineaConectada": "Linha conectada", "lineaConectando": "Conectando a linha\u2026", "lineaSinVincular": "Falta escanear o codigo QR em Ajustes", "lineaCaida": "A linha esta fora do ar", "syncLineaNueva": "esperando o primeiro sync desta linha\u2026", "lineaSinSenal": "A linha nao da sinal desde as {hora}", "cobertura": "Seu agente atua em {n} de {total} conversas", "coberturaSinTotal": "Seu agente atua em {n} conversas",                                           "stageRecibido": "Recebido",
+                                                                                    "lineaConectada": "Linha conectada", "lineaConectando": "Conectando a linha\u2026", "lineaSinVincular": "Falta escanear o codigo QR em Ajustes", "lineaCaida": "A linha esta fora do ar", "syncLineaNueva": "esperando o primeiro sync desta linha\u2026", "lineaSinSenal": "A linha nao da sinal desde as {hora}", "restringidaHasta": "O WhatsApp restringiu esta linha ate {hora}: ela nao pode abrir conversas novas. As respostas em conversas existentes continuam saindo; espere terminar.", "restringidaSinFin": "O WhatsApp restringiu esta linha: ela nao pode abrir conversas novas. As respostas em conversas existentes continuam saindo; espere terminar.", "cupoAgotado": "Esta linha esgotou sua cota de conversas novas: nao pode abrir conversas novas ate {hora}. As respostas em conversas existentes continuam saindo.", "cobertura": "Seu agente atua em {n} de {total} conversas", "coberturaSinTotal": "Seu agente atua em {n} conversas",                                           "stageRecibido": "Recebido",
               "stageClasificado": "Classificado",
               "stageDecision": "Sua decisao",
               "stageTrabajo": "Em andamento",
@@ -2266,6 +2269,41 @@
         }
         nodo.textContent = texto
         nodo.className = clase
+      }
+
+      /** "17:44", o con la fecha si no es hoy: el fin de una restriccion puede ser en dias. */
+      function horaDeFin (ms) {
+        var f = new Date(ms)
+        var hora = ('0' + f.getHours()).slice(-2) + ':' + ('0' + f.getMinutes()).slice(-2)
+        var hoy = new Date()
+        return f.toDateString() === hoy.toDateString()
+          ? hora
+          : f.getFullYear() + '-' + ('0' + (f.getMonth() + 1)).slice(-2) + '-' +
+            ('0' + f.getDate()).slice(-2) + ' ' + hora
+      }
+
+      /** WhatsApp restringio la linea (WAINBOX-75): el bloqueo de contacto, o el cupo de
+       *  chats nuevos agotado. Se quita solo al levantarse o al llegar su fin, sin esperar
+       *  al sidecar: una foto de storage no caduca sola. */
+      function renderRestringida (sc) {
+        var nodo = el('restringida')
+        var r = sc && typeof sc === 'object' && sc.restriccion
+        var ahora = Date.now()
+        var vigente = function (x) {
+          return !!(x && x.activa === true && (!Number(x.hasta) || Number(x.hasta) > ahora))
+        }
+        var texto = ''
+        if (r && vigente(r.bloqueo)) {
+          texto = Number(r.bloqueo.hasta)
+            ? fmt('restringidaHasta', { hora: horaDeFin(Number(r.bloqueo.hasta)) })
+            : t('restringidaSinFin')
+        } else if (r && vigente(r.cupo)) {
+          texto = Number(r.cupo.hasta)
+            ? fmt('cupoAgotado', { hora: horaDeFin(Number(r.cupo.hasta)) })
+            : t('restringidaSinFin')
+        }
+        nodo.textContent = texto
+        nodo.hidden = !texto
       }
 
       /** Sobre cuanto puede actuar el agente. Un "revise 1 conversacion" sin decir de
@@ -5306,6 +5344,7 @@
             actividadActual = a
             renderSynced(a)
             renderLinea(sc)
+            renderRestringida(sc)
             renderCobertura(a, chats)
             renderRun(a, esObjeto(tablero) ? tablero : null)
             renderBoard(tablero)

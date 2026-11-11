@@ -9409,6 +9409,48 @@ def bases_lid(con, cuenta=None):
     return bases
 
 
+# La restriccion de WhatsApp sobre la linea (WAINBOX-75), como la deja el sidecar en
+# `store_meta` (`anotarRestriccion` en sidecar/src/index.js). La frase es la MISMA de
+# `wa-send` (RESTRINGIDA_FRASE alla); `scripts/check-clis` las compara.
+RESTRICCION_LINEA = "restriccion@"
+RESTRINGIDA_FRASE = ("WhatsApp does not let this line start new chats right now; replies in "
+                     "an existing chat still go out.")
+
+
+def restriccion_de(fuente, cuenta, ahora=None):
+    """`{"active", "kind", "until", "remaining"}` de la linea, o `None` si el sidecar nunca
+    dijo nada. Un bloqueo cuyo fin ya paso no cuenta: el sidecar lo levanta en su latido,
+    y con Orca cerrado nadie lo haria."""
+    if fuente is None or not cuenta:
+        return None
+    try:
+        fila = fuente.execute("select value from store_meta where key=?",
+                              (RESTRICCION_LINEA + cuenta,)).fetchone()
+        datos = json.loads(fila[0]) if fila else None
+    except (sqlite3.Error, ValueError, TypeError):
+        return None
+    if not isinstance(datos, dict):
+        return None
+    ahora_ms = (time.time() if ahora is None else ahora) * 1000
+
+    def vigente(x):
+        if not isinstance(x, dict) or x.get("activa") is not True:
+            return False
+        hasta = x.get("hasta")
+        return not isinstance(hasta, (int, float)) or hasta > ahora_ms
+
+    cupo = datos.get("cupo") if isinstance(datos.get("cupo"), dict) else {}
+    for origen in ("bloqueo", "cupo"):
+        x = datos.get(origen)
+        if vigente(x):
+            hasta = x.get("hasta")
+            return {"active": True, "kind": origen, "type": x.get("tipo"),
+                    "until": wa_store.ts(hasta / 1000) if isinstance(hasta, (int, float)) else "",
+                    "remaining": cupo.get("restante")}
+    return {"active": False, "kind": None, "type": None, "until": "",
+            "remaining": cupo.get("restante")}
+
+
 def cmd_doctor(con, a):
     """Cada entrada autorizada de la linea activa: su jid, la forma pareada, la ultima
     entrada y la ultima actividad de cada forma, el estado (ok | migrated | ghost |
@@ -9424,6 +9466,9 @@ def cmd_doctor(con, a):
         salida["store"] = exc.reason
         fuente = None
     try:
+        restriccion = restriccion_de(fuente, cuenta)
+        if restriccion is not None:
+            salida["restriction"] = restriccion
         if fuente is not None and cuenta in wa_store.lineas_activas(fuente):
             foto = foto_lid(fuente, cuenta)
             for fila in estados_lid(con, foto, merged_scope(con), historial):
@@ -9449,6 +9494,9 @@ def cmd_doctor(con, a):
             fuente.close()
     if a.json:
         return [salida]
+    r = salida.get("restriction")
+    if r and r["active"]:
+        print(f"restricted until {r['until'] or 'further notice'}: {RESTRINGIDA_FRASE}")
     for e in salida["entries"]:
         print(f"{e['status']:<9} {e['jid']}  {e.get('chat_name') or ''}"
               + (f"  <-> {', '.join(e['paired'])}" if e.get("paired") else ""))

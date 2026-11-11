@@ -28,7 +28,8 @@ import { DatabaseSync } from 'node:sqlite'
 import { fileURLToPath } from 'node:url'
 
 import { abrirAlmacen, ENVIANDO_VENCE_S, rutaAlmacen } from '../sidecar/src/almacen.js'
-import { atenderSalida, contenidoDe, ENVIO, LATIDO_VENCE_MS, mensajeDeEnvio } from '../sidecar/src/envio.js'
+import { atenderSalida, contenidoDe, crearRestriccion, ENVIO, LATIDO_VENCE_MS, mensajeDeEnvio,
+  MOTIVO_RESTRINGIDA } from '../sidecar/src/envio.js'
 
 const RAIZ = join(dirname(fileURLToPath(import.meta.url)), '..')
 const WA_SEND = join(RAIZ, 'bin', 'wa-send')
@@ -1341,6 +1342,140 @@ console.log('\nwa-send --file: al dueno sale, a cualquier otro espera su visto')
   ok('un archivo que no existe se niega sin encolar nada',
     falta.primera === 'wa-send: send-bad-file' &&
     !filasEnvio(home).some((f) => f.body?.startsWith('x')), falta.stderr)
+  almacen.cerrar()
+}
+
+console.log('\nsidecar: una linea restringida lo dice, y no escribe a chats nuevos (WAINBOX-75)')
+{
+  // Baileys 7 avisa la restriccion por `connection.update` (`reachoutTimeLock`) y por
+  // `message-capping.update`. Hasta aca el sidecar no leia ninguno: una linea de negocio
+  // restringida se veia sana y sus envios fallaban con un error generico de la libreria.
+  const T = 1_800_000_000_000
+  let reloj = T
+  const r = crearRestriccion({ ahora: () => reloj })
+  ok('sin aviso, la linea no esta restringida', r.activa() === false)
+
+  // TC-1: el bloqueo puesto, con su tipo y su fin.
+  const fin = new Date(T + 3_600_000)
+  const puesto = r.bloqueo({ isActive: true, timeEnforcementEnds: fin,
+    enforcementType: 'BIZ_QUALITY' })
+  ok('un bloqueo activo se emite como restriccion, con su tipo y su fin',
+    puesto?.type === 'restriccion' && puesto.origen === 'bloqueo' && puesto.activa === true &&
+    puesto.tipo === 'BIZ_QUALITY' && puesto.hasta === fin.getTime(), JSON.stringify(puesto))
+  ok('y la linea queda restringida', r.activa() === true)
+  ok('el mismo aviso dos veces sale una sola (la consulta de Baileys lo repite)',
+    r.bloqueo({ isActive: true, timeEnforcementEnds: fin, enforcementType: 'BIZ_QUALITY' }) === null)
+
+  // Nada de lo emitido nombra a un cliente: solo banderas, un tipo y numeros.
+  const claves = Object.keys(puesto).sort().join(',')
+  ok('el mensaje solo lleva banderas, el tipo y horas', claves === 'activa,hasta,origen,tipo,ts,type',
+    claves)
+  ok('un tipo que no es un codigo de Baileys no viaja tal cual',
+    crearRestriccion().bloqueo({ isActive: true, enforcementType: '573001112233@s.whatsapp.net' })
+      ?.tipo === 'desconocido')
+
+  // TC-2: levantado.
+  const levantado = r.bloqueo({ isActive: false, enforcementType: 'DEFAULT' })
+  ok('un bloqueo levantado se emite con activa: false',
+    levantado?.activa === false && levantado.hasta === null, JSON.stringify(levantado))
+  ok('y la linea deja de estar restringida', r.activa() === false)
+
+  // El riesgo del ticket: un "restringida" falso frena envios legitimos. La compuerta
+  // solo cierra con `isActive: true` explicito, y se abre sola al llegar su fin.
+  ok('un aviso sin isActive explicito no restringe',
+    r.bloqueo({ enforcementType: 'BIZ_QUALITY' }) === null && r.activa() === false)
+  r.bloqueo({ isActive: true, timeEnforcementEnds: new Date(T + 1000) })
+  ok('mientras no llega su fin, sigue restringida', r.activa() === true && r.revisar() === null)
+  reloj = T + 2000
+  ok('pasado su fin, la compuerta se abre sola', r.activa() === false)
+  const vencido = r.revisar()
+  ok('y el latido emite el levantamiento una vez', vencido?.activa === false &&
+    r.revisar() === null, JSON.stringify(vencido))
+
+  // TC-6: el cupo de chats nuevos.
+  const cupo = r.cupo({ total_quota: 50, used_quota: 48, capping_status: 'SECOND_WARNING',
+    cycle_end_timestamp: String(Math.floor((T + 86_400_000) / 1000)) })
+  ok('el cupo de chats nuevos se emite con lo que queda',
+    cupo?.origen === 'cupo' && cupo.restante === 2 && cupo.total === 50 &&
+    cupo.activa === false && cupo.tipo === 'SECOND_WARNING' &&
+    cupo.hasta === Math.floor((T + 86_400_000) / 1000) * 1000, JSON.stringify(cupo))
+  ok('un aviso del cupo no restringe', r.activa() === false)
+  const tope = r.cupo({ total_quota: 50, used_quota: 50, capping_status: 'CAPPED' })
+  ok('el cupo agotado si restringe', tope?.activa === true && tope.restante === 0 &&
+    r.activa() === true, JSON.stringify(tope))
+  r.cupo({ total_quota: 50, used_quota: 10, capping_status: 'NONE' })
+  ok('y un ciclo nuevo la libera', r.activa() === false)
+}
+
+console.log('\nsidecar: restringida, lo que va a un chat nuevo se rechaza con cuenta-restringida (TC-5)')
+{
+  const LINEA = 'pn:15550003333'
+  const NUEVO = '573000000013@s.whatsapp.net'
+  const home = nueva()
+  const almacen = abrirAlmacen(rutaAlmacen({ HOME: home }))
+  // En LAURA la linea ya escribio: es una respuesta en un chat existente.
+  almacen.guardarMensaje({ cuenta: LINEA, chatJid: LAURA, stanzaId: 'PROPIO-1', ts: 100,
+    fromMe: 1, senderJid: null, senderName: null, body: 'hola', mediaTipo: null,
+    mediaBytes: null, mencionaMe: 0, citaMe: 0 })
+  almacen.encolarEnvio({ reqId: 'RS-NUEVO', cuenta: LINEA, chatJid: NUEVO, cuerpo: 'buenas',
+    estado: ENVIO.PENDIENTE })
+  almacen.encolarEnvio({ reqId: 'RS-VIEJO', cuenta: LINEA, chatJid: LAURA, cuerpo: 'ya quedo',
+    estado: ENVIO.PENDIENTE })
+  const socket = socketFalso()
+  const r = await atenderSalida({ almacen, cuenta: LINEA, enviar: socket.enviar,
+    restringida: () => true })
+  const nuevo = almacen.verEnvio('RS-NUEVO')
+  ok('el chat nuevo se cierra como rechazado con cuenta-restringida, sin intentarlo',
+    nuevo.estado === ENVIO.RECHAZADO && nuevo.motivo === MOTIVO_RESTRINGIDA &&
+    !socket.enviados.some((e) => e.jid === NUEVO), JSON.stringify(nuevo))
+  ok('el codigo es el estable del ticket', MOTIVO_RESTRINGIDA === 'cuenta-restringida')
+  ok('la respuesta en un chat existente se intenta igual',
+    almacen.verEnvio('RS-VIEJO').estado === ENVIO.ENVIADO &&
+    socket.enviados.some((e) => e.jid === LAURA), JSON.stringify(socket.enviados))
+  ok('y la cuenta lo separa', r.enviados === 1 && r.rechazados === 1, JSON.stringify(r))
+
+  // Un chat donde la linea ya mando algo por esta bandeja tambien es existente.
+  almacen.encolarEnvio({ reqId: 'RS-NUEVO-2', cuenta: LINEA, chatJid: NUEVO, cuerpo: 'otra',
+    estado: ENVIO.PENDIENTE })
+  await atenderSalida({ almacen, cuenta: LINEA, enviar: socket.enviar, restringida: () => false })
+  ok('sin restriccion, el chat nuevo sale como siempre',
+    almacen.verEnvio('RS-NUEVO-2').estado === ENVIO.ENVIADO)
+  almacen.encolarEnvio({ reqId: 'RS-NUEVO-3', cuenta: LINEA, chatJid: NUEVO, cuerpo: 'y otra',
+    estado: ENVIO.PENDIENTE })
+  await atenderSalida({ almacen, cuenta: LINEA, enviar: socket.enviar, restringida: () => true })
+  ok('y despues de un envio suyo ese chat ya no es nuevo',
+    almacen.verEnvio('RS-NUEVO-3').estado === ENVIO.ENVIADO)
+  almacen.cerrar()
+}
+
+console.log('\nwa-send: una linea restringida se dice con su codigo y una frase (TC-5)')
+{
+  const home = nueva()
+  autorizar(home, { jid: ALFA, nombre: 'Cliente Alfa', modo: 'responder' })
+  firmar(home, 'Asistente')
+  const almacen = abrirAlmacen(rutaAlmacen({ HOME: home }))
+  const socket = socketFalso()
+  const r = await new Promise((resolve) => {
+    almacen.latir()
+    const p = spawn(WA_SEND, ['Cliente Alfa', 'hola, te escribo por lo del pedido', '--send'],
+      { env: entorno(home) })
+    let stderr = ''
+    p.stderr.on('data', (d) => { stderr += d })
+    const timer = setInterval(() => {
+      almacen.latir()
+      atenderSalida({ almacen, enviar: socket.enviar, restringida: () => true }).catch(() => {})
+    }, 40)
+    p.on('close', (code) => {
+      clearInterval(timer)
+      resolve({ code, stderr, primera: stderr.trim().split('\n')[0] || '' })
+    })
+  })
+  ok('la primera linea es el codigo propio de la linea restringida',
+    r.primera === 'wa-send: send-account-restricted', r.stderr)
+  ok('y la frase dice que hacer, con el codigo del sidecar',
+    /restricted/.test(r.stderr) && /cuenta-restringida/.test(r.stderr) &&
+    /existing chat/.test(r.stderr), r.stderr)
+  ok('no salio nada por el socket', socket.enviados.length === 0)
   almacen.cerrar()
 }
 
