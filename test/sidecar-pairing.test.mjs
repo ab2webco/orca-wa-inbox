@@ -609,6 +609,21 @@ console.log('\nsidecar: linea-fuera-de-lista — el latido vuelve a poner su lin
     reloj.slice(0, 200))
 }
 
+console.log('\nWAINBOX-43: el sidecar vence los pendientes y los cuenta en store')
+{
+  const fuente = readFileSync(new URL('../sidecar/src/index.js', import.meta.url), 'utf8')
+  const latido = fuente.slice(fuente.indexOf('const latirLinea = () => {'),
+    fuente.indexOf('latirLinea()\n'))
+  ok('el latido de la linea vence los pendientes', /almacen\.vencerSinDescifrar\(/.test(latido),
+    latido.slice(0, 200))
+  const reporte = fuente.slice(fuente.indexOf('function reportarAlmacen'),
+    fuente.indexOf('function reportarAlmacen') + 600)
+  ok('store lleva los conteos de pendientes e ilegibles',
+    /almacen\.conteoSinDescifrar\(/.test(reporte), reporte.slice(0, 300))
+  ok('el stub guardado se anota en el registro, con el motivo y el pedido',
+    /stubSinDescifrar\(/.test(fuente) && /requestId:/.test(fuente))
+}
+
 console.log('\nsidecar: lo que no se pudo descifrar queda dicho, sin contenido')
 {
   const dir = mkdtempSync(join(tmpdir(), 'registro-'))
@@ -631,6 +646,16 @@ console.log('\nsidecar: lo que no se pudo descifrar queda dicho, sin contenido')
     ok('escribe el motivo, el id y el chat', fila.err === 'No matching sessions found for message' &&
       fila.id === 'ABC' && fila.chat === '111@lid' && fila.at === '2026-01-01T00:00:00.000Z', texto)
     ok('nunca escribe el nodo cifrado', !texto.includes('CIFRADO-SECRETO'), texto)
+    // WAINBOX-43: el stub guardado como pendiente se anota con el id del pedido de
+    // reenvio, para cruzarlo con la respuesta del telefono. Sin cuerpo.
+    const antes = readFileSync(ruta, 'utf8').length
+    r.warn({ key: { id: 'STUB-1', remoteJid: '111@lid' }, err: 'Bad MAC', requestId: 'REQ-9' },
+      'undecryptable message stored as pending')
+    const stubLinea = JSON.parse(readFileSync(ruta, 'utf8').slice(antes).trim())
+    ok('el stub pendiente queda anotado con su motivo y su pedido de reenvio',
+      stubLinea.id === 'STUB-1' && stubLinea.err === 'Bad MAC' && stubLinea.solicitud === 'REQ-9',
+      JSON.stringify(stubLinea))
+    writeFileSync(ruta, texto)
     r.debug({ msgAttrs: { id: 'X' } }, 'recv message')
     r.info('connected to WA')
     r.debug({ key: { id: 'DEF', remoteJid: '111@lid' } }, 'received unavailable message, acked and requested resend from phone')

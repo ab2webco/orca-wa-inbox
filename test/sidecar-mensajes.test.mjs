@@ -23,7 +23,8 @@ import {
   esConversacion, esGrupo, jidDeChat, usuarioDe, identidadPropia, identidadesPropias,
   identidadDeSesion, cuentaDeIdentidad,
   mencionaA, citaA, textoDe, mediaDe, filaDeMensaje, filaDeActualizacion, estadoDeEntrega,
-  miembrosDeGrupo, cambioDeMiembros, parDeMensaje, TIPO_MEDIA
+  miembrosDeGrupo, cambioDeMiembros, parDeMensaje, TIPO_MEDIA, STUB_CIPHERTEXT,
+  stubSinDescifrar, SIN_DESCIFRAR
 } from '../sidecar/src/mensajes.js'
 import { filaDeChat } from '../sidecar/src/ingesta.js'
 
@@ -695,6 +696,54 @@ console.log('\nroles-por-numero (M8): los participantes de un grupo')
       action: 'add' }, esPropio) === null &&
     cambioDeMiembros(evento('add', []), esPropio) === null &&
     cambioDeMiembros(evento('add', [MI_TEL]), esPropio) === null)
+}
+
+console.log('\nWAINBOX-43: lo que no se pudo descifrar es una fila pendiente, no un vacio')
+{
+  const GRUPO = '120363000000000001@g.us'
+  const DIRECTO = '573000000002@s.whatsapp.net'
+  // La forma que sube Baileys 7 (lib/Utils/decode-wa-message.js, messages-recv.js):
+  // `message` sin contenido, `messageStubType` CIPHERTEXT y el motivo en el primer
+  // parametro; el segundo, cuando hay reenvio pedido al telefono, es el id del pedido.
+  const stub = (chat, extra = {}) => ({
+    key: { remoteJid: chat, fromMe: false, id: 'STUB-1',
+      ...(chat.endsWith('@g.us') ? { participant: '573000000001@s.whatsapp.net' } : {}) },
+    messageTimestamp: 1758500000,
+    pushName: 'Persona Prueba',
+    messageStubType: STUB_CIPHERTEXT,
+    messageStubParameters: ['No matching sessions found for message', 'REQ-9'],
+    message: null,
+    ...extra
+  })
+  ok('CIPHERTEXT es el stub 2 del proto', STUB_CIPHERTEXT === 2)
+  const fila = filaDeMensaje(stub(GRUPO), { cuenta: 'pn:1', identidades: YO })
+  ok('un stub en un grupo da UNA fila pendiente, con su id y su hora', fila &&
+    fila.stanzaId === 'STUB-1' && fila.ts === 1758500000 &&
+    fila.descifrado === SIN_DESCIFRAR.PENDIENTE, JSON.stringify(fila))
+  ok('sin cuerpo, sin adjunto, sin mencion ni cita', fila && fila.body === '' &&
+    fila.mediaTipo === null && fila.mencionaMe === 0 && fila.citaMe === 0 && fila.citaId === null,
+    JSON.stringify(fila))
+  const directo = filaDeMensaje(stub(DIRECTO, { message: undefined }), { cuenta: 'pn:1', identidades: YO })
+  ok('en un directo tambien, aunque `message` no venga', directo?.descifrado === SIN_DESCIFRAR.PENDIENTE &&
+    directo.senderJid === DIRECTO, JSON.stringify(directo))
+  ok('un mensaje normal no trae marca de descifrado', filaDeMensaje({
+    key: { remoteJid: DIRECTO, fromMe: false, id: 'N1' }, messageTimestamp: 1,
+    message: { conversation: 'hola' } }, { cuenta: 'pn:1', identidades: YO }).descifrado === null)
+  ok('un stub de un canal no es una conversacion',
+    filaDeMensaje(stub('123@newsletter'), { cuenta: 'pn:1', identidades: YO }) === null)
+  ok('otro stub sin contenido (una notificacion del grupo) sigue sin guardarse',
+    filaDeMensaje(stub(GRUPO, { messageStubType: 20, messageStubParameters: ['x'] }),
+      { cuenta: 'pn:1', identidades: YO }) === null)
+  ok('una reaccion sigue siendo control', filaDeMensaje({
+    key: { remoteJid: DIRECTO, fromMe: false, id: 'R1' }, messageTimestamp: 1,
+    message: { reactionMessage: { text: 'x' } } }, { cuenta: 'pn:1', identidades: YO }) === null)
+  const info = stubSinDescifrar(stub(GRUPO))
+  ok('del stub salen el motivo y el id del pedido de reenvio, y nada mas', info &&
+    info.motivo === 'No matching sessions found for message' && info.solicitud === 'REQ-9' &&
+    Object.keys(info).sort().join() === 'motivo,solicitud', JSON.stringify(info))
+  ok('un mensaje con contenido no es un stub', stubSinDescifrar({
+    key: { remoteJid: DIRECTO, id: 'N1' }, messageStubType: STUB_CIPHERTEXT,
+    message: { conversation: 'hola' } }) === null)
 }
 
 console.log(`\n${pruebas - fallos}/${pruebas} en verde`)

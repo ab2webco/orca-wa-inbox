@@ -34,8 +34,8 @@ import { dirname, join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { fileURLToPath } from 'node:url'
 
-import { identidadesPropias, identidadPropia } from '../sidecar/src/mensajes.js'
-import { abrirAlmacen, ESQUEMA_VERSION, rutaAlmacen, rutaMedia } from '../sidecar/src/almacen.js'
+import { identidadesPropias, identidadPropia, STUB_CIPHERTEXT } from '../sidecar/src/mensajes.js'
+import { abrirAlmacen, ESQUEMA_VERSION, rutaAlmacen, rutaMedia, SIN_DESCIFRAR_VENCE_MS } from '../sidecar/src/almacen.js'
 import { reclaveDecididaDe } from '../sidecar/src/alcance.js'
 import { ingerirActualizacion, ingerirCambioDeMiembros, ingerirChats, ingerirContactos,
   ingerirEntrega,
@@ -2393,6 +2393,127 @@ console.log('\nestado-envios E3: los dos eventos de Baileys llegan a la fila')
     key: { remoteJid: LAURA, fromMe: false, id: 'OTRO' },
     update: { message: { editedMessage: { message: { conversation: 'x' } } } } } }) === false)
   alm.cerrar()
+  rmSync(casa, { recursive: true, force: true })
+}
+
+console.log('\nWAINBOX-43: un mensaje sin descifrar queda pendiente, se reemplaza o queda ilegible')
+{
+  const casa = nueva()
+  const ruta = rutaAlmacen({ HOME: casa })
+  const alm = abrirAlmacen(ruta)
+  alm.registrarLinea({ cuenta: CUENTA, lid: MI_LID, pn: MI_TEL, nombre: 'Mi Linea' })
+  autorizar(casa, { jid: LAURA, nombre: 'Laura Mendez', modo: 'observar' })
+  autorizar(casa, { jid: ALFA, nombre: 'Cliente Alfa', modo: 'observar' })
+  const entra = (wa, ahora = Date.now()) => ingerirMensaje({
+    almacen: alm, alcance, cuenta: CUENTA, identidades: YO, wa, ahora,
+    mediaDir: rutaMedia({ HOME: casa }), descargarMedia: descargarFalso,
+    nombreDeChat: (jid) => nombres.get(jid) || null
+  })
+  const stub = (chat, id, ts) => ({
+    key: { remoteJid: chat, fromMe: false, id,
+      ...(chat.endsWith('@g.us') ? { participant: OTRA_PERSONA } : {}) },
+    messageTimestamp: ts,
+    pushName: 'Laura Mendez',
+    messageStubType: STUB_CIPHERTEXT,
+    messageStubParameters: ['Bad MAC', 'REQ-1'],
+    message: null
+  })
+  const filas = (id) => alm.con.prepare('select * from mensaje where stanza_id=?').all(id)
+  const ahora = Math.floor(Date.now() / 1000)
+  const visto = Date.now() - 60 * 60 * 1000
+
+  // TC-1: el stub y despues el mismo id con texto.
+  const r1 = await entra(stub(LAURA, 'C43-1', ahora - 300), visto)
+  ok('TC-1 el stub de un chat autorizado se guarda como pendiente',
+    r1.motivo === 'guardado' && filas('C43-1').length === 1 &&
+    filas('C43-1')[0].descifrado === 'pendiente' && filas('C43-1')[0].body === '',
+    JSON.stringify(filas('C43-1')))
+  await entra(mensaje({ chat: LAURA, id: 'C43-1', ts: ahora - 300, texto: 'el pedido de ayer' }))
+  ok('TC-1 el mensaje real con el mismo id deja UNA fila con su cuerpo y sin marca',
+    filas('C43-1').length === 1 && filas('C43-1')[0].body === 'el pedido de ayer' &&
+    filas('C43-1')[0].descifrado === null, JSON.stringify(filas('C43-1')))
+  // Un stub que llega DESPUES del real (una re-sincronizacion) no lo vacia.
+  await entra(stub(LAURA, 'C43-1', ahora - 300))
+  ok('un stub tardio no pisa el cuerpo que ya se leyo',
+    filas('C43-1')[0].body === 'el pedido de ayer' && filas('C43-1')[0].descifrado === null,
+    JSON.stringify(filas('C43-1')))
+
+  // TC-2: el stub que nunca se resuelve.
+  await entra(stub(ALFA, 'C43-2', ahora - 200), visto)
+  await entra(stub(LAURA, 'C43-3', ahora - 100), Date.now())
+  ok('el plazo por defecto es de 10 minutos', SIN_DESCIFRAR_VENCE_MS === 10 * 60 * 1000)
+  const vencidos = alm.vencerSinDescifrar({ ahora: Date.now() })
+  ok('TC-2 pasado el plazo, el pendiente queda ilegible; el reciente sigue pendiente',
+    vencidos === 1 && filas('C43-2')[0].descifrado === 'ilegible' &&
+    filas('C43-3')[0].descifrado === 'pendiente',
+    `${vencidos} ${JSON.stringify([filas('C43-2'), filas('C43-3')])}`)
+  ok('vencer otra vez no cambia nada', alm.vencerSinDescifrar({ ahora: Date.now() }) === 0)
+
+  // TC-5: los dos conteos.
+  const cuenta = alm.conteoSinDescifrar()
+  ok('TC-5 el conteo trae pendientes e ilegibles', cuenta.pendientes === 1 &&
+    cuenta.ilegibles === 1, JSON.stringify(cuenta))
+
+  // TC-4: un chat en off solo cuenta.
+  const r4 = await entra(stub(CALLADO, 'C43-4', ahora - 50))
+  ok('TC-4 un stub de un chat en off no deja fila ni conversacion', r4.motivo === 'sin-autorizar' &&
+    filas('C43-4').length === 0 &&
+    !alm.con.prepare('select 1 from chat where chat_jid=?').get(CALLADO),
+    JSON.stringify(r4))
+  alm.cerrar()
+
+  // FR-4: lo que lee el agente y el tablero.
+  const { filas: bandeja, stderr } = leerJson(casa, ['inbox', '--days', '36500'])
+  const ids = (bandeja || []).map((f) => f.stanza_id)
+  ok('el pendiente no abre caso: no esta en la bandeja', bandeja && !ids.includes('C43-3'),
+    JSON.stringify(ids) + stderr)
+  const ilegible = (bandeja || []).find((f) => f.stanza_id === 'C43-2')
+  ok('TC-2 el ilegible sale dicho como tal, nunca como vacio', ilegible?.unreadable === true &&
+    ilegible.text === '[could not be read]', JSON.stringify(ilegible))
+  const leido = (bandeja || []).find((f) => f.stanza_id === 'C43-1')
+  ok('el resuelto sale con su texto y sin marca', leido?.text === 'el pedido de ayer' &&
+    !('unreadable' in leido), JSON.stringify(leido))
+  const hilo = leerJson(casa, ['chat', LAURA])
+  const textos = (hilo.filas || []).map((m) => m.text)
+  ok('TC-3 el hilo que lee el agente dice "todavia no se pudo leer", nunca una fila vacia',
+    textos.includes('[could not be read yet]') && !textos.includes('') &&
+    textos.includes('el pedido de ayer'), JSON.stringify(textos) + hilo.stderr)
+  const hiloGrupo = leerJson(casa, ['chat', ALFA])
+  ok('y el ilegible, "no se pudo leer"', (hiloGrupo.filas || []).some((m) =>
+    m.text === '[could not be read]' && m.unreadable === true), JSON.stringify(hiloGrupo.filas) + hiloGrupo.stderr)
+
+  // TC-3: el caso cuyo unico mensaje es ilegible TIENE contenido para `wa-scope`: no se
+  // puede cerrar en silencio como vacio. Se pregunta a la funcion de verdad.
+  const conContenido = (stanza) => {
+    const r = spawnSync('python3', ['-c', [
+      'import sys, sqlite3, importlib.machinery, importlib.util',
+      "l = importlib.machinery.SourceFileLoader('wa_scope', sys.argv[1])",
+      'spec = importlib.util.spec_from_loader(l.name, l); m = importlib.util.module_from_spec(spec); l.exec_module(m)',
+      "con = sqlite3.connect(':memory:'); con.row_factory = sqlite3.Row",
+      "con.execute('create table caso_mensaje (account text, case_id integer, stanza_id text)')",
+      "con.execute('insert into caso_mensaje values (?, 1, ?)', (sys.argv[2], sys.argv[3]))",
+      "print(m.caso_con_contenido(con, {'account': sys.argv[2], 'case_id': 1}))"
+    ].join('\n'), WA_SCOPE, CUENTA, stanza],
+    { encoding: 'utf8', env: { ...process.env, HOME: casa } })
+    return (r.stdout || '').trim() + (r.status ? ` ${r.stderr}` : '')
+  }
+  ok('TC-3 un caso con solo un ilegible no es un caso vacio', conContenido('C43-2') === 'True',
+    conContenido('C43-2'))
+  ok('un pendiente tampoco', conContenido('C43-3') === 'True', conContenido('C43-3'))
+
+  // El almacen de antes de la columna: se lee igual y el sidecar nuevo la agrega.
+  const viejo = new DatabaseSync(ruta)
+  viejo.exec("delete from mensaje where descifrado is not null")
+  viejo.exec('alter table mensaje drop column descifrado')
+  viejo.close()
+  const sinColumna = leerJson(casa, ['inbox', '--days', '36500'])
+  ok('sin la columna (el sidecar de antes), la bandeja sale 0 con sus mensajes',
+    sinColumna.code === 0 && (sinColumna.filas || []).some((f) => f.stanza_id === 'C43-1'),
+    sinColumna.stderr)
+  const reabierto = abrirAlmacen(ruta)
+  ok('el sidecar nuevo le agrega la columna al abrir', reabierto.con
+    .prepare('pragma table_info(mensaje)').all().some((f) => f.name === 'descifrado'))
+  reabierto.cerrar()
   rmSync(casa, { recursive: true, force: true })
 }
 

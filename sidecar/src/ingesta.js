@@ -48,6 +48,11 @@ export async function ingerirMensaje ({ almacen, alcance, cuenta, identidades, w
   mediaDir, descargarMedia = null, nombreDeChat = () => null, ahora = Date.now() }) {
   const fila = filaDeMensaje(wa, { cuenta, identidades })
   if (!fila) return { motivo: INGESTA.NO_ES_CONVERSACION }
+  // Un stub sin descifrar de un chat en `off` solo suma al conteo (WAINBOX-43): no trae
+  // nombre ni nada que anotar, y no abre la conversacion en la lista.
+  if (fila.descifrado && alcance(cuenta, fila.chatJid) === 'off') {
+    return { motivo: INGESTA.SIN_AUTORIZAR }
+  }
 
   // CONTABILIDAD, siempre y aunque el chat este en `off`: sin esto una conversacion
   // que nadie autorizo no se puede ni ofrecer para autorizarla, y la lista del panel
@@ -76,7 +81,7 @@ export async function ingerirMensaje ({ almacen, alcance, cuenta, identidades, w
     mediaPath = await bajarMedia({ wa, fila, cuenta, mediaDir, descargarMedia })
   }
   almacen.guardarMensaje(fila, { mediaPath, ahora })
-  return { motivo: INGESTA.GUARDADO, mediaPath }
+  return { motivo: INGESTA.GUARDADO, mediaPath, descifrado: fila.descifrado }
 }
 
 /** De una conversacion de Baileys a la fila de CONTABILIDAD del almacen, o `null` si

@@ -23,7 +23,7 @@ import { atenderSalida, crearCacheDeReintentos, ENVIO_LATIDO_MS, mensajeDeEnvio 
 import { INGESTA, ingerirActualizacion, ingerirCambioDeMiembros, ingerirChats, ingerirEntrega,
   ingerirContactos, ingerirMensaje, ingerirMiembros, ingerirParesLid } from './ingesta.js'
 import { cuentaDeIdentidad, identidadDeSesion, identidadesPropias,
-  identidadPropia } from './mensajes.js'
+  identidadPropia, stubSinDescifrar } from './mensajes.js'
 
 // El auth state es una credencial viva (docs/ENCARGO...§11-F1): en un equipo
 // compartido el umask por defecto lo deja legible para cualquiera. Esto tiene que
@@ -569,7 +569,14 @@ async function iniciar () {
     const ahora = Date.now()
     if (!tocaEmitirAlmacen(ultimoAlmacenMs, ahora, forzar)) return
     ultimoAlmacenMs = ahora
-    emitirAlmacen({ ...conteos, autorizadas: alcance.autorizadas(),
+    // Los pendientes y los ilegibles de ESTA linea, contados en el almacen (WAINBOX-43).
+    let sinLeer = {}
+    try {
+      if (cuenta) sinLeer = almacen.conteoSinDescifrar(cuenta)
+    } catch (error) {
+      avisarFallo('sin-descifrar-sin-contar', error)
+    }
+    emitirAlmacen({ ...conteos, ...sinLeer, autorizadas: alcance.autorizadas(),
       chatsHistorial: historialChats,
       ...(ultimoSinDescifrar ? { ultimoSinDescifrar } : {}), ...extra })
   }
@@ -796,7 +803,7 @@ async function iniciar () {
           // El alcance se refresca con su propio TTL: el usuario autoriza un chat en
           // el panel y espera que el proximo mensaje ya entre.
           alcance.refrescar()
-          const { motivo } = await ingerirMensaje({
+          const { motivo, descifrado } = await ingerirMensaje({
             almacen,
             alcance: alcance.modo,
             cuenta,
@@ -808,6 +815,13 @@ async function iniciar () {
           })
           if (motivo === INGESTA.GUARDADO) conteos.guardados += 1
           else if (motivo === INGESTA.SIN_AUTORIZAR) conteos.sinAutorizar += 1
+          // El stub guardado como pendiente queda en el registro de la linea con su
+          // motivo y el id del pedido de reenvio, para cruzarlo despues. Sin contenido.
+          if (descifrado) {
+            const stub = stubSinDescifrar(wa) || {}
+            registro.warn({ key: wa.key, err: stub.motivo, requestId: stub.solicitud },
+              'undecryptable message stored as pending')
+          }
         } catch (error) {
           // Un mensaje raro no puede llevarse la linea entera: se cuenta el fallo y se
           // sigue. El detalle NO lleva contenido, solo el mensaje del error.
@@ -1035,6 +1049,12 @@ async function iniciar () {
     if (cuenta) {
       alcance.refrescar()
       resolverLegado()
+    }
+    // Lo que no se pudo descifrar y no volvio en el plazo queda ilegible (WAINBOX-43).
+    try {
+      if (almacen.vencerSinDescifrar()) reportarAlmacen({}, true)
+    } catch (error) {
+      avisarFallo('sin-descifrar-sin-vencer', error)
     }
   }
   latirLinea()

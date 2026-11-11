@@ -3921,9 +3921,13 @@ def caso_con_contenido(con, caso):
     except wa_store.SinFuente:
         return False
     try:
+        # WAINBOX-43: lo que no se pudo descifrar (pendiente o ilegible) no es un mensaje
+        # vacio. Alguien escribio algo que la linea no pudo leer: no se cierra en silencio.
+        descifrado = wa_store.columna_descifrado(fuente, "mensaje")
         return bool(fuente.execute(
             f"select 1 from mensaje where account=? and from_me=0 and revocado=0 and "
             f"stanza_id in ({','.join('?' * len(stanzas))}) and (trim(body) <> '' or "
+            f"{descifrado} is not null or "
             f"(media_type is not null and lower(media_type) <> 'sticker')) limit 1",
             (caso["account"], *stanzas)).fetchone())
     except sqlite3.Error:

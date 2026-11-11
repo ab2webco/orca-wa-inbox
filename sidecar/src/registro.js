@@ -52,6 +52,8 @@ export function lineaDeRegistro (nivel, obj, frase, ahora = new Date()) {
     fila.id = datos.msgId
   }
   if (typeof datos.retryCount === 'number') fila.intento = datos.retryCount
+  // El id del pedido de reenvio al telefono (WAINBOX-43): cruza el stub con la respuesta.
+  if (typeof datos.requestId === 'string') fila.solicitud = datos.requestId.slice(0, 120)
   return JSON.stringify(fila)
 }
 
