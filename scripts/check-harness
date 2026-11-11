@@ -132,6 +132,128 @@ def ayuda_de_las_herramientas() -> str:
     return "\n".join(textos)
 
 
+# WAINBOX-120. Caso vivo (contado con datos de mentira): un cliente escribio "la fila esta
+# trabada"; minutos despues, en el mismo chat, quedo claro que era la fila de un evento y que
+# ya habia avanzado. El agente del proyecto leyo solo el mensaje que abrio el caso y salio a
+# investigar servidores. El brief del despacho trae ahora lo que llego despues, marcado, y su
+# primer paso es leerlo con un comando exacto y decir que se pide; si lo nuevo lo cancela o
+# lo cambia, se detiene y lo dice en el caso. Se arma con el escritor de verdad del almacen
+# (el sidecar), como scripts/check-casos: el esquema es suyo.
+CUENTA = "pn:573000000001"
+CHAT_EVENTO = "120363000000000001@g.us"
+ALMACEN_JS = """
+import { abrirAlmacen, rutaAlmacen } from %r;
+const d = JSON.parse(process.env.DATOS);
+const a = abrirAlmacen(rutaAlmacen({ HOME: process.env.HOME }));
+a.registrarLinea({ cuenta: d.cuenta, pn: '573000000001:7@s.whatsapp.net', nombre: 'Prueba' });
+a.anotarChat({ cuenta: d.cuenta, chatJid: d.chat, nombre: 'Soporte Norte', esGrupo: 1 });
+for (const m of d.mensajes) {
+  a.guardarMensaje({ cuenta: d.cuenta, chatJid: d.chat, stanzaId: m.id, ts: m.ts, fromMe: 0,
+    senderJid: '100000000000002@lid', senderName: 'Ana Prueba', body: m.texto, mediaTipo: null,
+    mediaBytes: null, mencionaMe: 0, citaMe: 0, citaId: null }, { mediaPath: null });
+}
+a.activarLinea(d.cuenta);
+a.latir(); a.cerrar();
+""" % (RAIZ / "sidecar" / "src" / "almacen.js").as_uri()
+ABRE = "la fila esta trabada"
+ACLARA = "era la fila de la entrada del evento"
+CANCELA = "ya avanzo, todo bien, olviden lo de la fila"
+NUEVO = "(newer than the trigger)"
+
+
+def carga_wa_scope(casa: str, nombre: str):
+    import importlib.machinery
+    import importlib.util
+    sys.dont_write_bytecode = True
+    sys.path.insert(0, str(RAIZ / "bin"))
+    cargador = importlib.machinery.SourceFileLoader(nombre, str(RAIZ / "bin" / "wa-scope"))
+    spec = importlib.util.spec_from_loader(nombre, cargador)
+    modulo = importlib.util.module_from_spec(spec)
+    cargador.exec_module(modulo)
+    return modulo
+
+
+def brief_lee_lo_nuevo():
+    """(comprobaciones, fallos) del brief de un caso cuyos mensajes posteriores lo cancelan."""
+    import json
+    import time
+    fallos, hechas = [], 0
+    antes = dict(os.environ)
+    with tempfile.TemporaryDirectory() as casa:
+        try:
+            env = dict(os.environ, HOME=casa, XDG_CONFIG_HOME=os.path.join(casa, ".config"),
+                       APPDATA=os.path.join(casa, "AppData", "Roaming"))
+            os.environ.update(HOME=env["HOME"], XDG_CONFIG_HOME=env["XDG_CONFIG_HOME"],
+                              APPDATA=env["APPDATA"])
+            os.makedirs(os.path.join(casa, ".wa-inbox"))
+            ahora = int(time.time())
+            mensajes = [{"id": "F1", "ts": ahora - 1800, "texto": ABRE},
+                        {"id": "F2", "ts": ahora - 1200, "texto": ACLARA},
+                        {"id": "F3", "ts": ahora - 600, "texto": CANCELA}]
+            subprocess.run(["node", "--input-type=module", "-e", ALMACEN_JS], check=True,
+                           capture_output=True, timeout=120,
+                           env=dict(env, DATOS=json.dumps({"cuenta": CUENTA, "chat": CHAT_EVENTO,
+                                                           "mensajes": mensajes})))
+            wa = str(RAIZ / "bin" / "wa-scope")
+
+            def corre(*args):
+                return subprocess.run([wa, *args], capture_output=True, text=True, env=env,
+                                      timeout=120)
+
+            crear = corre("caso", "crear", "--chat", CHAT_EVENTO, "--stanza", "F1",
+                          "--titulo", "Fila trabada", "--actor", "agente", "--json")
+            cid = json.loads(crear.stdout)[0]["case_id"]
+            ws = carga_wa_scope(casa, "wa_scope_wainbox120")
+            con = ws.db()
+            caso = ws.caso_de(con, cid)
+            proyecto = {"name": "Alfa Demo", "path": "/tmp/alfa-demo"}
+            brief = ws.brief_de_despacho(con, caso, proyecto, "Revisar por que la fila esta trabada.")
+            ws.caso_del_dueno = lambda _con, _caso: True
+            del_dueno = ws.brief_de_despacho(con, caso, proyecto, "Revisar la fila.")
+            con.close()
+        except (OSError, subprocess.SubprocessError, ValueError, KeyError, IndexError) as exc:
+            return 1, [f"bin/wa-scope  no se pudo armar el brief de WAINBOX-120: {exc}"]
+        finally:
+            os.environ.clear()
+            os.environ.update(antes)
+        orden = f"{ws.ruta_wa_scope()} caso nuevos {cid}"
+        primero = brief.find("## Read this first")
+        chequeos = [
+            ("trae la seccion para leer primero", primero >= 0),
+            ("y va antes que todo lo demas del caso",
+             0 <= primero < min(i for i in (brief.find("## Messages of the case"),
+                                            brief.find("## Approved work"),
+                                            brief.find("## Hard rules"),
+                                            brief.find(ws.TITULO_MEMORIA)) if i >= 0)),
+            ("con el comando exacto para leer lo ultimo del caso", orden in brief),
+            ("y manda decir que se pide antes de usar una herramienta",
+             re.search(r"restate[^.]*(asked|request)[^.]*before", plano(brief), re.I)),
+            ("si lo nuevo lo cancela o lo cambia, se detiene y lo dice en el caso",
+             re.search(r"(cancel|change)[^.]*stop", plano(brief), re.I)
+             and f"caso resultado {cid} --estado bloqueado" in brief.split("## Messages")[0]),
+            ("en el caso del dueno se le pregunta a el (necesita), no se bloquea",
+             f"caso resultado {cid} --estado necesita"
+             in del_dueno.split("## Messages")[0]),
+            ("trae los mensajes posteriores al que abrio el caso",
+             ACLARA in brief and CANCELA in brief),
+            ("marcados como posteriores al disparador",
+             any(NUEVO in l and CANCELA in brief.split(l, 1)[1].split("\n[", 1)[0]
+                 for l in brief.splitlines() if l.startswith("["))),
+            ("y el que abrio el caso no va marcado",
+             not any(NUEVO in l and ABRE in brief.split(l, 1)[1].split("\n[", 1)[0]
+                     for l in brief.splitlines() if l.startswith("["))),
+        ]
+        vivo = corre("caso", "nuevos", str(cid))
+        chequeos.append(("el comando del brief corre y trae lo nuevo",
+                         vivo.returncode == 0 and CANCELA in vivo.stdout
+                         and ACLARA in vivo.stdout and ABRE not in vivo.stdout))
+        for nombre, condicion in chequeos:
+            hechas += 1
+            if not condicion:
+                fallos.append(f"bin/wa-scope  el brief del despacho no cumple: {nombre}")
+    return hechas, fallos
+
+
 def main() -> int:
     fallos = []
     comprobaciones = 0
@@ -593,6 +715,15 @@ def main() -> int:
     if "whatsapp-avisos" in sembradas.stdout or sembradas.returncode != 0:
         fallos.append("harness.mjs  siembra whatsapp-avisos en la carpeta del plugin (o no "
                       f"corre: {sembradas.stderr.strip()[-160:]}): es para los demas proyectos")
+
+    # WAINBOX-120: el agente lee lo nuevo del chat antes de actuar, en la skill y en el brief.
+    comprobaciones += 1
+    if not re.search(r"caso nuevos[^.]*(change|cancel)", soporte, re.I):
+        fallos.append(f"{SKILL_SOPORTE}  no manda leer `caso nuevos` antes de proponer: un "
+                      "mensaje posterior puede cambiar o cancelar el pedido")
+    hechas, perdidas = brief_lee_lo_nuevo()
+    comprobaciones += hechas
+    fallos.extend(perdidas)
 
     if fallos:
         print("Se perdio una regla al mudar la doctrina al arnes:", file=sys.stderr)

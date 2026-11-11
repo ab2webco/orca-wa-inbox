@@ -56,7 +56,11 @@ line.
    `"$WA/wa-scope" pending --needs-agent` lists the cases (exit 1 = nothing to do), and
    `"$WA/wa-scope" caso ver <id> --json` gives each one. Messages marked `respondido`
    (or "already answered") are context. **Act only on the messages after the last reply
-   sent**: never answer them again, never repeat work already reported.
+   sent**: never answer them again, never repeat work already reported. Messages marked
+   "(newer than the trigger)" arrived after the one that opened the case. Before you
+   propose, read `"$WA/wa-scope" caso nuevos <id>`: a newer message in the chat can change
+   or cancel what the case asked, so propose on what the chat asks now, never work the
+   chat already called off.
 3. **How it writes there.** `"$WA/wa-scope" voice "<chat_jid>" --json`: obey its `tone`
    to the letter and follow its `instructions`; its `approval` levels say what comes
    back to you. A held reply names its reason codes: `states_status_not_verified` means
