@@ -258,7 +258,7 @@ References added in this section:
 |---|---|---|
 | SLA | `sla_first_reply_minutes`=15 (`wa-scope:2603`); Reports measure first reply, resolution and SLA pass/fail (`wa-scope:10509-10529`); WhatsApp alert when a case passes the goal (`avisa_meta_vencida`, `wa-scope:12667`) | Time in column; an alert for a case stuck in `decision`/`trabajo`/`listo`. The SLA stops at the first outgoing message, so the acknowledgement counts as the reply. Cards show `updated_at`, not time in column (`activity.html:3771`). |
 | Follow-ups | `caso recordar` reminders and snooze (`wa-scope:4117`, `tick_recordatorios` `:4200`); automatic follow-up with four settings (`wa-scope:2608-2611`, `tick_seguimiento` `:4852`) | Reminder, snooze and priority are CLI-only: `CASO_ACCION` has none of them (`acciones.mjs:28-47`). |
-| History | `caso.relacionado` (`wa-scope:551`); the case file carries up to 5 earlier cases of the **same chat** from 14 days (`casos_de_memoria`, `wa-scope:16455`) | Nothing groups cases by person (phone, LID, a group sender's DM). When a chat moves to its LID only `chat_scope` moves (`mueve_entrada`, `wa-scope:9287`); no step moves the old `caso` rows. No customer timeline on the board. |
+| History | `caso.relacionado` (`wa-scope:551`); the case file carries up to 5 earlier cases of the **same chat** from 14 days (`casos_de_memoria`, `wa-scope:16455`) | Nothing groups cases by person (phone, LID, a group sender's DM). When a chat moves to its LID only `chat_scope` moves (`mueve_entrada`, `wa-scope:9286`); no step moves the old `caso` rows. No customer timeline on the board. |
 | Templates | Fixed `ack_text`/`greeting_text` (`wa-scope:2580-2582`), per-chat override, `tone`, `instructions` | No store of reusable replies. Searched template/plantilla/canned/snippet/quick reply: only unrelated skill and harness templates match. |
 | Handoff | `escalar` proposals and the money/credential/commitment floor stop in `decision` with a WhatsApp notice the owner can answer (`wa-scope:12610-12625`); chat modes off/observar/borrador/responder (`wa-scope:82`) | The customer asking for a person is not detected (no such Jev question, `bin/wa_jev.py:238-260`). No "a human took over" state: an owner reply from the phone only quiets the ack (`linea_escribio`, `wa-scope:7639`); the agent keeps drafting on the open case. |
 | Satisfaction | Nothing; closing on "thanks" (`wa-scope:7378`) is the closest | Everything. |
@@ -321,3 +321,54 @@ replies is not possible (7.1).
 **Suggested order:** K1, K2 and K3 first (largest customer-visible gains, two need owner
 wording); K5–K7 together as one board slice; K4 after a short privacy note; K11 last and
 only with the owner's explicit opt-in because of its ban risk.
+
+## 8. Phase 2 Plane items (approved by the owner on 2026-11-11)
+
+The owner approved all fifteen items. Each one was written with the `plane-refinement` skill and
+says where to implement it: file:line anchors, helpers to reuse, the test files to extend, and
+the `npm run check` / `WA_INBOX_SOLO=… npm run shots` commands that prove it. Every owner
+decision is an Open question with its default. All items are in Backlog and use the existing
+labels (`area:*`, `owner-decision`); no taxonomy or project feature was changed. The project still
+has no cycles and no modules, so the estimate is a body section and module/cycle are N/A.
+
+| Row | Plane item | Parent | Priority | Estimate | Relations |
+|---|---|---|---|---|---|
+| Epic | WAINBOX-91 | — | medium | sum | 14 children; related WAINBOX-101 |
+| K1 Human takeover | WAINBOX-92 | WAINBOX-91 | high | M (5) | — |
+| K2 Out-of-hours reply | WAINBOX-93 | WAINBOX-91 | medium | M (6) | related WAINBOX-97 |
+| K3 Catalog orders | WAINBOX-94 | WAINBOX-91 | high | S (1) | related WAINBOX-43, WAINBOX-62 |
+| K4 Customer history | WAINBOX-95 | WAINBOX-91 | medium | S (4) | — |
+| K5 Customer priority | WAINBOX-96 | WAINBOX-91 | medium | S (3) | related WAINBOX-98 |
+| K6 Stuck cases | WAINBOX-97 | WAINBOX-91 | medium | S (2) | related WAINBOX-24, WAINBOX-93 |
+| K7 Case actions | WAINBOX-98 | WAINBOX-91 | medium | S (2) | related WAINBOX-96 |
+| K8 Blocklist | WAINBOX-99 | WAINBOX-91 | medium | M (5) | blocks WAINBOX-103 |
+| K9 Reply templates | WAINBOX-100 | WAINBOX-91 | medium | S (4) | — |
+| K10 Call reply | WAINBOX-101 | WAINBOX-77 | medium | S (3) | blocked by WAINBOX-77; related WAINBOX-91 |
+| K11 Satisfaction check | WAINBOX-102 | WAINBOX-91 | low | M (6) | related WAINBOX-84 |
+| K12 Tidy on close | WAINBOX-103 | WAINBOX-91 | medium | M (5) | blocked by WAINBOX-99; related WAINBOX-83 |
+| K13 Customer profile | WAINBOX-104 | WAINBOX-91 | low | M (5) | — |
+| K14 Location and contact cards | WAINBOX-105 | WAINBOX-91 | low | S (2) | — |
+| K15 Spike: presence | WAINBOX-106 | WAINBOX-91 | low | S (2) | related WAINBOX-72 |
+
+Changes from §7 found while refining:
+
+- **K8 adds the first sidecar command table (`orden`).** Today the only way to make the socket
+  act is the `envio` send queue, whose drainer only calls `sendMessage`
+  (`sidecar/src/envio.js:129`, `sidecar/src/index.js:1003-1024`). K12 reuses that table, so it is
+  blocked by K8.
+- **Baileys never emits `blocklist.set`** (declared at `lib/Types/Events.d.ts:117`, emitted
+  nowhere). K8 reads the list with `fetchBlocklist()` on open and keeps it in step with
+  `blocklist.update`.
+- **Sizes by the rubric:** K4 and K9 score 4 (top of S), not the M that §7 guessed.
+- **Priority** is justified at the end of each item's Estimate section.
+
+**Lint (`plane-refinement --lint`, read back from Plane):** 16 items × 16 rows = 256 rows,
+all PASS (module/cycle noted as N/A inside R14), 0 GAP. The first run found real gaps, and they
+were fixed before this table:
+
+- three FRs without a test case (WAINBOX-93 FR-7, WAINBOX-101 FR-6, WAINBOX-106 D-4);
+- dependency lines that named the epic without its identifier;
+- a title with internal jargon (WAINBOX-95).
+
+During the batch, the Orca runtime dropped the connection three times. The batch could resume,
+and before each retry the list was read back, so no duplicate was created.
