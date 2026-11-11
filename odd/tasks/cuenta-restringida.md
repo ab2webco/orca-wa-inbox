@@ -37,3 +37,4 @@ Q1 (block replies in existing chats too?): kept the default, no. Replies are sti
 - [x] `wa-scope doctor`: `restriction` in JSON and "restricted until <time>" in text
 - [x] `scripts/check-clis`: same code (sidecar vs wa-send), same sentence (wa-send vs doctor), doctor end to end
 - [x] Panel banner + reduced shots (1440 en, 390 es, both themes)
+- [x] `test/panels.test.mjs` banner case (RED on the old panel, GREEN now)

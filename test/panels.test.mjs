@@ -4067,6 +4067,65 @@ titulo('activity.html — dice si la linea esta viva y sobre cuanto actua')
     cero.doc.getElementById('cobertura').className)
 }
 
+// ───────── WAINBOX-75: una linea restringida se ve restringida ─────────
+titulo('activity.html — la linea restringida por WhatsApp muestra su aviso y su fin')
+{
+  // Antes, una linea de negocio restringida se veia "conectada" y sana mientras sus envios
+  // a chats nuevos fallaban con un error generico.
+  const base = { pending: [], recent: [], running: false, syncedAt: '2026-09-23 17:41',
+    mapped: 1, authorized: 1 }
+  const vivo = { connection: 'open', me: '+573000000011', latido: { ts: Date.now(), conectado: true } }
+  const finMs = Date.now() + 2 * 3600 * 1000
+  const hora = new Date(finMs).toTimeString().slice(0, 5)
+  const conRestriccion = (restriccion, idioma = 'es-419') => montar('activity.html',
+    { activity: base, chats: [], sidecar: Object.assign({}, vivo, { restriccion }) }, idioma)
+  const aviso = (m) => m.doc.getElementById('restringida')
+
+  const puesta = await conRestriccion({ bloqueo: { activa: true, tipo: 'BIZ_QUALITY',
+    hasta: finMs, at: Date.now() }, cupo: null })
+  await espera()
+  const a = aviso(puesta)
+  ok('con el bloqueo activo se ve el aviso', !!a && !a.hidden && /restring/i.test(a.textContent),
+    a && a.outerHTML)
+  ok('con su hora de fin', !!a && a.textContent.includes(hora), `${a && a.textContent} / ${hora}`)
+  ok('dice que las respuestas en chats existentes siguen saliendo',
+    !!a && /existentes/i.test(a.textContent), a && a.textContent)
+  ok('y se marca como fallo', !!a && a.className.includes('stale'), a && a.className)
+
+  const levantada = await conRestriccion({ bloqueo: { activa: false, tipo: 'DEFAULT', hasta: null,
+    at: Date.now() }, cupo: null })
+  await espera()
+  ok('levantado, el aviso desaparece', !!aviso(levantada) && aviso(levantada).hidden &&
+    !aviso(levantada).textContent, aviso(levantada) && aviso(levantada).outerHTML)
+
+  const vencida = await conRestriccion({ bloqueo: { activa: true, tipo: 'BIZ_QUALITY',
+    hasta: Date.now() - 60000, at: Date.now() - 3600000 }, cupo: null })
+  await espera()
+  ok('pasado su fin tampoco se ve, aunque storage no se haya enterado',
+    !!aviso(vencida) && aviso(vencida).hidden, aviso(vencida) && aviso(vencida).outerHTML)
+
+  const sin = await montar('activity.html', { activity: base, chats: [], sidecar: vivo }, 'es-419')
+  await espera()
+  ok('sin restriccion no hay aviso', !!aviso(sin) && aviso(sin).hidden,
+    aviso(sin) && aviso(sin).outerHTML)
+
+  const capada = await conRestriccion({ bloqueo: null, cupo: { activa: true, tipo: 'CAPPED',
+    hasta: finMs, total: 50, restante: 0, at: Date.now() } })
+  await espera()
+  ok('el cupo de chats nuevos agotado tambien se avisa, con su fin',
+    !!aviso(capada) && !aviso(capada).hidden && /cupo/i.test(aviso(capada).textContent) &&
+    aviso(capada).textContent.includes(hora), aviso(capada) && aviso(capada).textContent)
+
+  const ingles = await conRestriccion({ bloqueo: { activa: true, tipo: 'BIZ_QUALITY',
+    hasta: finMs, at: Date.now() }, cupo: null }, 'en-US')
+  await espera()
+  ok('en ingles tambien', !!aviso(ingles) && /restricted this line until/.test(aviso(ingles).textContent),
+    aviso(ingles) && aviso(ingles).textContent)
+  ok('y "Linea conectada" sigue diciendo lo suyo al lado',
+    /conectada/i.test(puesta.doc.getElementById('linea').textContent),
+    puesta.doc.getElementById('linea').textContent)
+}
+
 // ───────── "Linea conectada" con el mismo criterio de vida que el panel de config ─────────
 titulo('activity.html — "linea conectada" solo con latido fresco')
 {
