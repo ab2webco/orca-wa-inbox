@@ -191,6 +191,15 @@ RESTRINGIDA_DETALLE = (
     f"the WhatsApp line is restricted (cuenta-restringida), so nothing was sent. "
     f"{RESTRINGIDA_FRASE} Wait for the restriction to end (the panel and `wa-scope doctor` "
     "show until when).")
+# El numero no esta en WhatsApp (WAINBOX-79): el sidecar lo miro con `onWhatsApp` antes de
+# mandar, porque la linea nunca habia hablado con el. No salio nada, y reintentar no sirve:
+# lo que hay que revisar es el numero. Mismo contrato que el de arriba
+# (`MOTIVO_SIN_WHATSAPP` en `sidecar/src/envio.js`), y `scripts/check-clis` los compara.
+SIN_WHATSAPP = "send-not-on-whatsapp"
+MOTIVO_SIN_WHATSAPP = "numero-sin-whatsapp"
+SIN_WHATSAPP_DETALLE = (
+    "that number is not on WhatsApp (numero-sin-whatsapp), so nothing was sent. Check the "
+    "number with the person (country code included) before trying again.")
 # El sidecar late pero no contesto a tiempo. La peticion queda en pie: se vuelve a
 # preguntar con el MISMO --id, que es lo que impide mandar dos veces.
 SIN_VEREDICTO = "send-timeout"
@@ -565,9 +574,12 @@ def esperar(con, req_id, plazo_s):
 
 
 def niega_rechazo(fila):
-    """Un `rechazado`, con su codigo: la linea restringida tiene el suyo."""
+    """Un `rechazado`, con su codigo: la linea restringida y el numero sin WhatsApp tienen
+    el suyo."""
     if fila["motivo"] == MOTIVO_RESTRINGIDA:
         niega(RESTRINGIDA, RESTRINGIDA_DETALLE)
+    if fila["motivo"] == MOTIVO_SIN_WHATSAPP:
+        niega(SIN_WHATSAPP, SIN_WHATSAPP_DETALLE)
     niega(RECHAZADO, f"WhatsApp refused it: {fila['motivo'] or 'no reason given'}. "
                      "Nothing was delivered.")
 
