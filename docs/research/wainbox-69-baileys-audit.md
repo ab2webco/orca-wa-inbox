@@ -238,3 +238,86 @@ Four labels were created: `area:sidecar`, `area:send`, `area:panel`, `owner-deci
   `lib/Utils/validate-connection.js`.
 - Plugin: every `sock.*` and `sock.ev.on(...)` call in `sidecar/src/`.
 - No live account was used and no message was sent.
+
+## 7. Phase 2 — case handling and customer care
+
+Research only, read on 2026-11-10. Two inputs: (a) the Baileys capabilities §2 lists as unused
+but §3 did not rank, and (b) gaps in the plugin's case workflow. Items already open in WAINBOX
+are skipped; when an item extends one, the ticket is named.
+
+References added in this section:
+
+- `wa-scope:N` is `bin/wa-scope` (the case schema lives there, `wa-scope:517-632`, not in
+  `sidecar/src/almacen.js`, which is the capture store).
+- `activity.html:N`, `acciones.mjs:N`, `bin/wa_jev.py:N` are plugin files.
+- `lib/...:N` is the installed Baileys package, as in §1–§3.
+
+### 7.1 What exists today (short)
+
+| Area | Exists | Missing |
+|---|---|---|
+| SLA | `sla_first_reply_minutes`=15 (`wa-scope:2603`); Reports measure first reply, resolution and SLA pass/fail (`wa-scope:10509-10529`); WhatsApp alert when a case passes the goal (`avisa_meta_vencida`, `wa-scope:12667`) | Time in column; an alert for a case stuck in `decision`/`trabajo`/`listo`. The SLA stops at the first outgoing message, so the acknowledgement counts as the reply. Cards show `updated_at`, not time in column (`activity.html:3771`). |
+| Follow-ups | `caso recordar` reminders and snooze (`wa-scope:4117`, `tick_recordatorios` `:4200`); automatic follow-up with four settings (`wa-scope:2608-2611`, `tick_seguimiento` `:4852`) | Reminder, snooze and priority are CLI-only: `CASO_ACCION` has none of them (`acciones.mjs:28-47`). |
+| History | `caso.relacionado` (`wa-scope:551`); the case file carries up to 5 earlier cases of the **same chat** from 14 days (`casos_de_memoria`, `wa-scope:16455`) | Nothing groups cases by person (phone, LID, a group sender's DM). When a chat moves to its LID only `chat_scope` moves (`mueve_entrada`, `wa-scope:9287`); no step moves the old `caso` rows. No customer timeline on the board. |
+| Templates | Fixed `ack_text`/`greeting_text` (`wa-scope:2580-2582`), per-chat override, `tone`, `instructions` | No store of reusable replies. Searched template/plantilla/canned/snippet/quick reply: only unrelated skill and harness templates match. |
+| Handoff | `escalar` proposals and the money/credential/commitment floor stop in `decision` with a WhatsApp notice the owner can answer (`wa-scope:12610-12625`); chat modes off/observar/borrador/responder (`wa-scope:82`) | The customer asking for a person is not detected (no such Jev question, `bin/wa_jev.py:238-260`). No "a human took over" state: an owner reply from the phone only quiets the ack (`linea_escribio`, `wa-scope:7639`); the agent keeps drafting on the open case. |
+| Satisfaction | Nothing; closing on "thanks" (`wa-scope:7378`) is the closest | Everything. |
+| Out of hours | Per-chat `hours` ('L-V 08:00-18:00') and `timezone` are **stored but read by nothing** (`wa-scope:2031`, `:2321`); quiet hours only silence owner notices and follow-ups (`wa-scope:2620`, `:13816`) | Business hours, away reply, pausing the SLA clock. The ack is deliberately timeless and the fixed floor checks it (`wa-scope:2576-2579`, `scripts/check-casos`). |
+| Priority | Case priority urgent…none (`wa-scope:183`), chip and `.urgente` style on cards (`activity.html:3467`, `:3783`); Jev `urgency_pressure` flag | No priority per chat or number; it starts as `none` at ingest (`wa-scope:7362`). The board orders open cases by `updated_at` only (`wa-scope:10229-10230`). No panel action to set it. |
+
+Baileys facts this section relies on, checked in the installed 7.0.0-rc14:
+
+- **Quick replies are write-only.** `addOrEditQuickReply` / `removeQuickReply` exist
+  (`lib/Socket/chats.d.ts:79-80`, patch built at `lib/Utils/chat-utils.js:562-573`), but
+  `processSyncAction` (`lib/Utils/chat-utils.js:660-850`) has no `quickReplyAction` branch.
+  The owner's existing quick replies on the phone cannot be read, only overwritten.
+- **Catalog orders arrive empty.** `textoDe` falls back to `descripcionDe`
+  (`sidecar/src/mensajes.js:278`), which has no branch for `orderMessage` or
+  `productMessage` and returns `''` (`mensajes.js:306-345`). A cart sent from a Business
+  catalog becomes a row with no body. `getOrderDetails(orderId, token)` (`lib/Socket/business.d.ts:6`)
+  can fetch the line items.
+- **Business hours are readable.** `getBusinessProfile(jid)` parses `business_hours`
+  (`lib/Socket/chats.js:363-365`), so a Business line's own hours, set in the WhatsApp Business
+  app, can seed the out-of-hours rule.
+- **`rejectCall(callId, callFrom)`** sends a `reject` stanza (`lib/Socket/messages-recv.js:366-386`);
+  **`createCallLink('audio'|'video')`** returns a token (`lib/Socket/chats.js:585-602`).
+- **`chatModify`** supports archive, pin, mute, star and markRead (`lib/Types/Chat.d.ts:63-103`);
+  archive needs `lastMessages` (the chat's last key and timestamp), which the store has.
+- **Location and contact cards are already readable** as text with coordinates and the first
+  vCard phone (`mensajes.js:287-300`, `:319-334`). The gap is structure, not loss.
+- **Presence:** `presenceSubscribe` exists (`chats.d.ts:40`). That WhatsApp only delivers a
+  contact's presence while our client is "available" (we connect with `markOnlineOnConnect:
+  false`, `index.js:345`) is **not verified here**; K15 starts with that check.
+
+### 7.2 Ranked backlog
+
+Same columns as §3, plus **Ban risk**: how much the change raises the chance that WhatsApp
+restricts or bans the line. Unsolicited or automated outbound messages are what raises it;
+reading, and replying once inside a conversation the customer started, do not.
+
+| Rank | Item | Value | Effort | Risk | Ban risk | Tag |
+|---|---|---|---|---|---|---|
+| K1 | **A human took over / the customer asks for a person.** (i) Jev gets a question "the customer asks to talk to a person"; a yes escalates the case to `decision` with the usual notice. (ii) When the owner writes from the phone in a chat with an open case, the case gets a `humano` hold for N hours (setting): the agent stops drafting, the ack and follow-up stay quiet, the board shows "you are handling this". | High: the agent stops talking over the owner, and a frustrated customer reaches him | M | Low (the floor already holds sends; this only holds more) | None | new; owner decision (the hold length) |
+| K2 | **Out-of-hours reply.** Read the per-chat `hours`/`timezone` that are already stored, with a line default from the Business profile's own hours (`getBusinessProfile`). Outside hours: the ack becomes an away text that names when the line opens again, the SLA clock pauses, and the case waits for opening time unless Jev flags urgency. | High: customers know when they will hear back; the SLA stops counting nights | M | Medium: the fixed floor requires a timeless ack today, so the away text needs its own floor check | Low: one reply per case, inside a conversation the customer opened | new; owner decision (away text) |
+| K3 | **Catalog orders and product questions arrive with content.** Render `orderMessage` as `[order] N items, total` and `productMessage` as `[product] name, price`; optionally fetch the lines with `getOrderDetails`. | High on lines that sell from a catalog (today the order is an empty row); none elsewhere | S (render) / M (order lines) | Low (read-only) | None | new; related #43, #62 |
+| K4 | **Customer history by person, not by chat.** Match earlier cases by phone and LID (the `lidPnMappings` the store already keeps), move `caso` rows when a chat moves to its LID, and show a customer timeline in the case detail. A group sender's DM cases are shown only to the owner, never in the group's case file. | High: the agent stops asking what the customer already told us | M | Medium: privacy between a group and a DM must go through the scope gate | None | new |
+| K5 | **Priority by customer.** A `priority` per chat and per number (Settings), copied to the case at ingest; open cases sorted by priority, then age; a priority action on the card; an optional tighter SLA per priority. | Medium-high | S–M | Low | None | new |
+| K6 | **Time in column and stuck alerts.** Show time in the current column on the card (`stage_at` is already sent), alert the owner when a case sits in `decision`, `trabajo` or `listo` beyond a setting, and add a second SLA figure, "first real answer", that ignores the ack. | Medium-high: what is stuck becomes visible | S | Low; alert noise, so stuck alerts go into one notice per tick | None | new; related #24 (digest) |
+| K7 | **Remind, snooze and priority from the panel.** Add them to `CASO_ACCION` (`acciones.mjs:28-47`); the CLI commands already exist. | Medium | S | Low | None | new; pairs with K5 |
+| K8 | **Spam: blocked numbers never open cases; block from a case.** Read `fetchBlocklist` on open and listen to `blocklist.set`/`blocklist.update`, so a blocked number never wakes the agent. An owner-only "block as spam" action calls `updateBlockStatus` after a confirmation. | Medium: no agent cost on spam | S (read) + S (action) | Medium for the action: a wrong block silences a customer | Lowers it (fewer replies to spam) | new; owner decision (the action) |
+| K9 | **Reply templates.** A plugin-side store of approved snippets (hours, address, payment steps), editable in Settings; the agent cites a template id in its proposal so the owner sees reused text. Optional, later: mirror them to the phone's Business quick replies (write-only, see 7.1, so the plugin must own the list). | Medium: consistent answers, faster drafts | M | Medium: a stale price in a template; the money floor still applies to every send | None | new; owner decision (mirror to phone) |
+| K10 | **Answer a call with a text.** On top of WAINBOX-77: optionally `rejectCall` and send one short text ("we answer here by chat"), or a call link from `createCallLink` when the owner wants to call back at a set time. | Medium on lines that get calls | S after #77 | Medium: rejecting is customer-visible | Medium: an automatic message to every caller, including spam callers; cap one per number per day | child of #77; owner decision |
+| K11 | **Satisfaction check after close.** One question after a case closes as attended ("Was this solved? 1–5"), as text parsed by the agent (a poll needs WAINBOX-84's vote decryption). Stored in `caso_evento`, shown in Stats. | Medium | M | Low | **Medium-high**: an unsolicited message after the conversation ended is what gets reported. Only inside 24 h of the customer's last message, once per customer per 30 days, opt-in per chat | new; owner decision |
+| K12 | **Tidy the owner's phone on close.** Archive the chat (`chatModify` archive) when its case closes, star the message that carries the final answer, optional mute for noisy groups. A new customer message unarchives it per the phone's "Keep chats archived" setting. | Medium for owners who live in the phone | M | Medium: writes to the owner's app state; surprising if it is not asked for | Low (normal app-state traffic); rate-limit bulk closes | new; owner decision; related #83 |
+| K13 | **Who the customer is.** Profile picture and, for Business contacts, name, category and description (`getBusinessProfile`, `profilePictureUrl`, `fetchStatus`) on the case, fetched on open and cached with a TTL, never stored as files. | Low-medium | S | Low | Low if cached; one query per contact per day at most | new |
+| K14 | **Structured location and contact cards.** A map link on the case for a location; for a shared contact, "authorize this number" so a referral becomes a chat in one step. | Low | S | Low | None | new |
+| K15 | **Customer presence on the case** ("online", "typing"). Starts with a spike: does presence arrive while the line stays unavailable? If it needs the line online, it conflicts with WAINBOX-72's decision. | Low | S (spike) | Medium: may require showing the line online | Low-medium: subscribing to many contacts' presence is a bot pattern | new; owner decision |
+
+**Not recommended:** browsing or sending the catalog (`getCatalog`, `getCollections`,
+`product*`) and `updateBussinesProfile`; the agent quoting catalog prices would cross the money
+floor on every reply. Call links on their own (only inside K10). Reading the phone's quick
+replies is not possible (7.1).
+
+**Suggested order:** K1, K2 and K3 first (largest customer-visible gains, two need owner
+wording); K5–K7 together as one board slice; K4 after a short privacy note; K11 last and
+only with the owner's explicit opt-in because of its ban risk.
