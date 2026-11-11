@@ -4622,6 +4622,18 @@ const verbo = (llamada) => llamada[1]
   const reabrir = f.scope().filter((x) => verbo(x) === 'mover')[4]
   ok('Reabrir lo devuelve a recibido', a && a.ok === true && a.code === 'reabierto' &&
     reabrir[3] === 'recibido', JSON.stringify([a, reabrir]))
+
+  // "Devolver al agente" (toma humana, WAINBOX-92): termina la toma del dueno ya. El actor
+  // lo pone el worker, aunque el pedido diga otro.
+  const h = await pideCaso(orca, { action: 'soltar-humano', caseId: 7, actor: 'agente' })
+  const soltar = f.scope().find((x) => verbo(x) === 'humano')
+  ok('Devolver al agente corre caso humano <id> --soltar --actor dueno',
+    h && h.ok === true && h.code === 'soltado' && soltar && soltar[2] === '7' &&
+    soltar.includes('--soltar') && soltar[soltar.indexOf('--actor') + 1] === 'dueno' &&
+    !soltar.includes('agente'), JSON.stringify([h, soltar]))
+  const hMalo = await pideCaso(orca, { action: 'soltar-humano', caseId: 'siete' })
+  ok('un id que no es un caso no llega al CLI', hMalo && hMalo.ok === false &&
+    f.scope().filter((x) => verbo(x) === 'humano').length === 1, JSON.stringify(hMalo))
   ok('ninguna de esas toca WhatsApp', f.send().length === 0)
   apagar()
 }

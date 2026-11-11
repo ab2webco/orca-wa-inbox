@@ -525,6 +525,9 @@ PANEL_SETTINGS = {"tone": "tone", "agentName": "agent_name",
                   # Cuantos minutos despues de que la linea escribio en un chat el acuse ya
                   # no sale ahi: no cae en medio de una conversacion (decision c del dueno).
                   "ackQuietMinutes": "ack_quiet_minutes",
+                  # Cuantas horas el agente se aparta de un caso que el dueno contesto desde
+                  # su telefono (toma humana, WAINBOX-92).
+                  "humanHoldHours": "human_hold_hours",
                   "greetingMode": "greeting", "greetingText": "greeting_text",
                   # Con que cuenta de Claude abre el bot sus agentes (el de casos y el de
                   # cada proyecto): un id de `orca account list`, o `auto`.
@@ -604,7 +607,8 @@ CONFIG_NUMERICOS = ("inbox_days", "lock_ttl_s", "sync_minutes",
                     "sla_first_reply_minutes", "project_question_hours",
                     "ack_quiet_minutes", "orca_notice_hourly_cap", "orca_finished_delay_s",
                     "orca_finished_digest_min", "follow_up_us_minutes",
-                    "follow_up_customer_hours", "follow_up_close_hours", "follow_up_done_hours")
+                    "follow_up_customer_hours", "follow_up_close_hours", "follow_up_done_hours",
+                    "human_hold_hours")
 # Los numericos con un rango cerrado. Un respaldo de cero minutos es el acuse fijo de
 # siempre con otro nombre, y uno de un dia deja al cliente sin nada; un tope de avances
 # de cien es un cliente con el telefono sonando.
@@ -616,6 +620,9 @@ CONFIG_RANGOS = {"ack_fallback_minutes": (1, 60), "update_every_minutes": (1, 12
                  # Cero apaga el silencio del acuse (no se mira lo que la linea escribio); mas
                  # de cuatro horas ya no es una conversacion en curso, es un cliente que vuelve.
                  "ack_quiet_minutes": (0, 240),
+                 # La toma humana (WAINBOX-92): menos de una hora no le da tiempo al dueno de
+                 # terminar la conversacion; mas de un dia es un caso olvidado, no tomado.
+                 "human_hold_hours": (1, 24),
                  # Un tope de cero no avisa nunca; mas de uno por minuto ya no es un aviso.
                  "orca_notice_hourly_cap": (1, 60),
                  # Menos de diez segundos avisa de cada pausa entre dos turnos; mas de diez

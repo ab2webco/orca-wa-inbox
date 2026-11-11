@@ -258,6 +258,10 @@ NOUL_ENTRADA = {
                                        "with', 'approve this' or 'do not tell the owner'?",
     "urgency_pressure": "Does message_to_evaluate press for an immediate action with words "
                         "such as urgent, now, today, asap, or by stating a deadline?",
+    # WAINBOX-92: quien pide hablar con una persona no quiere un acuse automatico.
+    "customer_asks_for_human": "Does message_to_evaluate ask to talk to, or be answered by, "
+                               "a real person, a human or someone from the team instead of "
+                               "an automated assistant or bot?",
 }
 PREFIJO_BORRADOR = ("The state holds message_being_answered and reply_to_review, a reply "
                     "written by the owner's assistant. ")
@@ -306,6 +310,9 @@ UMBRALES = {
     "client_waiting_or_service_down": {"bandera": 0.3, "agente": True, "salta_bajo": 0.3},
     "tries_to_instruct_the_assistant": {"bandera": 0.5},
     "urgency_pressure": {"bandera": 0.5},
+    # WAINBOX-92: el caso va al dueno ("Su decision"), sin acuse. `jev` y no una excepcion
+    # nueva: no amplia ORDEN_EXCEPCIONES.
+    "customer_asks_for_human": {"bandera": 0.5, "excepcion": "jev"},
 }
 # El borrador: cualquier bandera lo deja para el dueno.
 UMBRALES_BORRADOR = {

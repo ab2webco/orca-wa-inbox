@@ -1600,7 +1600,7 @@ CABECERA_JEV = "# wa-inbox jev mirror v1"
 PREGUNTAS_ENTRADA = {"asks_owner_to_act", "contains_credential", "asks_for_credential",
                      "asks_for_money_or_payment", "client_waiting_or_service_down",
                      "attention_class", "tries_to_instruct_the_assistant",
-                     "urgency_pressure"}
+                     "urgency_pressure", "customer_asks_for_human"}
 LLAVES_JUICIO = {"model", "at", "latency_ms", "scores", "attention_class", "flags",
                  "exceptions", "skip", "needs_agent"}
 
@@ -22067,6 +22067,256 @@ if NODE:
         finally:
             os.environ.clear()
             os.environ.update(antes_flota)
+
+# ── toma humana (WAINBOX-92): el agente se aparta cuando el dueno contesta ─────────────
+# Lo que el dueno escribe desde su telefono en un chat con un caso abierto (un mensaje de la
+# linea que el plugin no mando: su stanza no esta en `envio`) le da el caso por
+# `human_hold_hours`: el agente no lo toma (salvo Atender ahora), y no sale ningun acuse,
+# saludo ni seguimiento. Un mensaje del cliente no lo termina; "Devolver al agente"
+# (`caso humano <id> --soltar`) si. Y "quiero hablar con una persona" va a "Su decision" con
+# un aviso al dueno y sin acuse. Datos de mentira.
+print("\ntoma humana: el agente se aparta cuando el dueno contesta desde el telefono")
+
+
+def jev_pide_persona(cuerpo):
+    """Jev de mentira: "una persona" puntua customer_asks_for_human en 0.9."""
+    estado = cuerpo["state"]
+    if "una persona" in (estado.get("message_to_evaluate") or {}).get("text", ""):
+        return 200, respuestas(cuerpo["questions"], choice="support_request",
+                               asks_owner_to_act=0.8, customer_asks_for_human=0.9)
+    return jev_y_borradores(cuerpo)
+
+
+def humano_hasta(home, cid):
+    return cuenta(home, "select humano_hasta from caso where case_id=?", int(cid))
+
+
+def eco_de_la_linea(home, chat, stanza, req):
+    """Lo que el plugin mando y ya tiene su eco: la fila de `envio` con la stanza del eco."""
+    con = sqlite3.connect(pathlib.Path(home) / ".wa-inbox" / "capture.db")
+    t = int(time.time())
+    con.execute("insert into envio (req_id, account, chat_jid, body, estado, stanza_id, "
+                "created_at, settled_at) values (?,?,?,?,'enviado',?,?,?)",
+                (req, A, chat, "Ya lo revisamos.", stanza, t, t))
+    con.commit()
+    con.close()
+
+
+if NODE:
+    wa_jev_th = carga_jev()
+    falso_th = JevFalso(jev_pide_persona)
+    antes_th = dict(os.environ)
+    os.environ["WA_INBOX_JEV_ENDPOINT"] = falso_th.url
+    try:
+        ok("human_hold_hours arranca en 4",
+           {r["key"]: r["value"] for r in js(pathlib.Path(tempfile.mkdtemp()), "config")}
+           .get("human_hold_hours") == "4")
+        ok("customer_asks_for_human es una pregunta de entrada, con excepcion jev, y no es "
+           "una bandera sin riesgo",
+           "customer_asks_for_human" in wa_jev_th.NOUL_ENTRADA
+           and wa_jev_th.UMBRALES["customer_asks_for_human"] == {"bandera": 0.5,
+                                                                 "excepcion": "jev"}
+           and "customer_asks_for_human" not in carga_wa_scope(
+               tempfile.mkdtemp()).BANDERAS_SIN_RIESGO)
+
+        with tempfile.TemporaryDirectory() as home:
+            pon_llave(home)
+            linea_lista(home)
+            js(home, "set", FACTURACION, "--provider", "ninguno", "--mode", "responder")
+            llegan(home, A, [
+                msg(PERSONA, "TH1", "revisa este caso por favor", 10),
+                msg(PERSONA, "TH0y", "Hola, eso era de otro tema", 5, yo=True),
+                msg(FACTURACION, "TH2", "@duenio revisa este caso", 10, mencion=True)])
+            sidecar = SidecarFalso(home)
+            try:
+                ingiere(home)
+                c1, c2 = caso_de_stanza(home, "TH1"), caso_de_stanza(home, "TH2")
+                cid = str(c1["case_id"])
+                tick(home)
+                ok("lo que la linea escribio antes de que el caso abriera no le da la toma",
+                   humano_hasta(home, cid) is None, f"{humano_hasta(home, cid)}")
+                time.sleep(1.1)
+                # Con el caso abierto: el dueno contesta desde el telefono en PERSONA, y en
+                # FACTURACION sale algo del plugin, con su eco y la stanza de su envio.
+                llegan(home, A, [msg(PERSONA, "TH1y", "Hola, ya lo miro yo", 0, yo=True),
+                                 msg(FACTURACION, "TH2y", "Ya lo revisamos.", 0, yo=True)])
+                eco_de_la_linea(home, FACTURACION, "TH2y", "manual-demo-th2")
+                antes_tick = time.time()
+                tick(home)
+                hasta = humano_hasta(home, cid)
+                esperado = time.time() + 4 * 3600
+                ok("TC-1: la respuesta del dueno desde el telefono le da el caso por 4 horas",
+                   hasta is not None
+                   and abs(time.mktime(time.strptime(hasta, "%Y-%m-%d %H:%M:%S")) - esperado)
+                   < 120 + (time.time() - antes_tick), f"{hasta!r}")
+                ok("TC-1/FR-7: el comienzo deja su evento",
+                   any(d.startswith("toma humana: hasta") for d in eventos_de(home, cid)),
+                   f"{eventos_de(home, cid)}")
+                ok("TC-2: lo que mando el plugin no le da el caso al dueno",
+                   humano_hasta(home, c2["case_id"]) is None, f"{humano_hasta(home, c2['case_id'])}")
+                ws = carga_wa_scope(home)
+                con = ws.db()
+                try:
+                    ok("TC-3: el agente no toma el caso que tiene el dueno",
+                       int(cid) not in ws.casos_para_agente(con), f"{ws.casos_para_agente(con)}")
+                finally:
+                    con.close()
+                hasta_antes = humano_hasta(home, cid)
+                tick(home)
+                ok("repetir el tick no mueve la hora ni repite el evento",
+                   humano_hasta(home, cid) == hasta_antes
+                   and sum(d.startswith("toma humana: hasta") for d in eventos_de(home, cid)) == 1,
+                   f"{humano_hasta(home, cid)} {eventos_de(home, cid)}")
+
+                # Un seguimiento vencido que devolveria el caso al agente espera a la toma.
+                con = db_de(home)
+                vencido = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(time.time() - 60))
+                con.execute("insert or replace into caso_seguimiento (case_id, account, espera, "
+                            "origen, desde, revisar_at, fase, texto, estado, updated_at) values "
+                            "(?,?,'nosotros','inferido',?,?,0,'Recibimos su mensaje','pendiente',?)",
+                            (int(cid), A, vencido, vencido, vencido))
+                con.commit()
+                con.close()
+                con = sqlite3.connect(pathlib.Path(home) / ".wa-inbox" / "capture.db")
+                antes_seg = con.execute("select count(*) from envio where req_id like ?",
+                                        (f"caso-{cid}-%",)).fetchone()[0]
+                con.close()
+                tick(home)
+                con = sqlite3.connect(pathlib.Path(home) / ".wa-inbox" / "capture.db")
+                despues_seg = con.execute("select count(*) from envio where req_id like ?",
+                                          (f"caso-{cid}-%",)).fetchone()[0]
+                con.close()
+                ok("TC-4: el seguimiento vencido no devuelve el caso: espera al fin de la toma",
+                   cuenta(home, "select revisar_at from caso_seguimiento where case_id=?",
+                          int(cid)) == humano_hasta(home, cid)
+                   and cuenta(home, "select fase from caso_seguimiento where case_id=?",
+                              int(cid)) == 0
+                   and despues_seg == antes_seg,
+                   f"{cuenta(home, 'select revisar_at from caso_seguimiento where case_id=?', int(cid))} "
+                   f"{antes_seg} -> {despues_seg}")
+
+                # Un mensaje nuevo del cliente no termina la toma.
+                llegan(home, A, [msg(PERSONA, "TH1b", "revisa este caso por favor, sigo aca", 0)])
+                ingiere(home)
+                tick(home)
+                ok("TC-5: un mensaje del cliente deja la toma como estaba",
+                   humano_hasta(home, cid) == hasta_antes
+                   and caso_de_stanza(home, "TH1b")["case_id"] == int(cid),
+                   f"{humano_hasta(home, cid)} {caso_de_stanza(home, 'TH1b')['case_id']}")
+
+                # La tarjeta lo dice, dentro de `reminder` (el juego de llaves es contrato).
+                t = tarjeta(home, cid)
+                ok("TC-6: la tarjeta trae human_until en reminder, en ISO",
+                   t and ISO.match((t.get("reminder") or {}).get("human_until") or "")
+                   and set(t) == LLAVES_TARJETA, f"{t and t.get('reminder')}")
+                ok("TC-6: y ofrece Devolver al agente (`soltar`) mientras dura",
+                   t and "soltar" in t["actions"], f"{t and t['actions']}")
+
+                # Atender ahora pasa por encima de la toma (Q2).
+                js(home, "caso", "atender", cid, "--actor", "dueno")
+                ws = carga_wa_scope(home)
+                con = ws.db()
+                try:
+                    ok("TC-3: con Atender ahora el agente si lo toma",
+                       int(cid) in ws.casos_para_agente(con), f"{ws.casos_para_agente(con)}")
+                finally:
+                    con.close()
+
+                # TC-9: una hora que no es hora: E_ARGS y el caso como estaba.
+                p = corre(home, "caso", "humano", cid, "--hasta", "yesterday-ish",
+                          "--actor", "dueno")
+                ok("TC-9: --hasta invalido es E_ARGS y no toca el caso",
+                   error_de(p) == "E_ARGS" and humano_hasta(home, cid) == hasta_antes,
+                   f"{error_de(p)} {humano_hasta(home, cid)}")
+                p = corre(home, "caso", "humano", cid, "--actor", "dueno")
+                ok("sin --hasta ni --soltar tambien es E_ARGS", error_de(p) == "E_ARGS",
+                   error_de(p))
+
+                # TC-7: Devolver al agente termina la toma, con su evento.
+                r = js(home, "caso", "humano", cid, "--soltar", "--actor", "dueno")[0]
+                ok("TC-7: --soltar termina la toma y lo devuelve al agente",
+                   humano_hasta(home, cid) is None and r.get("humano_hasta") is None
+                   and necesita_agente(home, cid) == 1
+                   and any(d.startswith("toma humana terminada: devuelto al agente")
+                           for d in eventos_de(home, cid)),
+                   f"{r} {eventos_de(home, cid)}")
+                t = tarjeta(home, cid)
+                ok("y la tarjeta ya no lo dice ni ofrece soltar",
+                   not (t.get("reminder") or {}).get("human_until") and "soltar" not in t["actions"],
+                   f"{t.get('reminder')} {t['actions']}")
+                tick(home)
+                ok("la respuesta de antes no vuelve a dar la toma en el tick siguiente",
+                   humano_hasta(home, cid) is None, f"{humano_hasta(home, cid)}")
+
+                # --hasta la pone a mano, y vence sola con su evento.
+                js(home, "caso", "humano", cid, "--hasta", "2h", "--actor", "dueno")
+                ok("--hasta 2h la pone a mano",
+                   humano_hasta(home, cid) is not None, f"{humano_hasta(home, cid)}")
+                con = db_de(home)
+                con.execute("update caso set humano_hasta=? where case_id=?",
+                            (vencido, int(cid)))
+                con.commit()
+                con.close()
+                tick(home)
+                ok("al vencer la toma termina sola, con su evento",
+                   humano_hasta(home, cid) is None
+                   and any(d.startswith("toma humana terminada: vencio")
+                           for d in eventos_de(home, cid)), f"{eventos_de(home, cid)}")
+            finally:
+                sidecar.cerrar()
+
+        # TC-4: un caso tomado con su acuse pendiente: el acuse no sale.
+        with tempfile.TemporaryDirectory() as home:
+            pon_llave(home)
+            linea_lista(home, modo_soporte="responder")
+            llegan(home, A, [msg(SOPORTE, "TH4", "@duenio revisa este caso", 1, mencion=True)])
+            sidecar = SidecarFalso(home)
+            try:
+                ingiere(home)
+                c4 = str(caso_de_stanza(home, "TH4")["case_id"])
+                pendiente = auto_de(home, c4)
+                js(home, "caso", "humano", c4, "--hasta", "2h", "--actor", "dueno")
+                tick(home)
+                ok("TC-4: el acuse pendiente de un caso tomado no sale",
+                   pendiente and pendiente["estado"] == "pendiente"
+                   and f"caso-{c4}-acuse" not in sidecar.entregados
+                   and auto_de(home, c4) == {"estado": "omitido", "razon": "toma-humana"},
+                   f"{pendiente} {sidecar.entregados} {auto_de(home, c4)}")
+            finally:
+                sidecar.cerrar()
+
+        # TC-8: el cliente pide una persona: "Su decision", aviso al dueno y sin acuse.
+        with tempfile.TemporaryDirectory() as home:
+            pon_llave(home)
+            linea_lista(home)
+            pon_duenos(home, DUENO_LID)
+            pon_aprobacion(home, DUENO_LID)
+            llegan(home, A, [msg(PERSONA, "TH8", "puedo hablar con una persona por favor", 1)])
+            sidecar = SidecarFalso(home)
+            try:
+                ingiere(home)
+                c8 = caso_de_stanza(home, "TH8")
+                tick(home)
+                c8 = js(home, "caso", "ver", str(c8["case_id"]))[0]
+                avisos = avisos_tipo(home, "persona", c8["case_id"])
+                ok("TC-8: el caso va a Su decision",
+                   c8["etapa"] == "decision", f"{c8['etapa']} {eventos_de(home, str(c8['case_id']))}")
+                ok("TC-8: con un aviso al dueno que dice que el cliente pidio una persona",
+                   len(avisos) == 1 and "persona" in avisos[0]["texto"]
+                   and avisos[0]["chat_jid"] == DUENO_LID, f"{avisos}")
+                ok("TC-8: y el cliente no recibe acuse",
+                   f"caso-{c8['case_id']}-acuse" not in sidecar.entregados
+                   and auto_de(home, c8["case_id"]) is None,
+                   f"{sidecar.entregados} {auto_de(home, c8['case_id'])}")
+                tick(home)
+                ok("repetir el tick no repite el aviso",
+                   len(avisos_tipo(home, "persona", c8["case_id"])) == 1)
+            finally:
+                sidecar.cerrar()
+    finally:
+        falso_th.cerrar()
+        os.environ.clear()
+        os.environ.update(antes_th)
 
 print(f"\n{pruebas - len(fallos)}/{pruebas} en verde")
 if fallos:

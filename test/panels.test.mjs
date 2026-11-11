@@ -6127,6 +6127,63 @@ titulo('activity.html — casos-cli K10: recordatorios y posponer en la tarjeta'
   ok('una tarjeta sin recordatorio no lleva la linea', !doc.querySelector('.card-recordatorio'))
 }
 
+titulo('activity.html — WAINBOX-92: la toma humana en la tarjeta y Devolver al agente')
+{
+  const hasta = new Date(Date.now() + 3 * 3600000)
+  const hora = (idioma) => hasta.toLocaleTimeString(idioma, { hour: '2-digit', minute: '2-digit' })
+  const tomado = tarjeta({ case_id: 21, stage: 'clasificado', proposal: null, exceptions: [],
+    actions: ['atender', 'ignorar', 'cerrar', 'soltar'],
+    jev: { attention_class: 'support_request', flags: ['customer_asks_for_human'], skip: false },
+    reminder: { at: null, snoozed_until: null, human_until: hasta.toISOString() }, events: [
+      { de: null, a: 'recibido', actor: 'automatizacion', que: 'message', at: hace(50 * 60000) },
+      { de: 'recibido', a: 'recibido', actor: 'jev', que: 'asked_for_person', at: hace(45 * 60000) },
+      { de: 'recibido', a: 'recibido', actor: 'dueno', que: 'human_hold', at: hace(40 * 60000) },
+      { de: 'recibido', a: 'recibido', actor: 'dueno', que: 'human_hold_ended', at: hace(30 * 60000) }] })
+  for (const [idioma, linea, hist, bandera, boton] of [
+    ['es-419', /Lo atiende usted hasta/, [/el cliente pidio una persona/, /lo atiende el dueno/,
+      /devuelto al agente/], /pide hablar con una persona/, 'Devolver al agente'],
+    ['en-US', /You are handling this until/, [/the customer asked for a person/,
+      /the owner is handling it/, /back to the agent/], /asks to talk to a person/,
+    'Return to the agent'],
+    ['pt-BR', /Atendido por voce ate/, [/o cliente pediu uma pessoa/, /o dono esta atendendo/,
+      /devolvido ao agente/], /pede para falar com uma pessoa/, 'Devolver ao agente']]) {
+    const { doc } = await abrirTablero({ board: tablero([tomado]) }, idioma)
+    const enTarjeta = doc.querySelector('.card[data-case="21"] .card-toma')
+    ok(`${idioma}: la tarjeta dice que lo atiende el dueno y hasta que hora, en texto`,
+      enTarjeta && linea.test(enTarjeta.textContent) && enTarjeta.textContent.includes(hora(idioma)),
+      enTarjeta ? enTarjeta.textContent : 'sin linea')
+    const det = abrirDetalle(doc, 21)
+    const enDetalle = det.querySelector('.card-toma')
+    ok(`${idioma}: el detalle tambien`, enDetalle && linea.test(enDetalle.textContent),
+      enDetalle ? enDetalle.textContent : 'sin linea')
+    const filas = [...det.querySelectorAll('.det-hist li')].map((li) => li.textContent)
+    ok(`${idioma}: la historia dice la toma y el pedido en palabras`,
+      hist.every((r) => filas.some((f) => r.test(f))), JSON.stringify(filas))
+    ok(`${idioma}: la bandera de Jev se dice en palabras`, bandera.test(det.textContent),
+      det.textContent.slice(0, 400))
+    ok(`${idioma}: el detalle ofrece Devolver al agente`,
+      botonDe(doc, 21, 'soltar')?.textContent === boton, botonDe(doc, 21, 'soltar')?.textContent)
+  }
+  const sinToma = tarjeta({ case_id: 22, stage: 'clasificado', proposal: null, exceptions: [],
+    actions: ['atender', 'cerrar', 'soltar'], reminder: { at: null, snoozed_until: null, human_until: null } })
+  const vencida = tarjeta({ case_id: 23, stage: 'clasificado', proposal: null, exceptions: [],
+    actions: ['atender', 'cerrar'],
+    reminder: { at: null, snoozed_until: null, human_until: new Date(Date.now() - 60000).toISOString() } })
+  const { doc } = await abrirTablero({ board: tablero([sinToma, vencida]) })
+  ok('sin toma (o ya vencida) no hay linea', !doc.querySelector('.card-toma'))
+  ok('ni Devolver al agente, aunque `actions` lo traiga', !botonDe(doc, 22, 'soltar') && !botonDe(doc, 23, 'soltar'))
+
+  const w = conWorker({ ok: true, code: 'soltado' })
+  const m = await abrirConWorker([tomado], w)
+  botonDe(m.doc, 21, 'soltar').click()
+  await hastaPanel(() => w.pedidos.length === 1)
+  ok('Devolver al agente deja UN pedido soltar-humano con el caso y nada mas',
+    w.pedidos[0] && w.pedidos[0].action === 'soltar-humano' && w.pedidos[0].caseId === 21 &&
+    Object.keys(w.pedidos[0]).sort().join() === 'action,at,caseId,id', JSON.stringify(w.pedidos))
+  ok('y dice que volvio al agente', await hastaPanel(() =>
+    /vuelve al agente/.test(mensajeDe(m.doc, 21)?.textContent || '')), mensajeDe(m.doc, 21)?.textContent)
+}
+
 titulo('activity.html — seguimiento-casos S4: lo que espera el caso y su marca de cierre')
 {
   const pronto = new Date(Date.now() + 24 * 3600000).toISOString()

@@ -552,6 +552,11 @@ create table if not exists caso (
   -- Hasta cuando el dueno lo pospuso (casos-cli, K10): fuera de la lista y del agente
   -- hasta esa hora local; un mensaje nuevo del cliente lo termina antes.
   pospuesto_hasta text,
+  -- Hasta cuando el caso lo atiende el dueno en persona (toma humana, WAINBOX-92): lo que
+  -- escribio desde su telefono en el chat, o `caso humano --hasta`. Mientras tanto el agente
+  -- no lo toma (salvo Atender ahora) y no sale ningun acuse, saludo ni seguimiento. Un
+  -- mensaje del cliente no lo termina, a diferencia de `pospuesto_hasta`.
+  humano_hasta text,
   created_at text not null,
   updated_at text not null
 );
@@ -1940,6 +1945,8 @@ def migrate(con):
         con.execute("alter table caso add column relacionado integer")
     if "pospuesto_hasta" not in caso_cols:
         con.execute("alter table caso add column pospuesto_hasta text")
+    if "humano_hasta" not in caso_cols:
+        con.execute("alter table caso add column humano_hasta text")
     # El archivo de un avance (caso-adjuntos): una base de antes gana la columna.
     if "adjunto" not in {r["name"] for r in con.execute("pragma table_info(caso_avance)")}:
         con.execute("alter table caso_avance add column adjunto text")
@@ -2593,6 +2600,9 @@ DEFAULT_CONFIG = {
     # `ack_quiet_minutes` antes del caso o despues: no cae en medio de una conversacion
     # (decision c del dueno, 2026-10-05). 0 lo apaga. Sale al panel (`ackQuietMinutes`).
     "ack_quiet_minutes": "30",
+    # La toma humana (WAINBOX-92): cuantas horas el agente se aparta de un caso cuando el
+    # dueno contesta desde su telefono (un mensaje de la linea que el plugin no mando).
+    "human_hold_hours": "4",
     "update_every_minutes": "10",
     "updates_max": "3",
     # La cuenta de Claude con que se abren el agente de casos y el del proyecto: el id de
@@ -4834,6 +4844,10 @@ def seguimiento_cliente(con, caso, s, plazos, modo, silencio):
 
 def seguimiento_revisa(con, caso, s, modo, silencio):
     """Lo que toca con un seguimiento vencido; devuelve el conteo del tick, o None."""
+    if en_toma(caso) and caso["etapa"] != "cerrado":
+        # El dueno lo tiene (WAINBOX-92): la revision espera al fin de la toma.
+        seguimiento_actualiza(con, caso["case_id"], revisar_at=caso["humano_hasta"])
+        return None
     plazos = plazos_seguimiento(con, linea_del_caso(caso))
     if s["espera"] == "nosotros":
         if caso["etapa"] in ETAPAS_TERMINADAS:
@@ -7252,6 +7266,9 @@ HISTORIA_EN = {
     "note": "note", "edited": "edited", "reminder_set": "a reminder was set",
     "reminder": "the reminder was due", "reminder_cancelled": "the reminders were cancelled",
     "snooze_ended": "the snooze ended: the customer wrote",
+    "human_hold": "the owner is handling it in person",
+    "human_hold_ended": "the owner's hold ended",
+    "asked_for_person": "the customer asked for a person",
     "project_question": "the project question was asked",
     "project_answer": "the project question was answered",
 }
@@ -7669,6 +7686,194 @@ def linea_escribio(caso, desde, excepto):
         fuente.close()
 
 
+# ── La toma humana (WAINBOX-92): el agente se aparta cuando el dueno contesta ─────────────
+# Lo que el dueno escribe desde su telefono en el chat de un caso ya abierto (un mensaje de
+# la linea cuya stanza no esta en `envio`: el plugin no lo mando) le da el caso por
+# `human_hold_hours`, contadas desde ese mensaje. Mientras dura, el agente no lo toma (salvo
+# Atender ahora, despues del comienzo) y no sale ningun acuse, saludo, respaldo ni
+# seguimiento. Un mensaje del cliente no la termina: vence a su hora o con
+# `caso humano --soltar` ("Devolver al agente"). Cada comienzo y cada fin deja su evento.
+TOMA_HUMANA = "toma humana: hasta"
+TOMA_TERMINADA = "toma humana terminada"
+TOMA_VENCIO = "vencio"
+TOMA_DEVUELTA = "devuelto al agente"
+RAZON_TOMA = "toma-humana"
+
+
+def en_toma(caso, momento=None):
+    """Si el dueno tiene el caso ahora (`humano_hasta` en el futuro)."""
+    hasta = (caso or {}).get("humano_hasta")
+    return bool(hasta) and hasta > (momento or ahora_caso())
+
+
+def ultima_toma(con, case_id):
+    """(id, at) del ultimo evento de la toma humana del caso, comienzo o fin; o (0, None)."""
+    r = con.execute("select id, at from caso_evento where case_id=? and (detalle like ? or "
+                    "detalle like ?) order by id desc limit 1",
+                    (case_id, f"{TOMA_HUMANA}%", f"{TOMA_TERMINADA}%")).fetchone()
+    return (r["id"], r["at"]) if r else (0, None)
+
+
+def comienzo_de_toma(con, case_id):
+    """El id del ultimo evento con que empezo la toma humana del caso, o 0."""
+    r = con.execute("select max(id) from caso_evento where case_id=? and detalle like ?",
+                    (case_id, f"{TOMA_HUMANA}%")).fetchone()
+    return r[0] or 0
+
+
+def atendido_en_toma(con, case_id):
+    """Si el dueno apreto Atender ahora DESPUES de que empezo la toma: eso la pasa por
+    encima (Q2 de WAINBOX-92). Uno de antes no cuenta: el dueno contesto despues."""
+    return con.execute("select 1 from caso_evento where case_id=? and actor='dueno' and id > ? "
+                       "and (detalle=? or detalle like ?) limit 1",
+                       (case_id, comienzo_de_toma(con, case_id), DETALLE_ATENDER,
+                        f"{DETALLE_ATENDER} · %")).fetchone() is not None
+
+
+def escrito_desde_el_telefono(fuente, caso, desde):
+    """El ts (epoch) del ultimo mensaje de la linea en el chat del caso que el plugin no
+    mando, desde `desde` (epoch); o None. Lo que el plugin manda deja su stanza en `envio`
+    cuando sale: eso no es el dueno."""
+    # Lo que la bandeja todavia esta mandando a ese chat no tiene su stanza: su eco no se
+    # distingue de lo del telefono. Se mira en la vuelta siguiente, ya asentado.
+    if fuente.execute("select 1 from envio where account=? and chat_jid=? and estado in "
+                      "('pendiente', 'enviando') limit 1",
+                      (caso["account"], caso["chat_jid"])).fetchone():
+        return None
+    return fuente.execute(
+        "select max(ts) from mensaje where account=? and chat_jid=? and from_me=1 and "
+        "revocado=0 and ts >= ? and stanza_id not in (select stanza_id from envio "
+        "where stanza_id is not null)",
+        (caso["account"], caso["chat_jid"], int(desde))).fetchone()[0]
+
+
+def toma_termina(con, caso, actor, porque, **campos):
+    """Termina la toma humana del caso, con su evento. Sin commit."""
+    caso_tocar(con, caso, actor, f"{TOMA_TERMINADA}: {porque}", humano_hasta=None, **campos)
+
+
+def tick_humano(con, resumen):
+    """La toma humana de la linea activa: termina las vencidas, y empieza (o alarga) la de
+    cada caso abierto donde el dueno escribio desde su telefono. Antes de las respuestas
+    automaticas: lo que el dueno contesto las frena en esta misma vuelta. Cada caso en su
+    transaccion; repetirlo no cambia nada."""
+    momento = ahora_caso()
+    for r in con.execute("select case_id from caso where account=? and humano_hasta is not "
+                         "null and humano_hasta <= ?", (cuenta_activa(), momento)).fetchall():
+        caso_toma(con)
+        try:
+            caso = caso_de(con, r["case_id"])
+            if caso.get("humano_hasta") and not en_toma(caso, momento):
+                toma_termina(con, caso, "automatizacion", TOMA_VENCIO)
+            con.commit()
+        except BaseException:
+            con.rollback()
+            raise
+    filas = con.execute("select case_id from caso where account=? and etapa <> 'cerrado' "
+                        "order by case_id", (cuenta_activa(),)).fetchall()
+    if not filas:
+        return
+    try:
+        fuente = wa_store.abrir()
+    except wa_store.SinFuente:
+        return
+    horas = primer_numero(merged_settings(con), "human_hold_hours")
+    try:
+        for r in filas:
+            caso = caso_de(con, r["case_id"])
+            # Solo lo que el dueno escribio con el caso ya abierto, y despues del ultimo
+            # comienzo o fin de la toma (lo de antes ya se conto, o el dueno lo solto).
+            desde = max(sello_a_epoch(caso.get("created_at")) or time.time(),
+                        (sello_a_epoch(ultima_toma(con, caso["case_id"])[1]) or 0) + 1)
+            try:
+                ts = escrito_desde_el_telefono(fuente, caso, desde)
+            except sqlite3.Error:
+                ts = None
+            if not ts:
+                continue
+            hasta = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(ts + horas * 3600))
+            # El caso del dueno es su propia conversacion: no hay a quien tomarselo.
+            if hasta <= momento or caso_del_dueno(con, caso):
+                continue
+            caso_toma(con)
+            try:
+                caso = caso_de(con, r["case_id"])
+                if (caso.get("humano_hasta") or "") >= hasta:
+                    con.rollback()
+                    continue
+                caso_tocar(con, caso, "dueno", f"{TOMA_HUMANA} {hasta}", humano_hasta=hasta)
+                con.commit()
+            except BaseException:
+                con.rollback()
+                raise
+    finally:
+        fuente.close()
+
+
+def cmd_caso_humano(con, a):
+    """`caso humano`: el dueno toma el caso hasta `--hasta` (el agente se aparta), o lo
+    devuelve al agente con `--soltar`."""
+    if a.soltar and a.hasta:
+        caso_falla("E_ARGS", "--soltar goes alone")
+    if not (a.soltar or a.hasta):
+        caso_falla("E_ARGS", "say --hasta <when> or --soltar")
+    hasta = cuando_de(a.hasta) if a.hasta else None
+    caso_toma(con)
+    caso = caso_de(con, a.id)
+    if hasta:
+        caso_tocar(con, caso, a.actor, f"{TOMA_HUMANA} {hasta}", humano_hasta=hasta)
+    elif caso.get("humano_hasta"):
+        # Devolverlo es pedirle al agente que lo atienda en su proxima corrida.
+        campos = {"necesita_agente": 1} if caso["etapa"] in ETAPAS_ATENDER else {}
+        toma_termina(con, caso, a.actor, TOMA_DEVUELTA, **campos)
+    con.commit()
+    return [con_recordatorios(con, caso_fila(con, caso_de(con, a.id)))]
+
+
+# ── "Quiero hablar con una persona" (WAINBOX-92) ────────────────────────────────────────
+# Jev puntua `customer_asks_for_human` (excepcion `jev`, que ya frena el acuse): el caso va a
+# "Su decision" y el dueno recibe un aviso con el motivo. Ninguna respuesta automatica.
+PIDE_PERSONA = "jev: el cliente pidio una persona"
+
+
+def casos_persona_a_decision(con):
+    """Un caso recibido o clasificado donde el cliente pidio una persona (el evento de
+    `caso_marca_jev`) pasa a `decision`, con un aviso al dueno. Una vez por pedido: si el
+    dueno lo devuelve, no se vuelve a mover hasta que lo pida de nuevo. Devuelve cuantos."""
+    movidos = 0
+    caso_toma(con)
+    try:
+        for r in con.execute(
+                "select c.case_id, (select max(e.id) from caso_evento e where "
+                "e.case_id=c.case_id and e.detalle like ?) pedido from caso c where "
+                "c.account=? and c.etapa in ('recibido','clasificado') and exists (select 1 "
+                "from caso_evento p where p.case_id=c.case_id and p.detalle like ? and p.id > "
+                "(select coalesce(max(d.id), 0) from caso_evento d where d.case_id=c.case_id "
+                "and d.a='decision')) order by c.updated_at, c.case_id",
+                (f"{PIDE_PERSONA}%", cuenta_activa(), f"{PIDE_PERSONA}%")).fetchall():
+            caso = caso_de(con, r["case_id"])
+            if caso["etapa"] == "recibido":
+                caso_valida(caso, "clasificado")
+                caso_mover(con, caso, "clasificado", "automatizacion",
+                           f"alert · {PRIORIDAD_INGEST} · {PIDE_PERSONA}",
+                           clase="alert", prioridad=PRIORIDAD_INGEST)
+                caso = caso_de(con, r["case_id"])
+            caso_valida(caso, "decision")
+            caso_mover(con, caso, "decision", "automatizacion",
+                       f"{PIDE_PERSONA}: lo decide el dueno")
+            tx = aviso_textos()
+            aviso_encola(con, f"aviso-p-{caso['case_id']}-{r['pedido']}", "persona",
+                         tx["persona"].format(n=caso["case_id"],
+                                              chat=nombre_del_chat(con, caso["chat_jid"])),
+                         case_id=caso["case_id"])
+            movidos += 1
+        con.commit()
+    except BaseException:
+        con.rollback()
+        raise
+    return movidos
+
+
 def acuse_sobra(con, caso, ajustes, req_id):
     """La razon por la que este acuse ya no hace falta (decision c del dueno), o None. Lo que
     ya salio del caso no se mira aca: con respaldo lo deciden `respaldo_espera` y
@@ -7792,6 +7997,13 @@ Manda los acuses y saludos pendientes, antes que cualquier propuesta: son lo que
             if razon:
                 tick_auto_cierra(con, fila, "omitido", razon, f"acuse omitido: {razon}")
                 continue
+        # El dueno lo esta atendiendo en persona (WAINBOX-92): nada automatico encima, ni el
+        # acuse, ni el saludo, ni el respaldo. Lo que ya esta en la bandeja sigue su camino.
+        if (en_toma(caso) and fila.get("estado") != "enviando"
+                and estados.get(fila["req_id"]) is None):
+            tick_auto_cierra(con, fila, "omitido", RAZON_TOMA,
+                             f"{fila['tipo']} omitido: {RAZON_TOMA}")
+            continue
         if (fila["tipo"] == "acuse" and modo == "model_with_ack_fallback"
                 and not respaldo_toma(con, fila)):
             tick_auto_cierra(con, fila, "omitido", RAZON_YA_SALIO,
@@ -8594,6 +8806,14 @@ def caso_marca_jev(con, case_id, juicio, stanza=None):
         caso_tocar(con, caso, "jev", "jev: " + "; ".join(partes), **campos)
     else:
         con.execute("update caso set jev=? where case_id=?", (resumen, case_id))
+    # El cliente pidio una persona (WAINBOX-92): una vez por mensaje, para
+    # `casos_persona_a_decision`.
+    marca = f"{PIDE_PERSONA} · {stanza or '-'}"
+    if ("customer_asks_for_human" in juicio["flags"] and not con.execute(
+            "select 1 from caso_evento where case_id=? and detalle=? limit 1",
+            (case_id, marca)).fetchone()):
+        actual = caso_de(con, case_id)
+        caso_evento(con, case_id, actual["etapa"], actual["etapa"], "jev", marca)
 
 
 # El evento con que la regla fija anota en el caso lo que entro (sus NOMBRES).
@@ -9871,6 +10091,8 @@ def cmd_ingest(con, a):
         print(f"wa-scope: catch-up skipped: {exc}", file=sys.stderr)
     # Lo que Jev dejo con una credencial no pasa por el agente: va al dueno ya.
     casos_credencial_a_decision(con)
+    # Y quien pidio una persona tampoco (WAINBOX-92).
+    casos_persona_a_decision(con)
     # La confirmacion de lo que el dueno contesto sale ya, no al minuto siguiente: esta
     # mirando el telefono. Lo que no salga aca lo intenta el tick con el mismo id.
     if total["respuestas"]:
@@ -10073,7 +10295,10 @@ def tarjeta_de(caso, nombres, titulos, motivos, eventos=None, sin_agente=None,
         "updated_at": iso_caso(caso["updated_at"]),
         "actions": acciones_de(caso["etapa"], tipo, bool(json.loads(caso["excepciones"] or "[]")),
                                pregunta_al_que_escribio(ruta_del_caso(caso)),
-                               bool((propuesta or {}).get("respuesta"))),
+                               bool((propuesta or {}).get("respuesta")))
+        # "Devolver al agente" (toma humana, WAINBOX-92): solo mientras el dueno lo tiene.
+        + (["soltar"] if "humano_hasta" in caso.keys()
+           and en_toma({"humano_hasta": caso["humano_hasta"]}) else []),
         "project": ({"id": elegido["id"], "name": elegido["name"]}
                     if elegido["id"] and not elegido["quitado"] else None),
         "needs_agent": bool(caso["necesita_agente"]),
@@ -10145,6 +10370,13 @@ def que_del_evento(detalle, medios=None):
     if m:
         tipo = (medios or {}).get(m.group(1))
         return ({"sticker": "sticker", "audio": "audio"}.get(tipo, "message"), [])
+    # La toma humana y el pedido de una persona (WAINBOX-92).
+    if d.startswith(PIDE_PERSONA):
+        return "asked_for_person", []
+    if d.startswith(TOMA_HUMANA):
+        return "human_hold", []
+    if d.startswith(TOMA_TERMINADA):
+        return "human_hold_ended", []
     if d.startswith("jev: "):
         partes = []
         if "necesita agente" in d:
@@ -10432,6 +10664,10 @@ def tarjetas_de(con, casos, tope_eventos=EVENTOS_EN_TARJETA):
             proximos[r["case_id"]] = r["cuando"]
     pospuestos = {c["case_id"]: c["pospuesto_hasta"] if "pospuesto_hasta" in c.keys() else None
                   for c in casos}
+    # La toma humana (WAINBOX-92), solo mientras dura.
+    momento = ahora_caso()
+    tomas = {c["case_id"]: c["humano_hasta"] for c in casos
+             if "humano_hasta" in c.keys() and en_toma(dict(c), momento)}
     # Lo que espera cada caso y, en lo que cerro su revision, por que (seguimiento-casos).
     # Viaja dentro de `reminder`: el juego de llaves de la tarjeta es contrato.
     seguimientos = seguimientos_de_tarjeta(con, casos)
@@ -10440,11 +10676,14 @@ def tarjetas_de(con, casos, tope_eventos=EVENTOS_EN_TARJETA):
                   reminder=(dict({"at": iso_caso(proximos.get(c["case_id"]))
                                   if proximos.get(c["case_id"]) else None,
                                   "snoozed_until": iso_caso(pospuestos[c["case_id"]])
-                                  if pospuestos[c["case_id"]] else None},
+                                  if pospuestos[c["case_id"]] else None,
+                                  "human_until": iso_caso(tomas[c["case_id"]])
+                                  if c["case_id"] in tomas else None},
                                  **({"follow_up": seguimientos[c["case_id"]]}
                                     if c["case_id"] in seguimientos else {}))
                             if proximos.get(c["case_id"]) or pospuestos[c["case_id"]]
-                            or c["case_id"] in seguimientos else None),
+                            or c["case_id"] in seguimientos or c["case_id"] in tomas
+                            else None),
                   # Lo cuenta `agent_waiting`: el panel le pone la falla de `agent_launch` a
                   # estas tarjetas.
                   waits_agent=c["case_id"] in esperan,
@@ -12119,6 +12358,8 @@ TEXTOS_AVISO = {
            "estado_vacio": "No hay casos abiertos.",
            "recordatorio": "Caso {n}: {titulo} — {x}",
            "recordatorio_vacio": "le recuerdo este caso",
+           "persona": "Caso {n} · {chat}: el cliente pidio hablar con una persona. No le "
+                      "salio ninguna respuesta automatica: contestele usted.",
            "agente_pausado": "Caso {n} · {chat}: el agente lo intento {x} veces seguidas sin "
                              "avanzar; no lo vuelve a intentar en una hora. Mirelo en el tablero.",
            "estado_mas": "y {x} mas en el tablero.",
@@ -12197,6 +12438,8 @@ TEXTOS_AVISO = {
            "estado_vacio": "No open cases.",
            "recordatorio": "Case {n}: {titulo} — {x}",
            "recordatorio_vacio": "a reminder about this case",
+           "persona": "Case {n} · {chat}: the customer asked for a person. No automatic "
+                      "reply went out: please answer them yourself.",
            "agente_pausado": "Case {n} · {chat}: the agent tried {x} times in a row without "
                              "progress; it will not try again for an hour. Check the board.",
            "estado_mas": "and {x} more on the board.",
@@ -14592,6 +14835,20 @@ def cmd_tick(con, a):
             if con.in_transaction:
                 con.rollback()
             print(f"wa-scope: credential cases not routed: {exc}", file=sys.stderr)
+        try:
+            casos_persona_a_decision(con)
+        except (sqlite3.Error, CasoFalla) as exc:
+            if con.in_transaction:
+                con.rollback()
+            print(f"wa-scope: cases asking for a person not routed: {exc}", file=sys.stderr)
+        # La toma humana (WAINBOX-92): antes de las respuestas automaticas y del agente.
+        try:
+            tick_humano(con, resumen)
+        except (sqlite3.Error, CasoFalla) as exc:
+            if con.in_transaction:
+                con.rollback()
+            resumen["errores"] += 1
+            print(f"wa-scope: human takeover skipped: {exc}", file=sys.stderr)
         # Los recordatorios vencidos (casos-cli, K10): antes del agente, que toma el caso que
         # vuelve a el, y de los avisos, que mandan el suyo en esta misma vuelta.
         try:
@@ -17800,14 +18057,18 @@ def casos_para_agente(con):
     casos = []
     modos = {jid: e.get("mode") for jid, e in merged_scope(con).items()}
     for r in con.execute(
-            "select case_id, chat_jid, etapa, propuesta, jev, necesita_agente, excepciones "
-            "from caso where account=? and (etapa in ('recibido','clasificado') or "
+            "select case_id, chat_jid, etapa, propuesta, jev, necesita_agente, excepciones, "
+            "humano_hasta from caso where account=? and (etapa in ('recibido','clasificado') or "
             "(etapa='bloqueado' and necesita_agente=1)) "
             # Lo que el dueno pospuso espera hasta su hora (casos-cli, K10).
             "and (pospuesto_hasta is null or pospuesto_hasta <= ?) "
             "order by updated_at, case_id", (cuenta_activa(), ahora_caso())):
         # Una credencial nunca pasa por el agente, con la propuesta que tenga.
         if "credential" in _lista_json(r["excepciones"]):
+            continue
+        # Lo que el dueno atiende en persona (WAINBOX-92) no lo toma el agente, salvo que
+        # despues apretara Atender ahora.
+        if en_toma(dict(r)) and not atendido_en_toma(con, r["case_id"]):
             continue
         # `observar` lee y avisa, nunca escribe: el agente no redacta ahi. El caso queda en el
         # tablero para el dueno, salvo que apriete Atender ahora.
@@ -18968,6 +19229,15 @@ def main():
     c.add_argument("--cancelar", action="store_true",
                    help="cancel the case's pending reminders and its snooze")
     c.set_defaults(fn=cmd_caso_recordar)
+    c = muta("humano", help="the owner handles the case himself (human takeover): until "
+                             "--hasta the agent does not take it (unless Atender ahora) and no "
+                             "acknowledgement, greeting or follow-up goes out; a customer "
+                             "message does not end it. --soltar returns it to the agent now. "
+                             "When: 30m, 2h, 3d, manana 9:00, hoy 15:00, 15:00 or a date")
+    c.add_argument("id", type=int)
+    c.add_argument("--hasta", metavar="WHEN", help="hold the case until then")
+    c.add_argument("--soltar", action="store_true", help="end the hold: back to the agent")
+    c.set_defaults(fn=cmd_caso_humano)
 
     c = caso("recordatorios", help="the pending reminders of the line, the next first, with "
                                    "the case's title and chat")
