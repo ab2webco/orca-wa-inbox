@@ -919,7 +919,7 @@ const PANELES = [
     enTodosLosAnchos: true, datos: DOS_LINEAS, pestana: 'estado', espera: 400,
     guion: `document.querySelector('.linea[data-carpeta="${LINEA_SEGUNDA.carpeta}"] .linea-desvincular').click()` },
   // Con dos lineas, Su aprobacion es de la linea elegida; lo del equipo lo dice su tarjeta.
-  { nombre: 'config-lineas-aprobacion', archivo: 'config.html', anchos: ANCHOS,
+  { nombre: 'config-lineas-aprobacion', archivo: 'config.html', sub: 'jev-card', anchos: ANCHOS,
     enTodosLosAnchos: true, datos: DOS_LINEAS, pestana: 'aprobacion', espera: 400 },
   { nombre: 'config-lineas-chats', archivo: 'config.html', anchos: ANCHOS,
     enTodosLosAnchos: true, datos: DOS_LINEAS, pestana: 'chats', espera: 800,
@@ -933,7 +933,7 @@ const PANELES = [
   { nombre: 'config-ajustes-agente-segunda', archivo: 'config.html', anchos: ANCHOS,
     enTodosLosAnchos: true, datos: DOS_LINEAS_AJUSTES, pestana: 'agente', espera: 800,
     guion: ELEGIR_SEGUNDA },
-  { nombre: 'config-ajustes-aprobacion-segunda', archivo: 'config.html', anchos: ANCHOS,
+  { nombre: 'config-ajustes-aprobacion-segunda', archivo: 'config.html', sub: 'jev-card', anchos: ANCHOS,
     enTodosLosAnchos: true, datos: DOS_LINEAS_AJUSTES, pestana: 'aprobacion', espera: 1200,
     guion: ELEGIR_SEGUNDA },
   // Conversaciones trae la regla vieja de Plane (`cobros`) marcada.
@@ -949,10 +949,26 @@ const PANELES = [
     datos: Object.assign({}, DATOS, { botClaudeAccount: 'cuenta-bot' }),
     stub: { veredictoAccion: { ok: true, code: 'cuentas', accounts: CUENTAS_CLAUDE } } },
   // Sin poder leer las cuentas: lo dice, y Automatica sigue a mano.
-  { nombre: 'config-cuenta-bot-fallo', archivo: 'config.html', anchos: ANCHOS,
+  { nombre: 'config-cuenta-bot-fallo', archivo: 'config.html', sub: 'bot-account-card', anchos: ANCHOS,
     enTodosLosAnchos: true, pestana: 'agente', guion: 'void 0', espera: 2500,
     datos: Object.assign({}, DATOS, { botClaudeAccount: 'cuenta-que-ya-no-esta' }),
     stub: { veredictoAccion: { ok: false, code: 'cuentas-fallo' } } },
+  // WAINBOX-122 R5: las vistas que no son la primera de su pestana, y el panel lateral.
+  { nombre: 'config-tab-chats-panel', archivo: 'config.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, datos: CON_LINEA, pestana: 'chats', espera: 400,
+    guion: "document.getElementById('scope-add').click()" },
+  { nombre: 'config-tab-chats-reglas', archivo: 'config.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, datos: CON_LINEA, pestana: 'chats', sub: 'routes-card' },
+  { nombre: 'config-tab-aprobacion-numeros', archivo: 'config.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, datos: DATOS, pestana: 'aprobacion', sub: 'owners-card' },
+  { nombre: 'config-tab-aprobacion-avisos', archivo: 'config.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, datos: DATOS, pestana: 'aprobacion', sub: 'orca-notices-card' },
+  { nombre: 'config-tab-agente-cuenta', archivo: 'config.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, pestana: 'agente', sub: 'bot-account-card', guion: 'void 0', espera: 2500,
+    datos: Object.assign({}, DATOS, { botClaudeAccount: 'cuenta-bot' }),
+    stub: { veredictoAccion: { ok: true, code: 'cuentas', accounts: CUENTAS_CLAUDE } } },
+  { nombre: 'config-tab-avanzado-lectura', archivo: 'config.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, datos: DATOS, pestana: 'avanzado', sub: 'reading-card' },
   { nombre: 'config-tab-avanzado', archivo: 'config.html', anchos: ANCHOS,
     enTodosLosAnchos: true, datos: DATOS, pestana: 'avanzado' },
   // Skills (skills-globales): global instalada con una seccion editada, un proyecto
@@ -1003,13 +1019,13 @@ const PANELES = [
     datos: CON_LINEA, pestana: 'chats', guion: escribirEn('workspace-search', ''),
     espera: 300 },
   // Jev encendido, con llave.
-  { nombre: 'config-jev-encendido', archivo: 'config.html', anchos: ANCHOS,
+  { nombre: 'config-jev-encendido', archivo: 'config.html', sub: 'jev-card', anchos: ANCHOS,
     enTodosLosAnchos: true, pestana: 'aprobacion',
     datos: Object.assign({}, DATOS, { jevStatus: { at: new Date().toISOString(),
       enabled: true, keySet: true, mirror: 'activo' } }) },
   // Jev encendido con la llave guardada, pero con un `jev.env` que el plugin no escribio:
   // la nota no manda a reescribir la llave y ofrece usar la guardada.
-  { nombre: 'config-jev-ajeno', archivo: 'config.html', anchos: ANCHOS,
+  { nombre: 'config-jev-ajeno', archivo: 'config.html', sub: 'jev-card', anchos: ANCHOS,
     enTodosLosAnchos: true, pestana: 'aprobacion',
     datos: Object.assign({}, DATOS, { jevStatus: { at: new Date().toISOString(),
       enabled: true, keySet: true, mirror: 'ajeno' } }) },
@@ -1040,13 +1056,13 @@ const PANELES = [
     enTodosLosAnchos: true, idiomas: ['pt'], espera: 500, datos: CON_PERSONAS, pestana: 'chats',
     guion: EDITAR_CHAT('120363000000000002@g.us') },
   // T22.1: elegir los numeros del dueno de quienes escribieron.
-  { nombre: 'config-duenos-combo', archivo: 'config.html', anchos: ANCHOS,
+  { nombre: 'config-duenos-combo', archivo: 'config.html', sub: 'owners-card', anchos: ANCHOS,
     enTodosLosAnchos: true, espera: 300, datos: CON_LINEA, pestana: 'aprobacion',
     guion: "document.getElementById('owners-card').scrollIntoView();" +
       escribirEn('owner-search', '') },
   // T14: el numero de aprobacion, elegido entre los de confianza, con el aviso de que su
   // chat todavia no esta en Automatico.
-  { nombre: 'config-numero-aprobacion', archivo: 'config.html', anchos: ANCHOS,
+  { nombre: 'config-numero-aprobacion', archivo: 'config.html', sub: 'owners-card', anchos: ANCHOS,
     enTodosLosAnchos: true, espera: 300, pestana: 'aprobacion',
     datos: Object.assign({}, CON_LINEA, {
       owners: [{ id: '100000000000001@lid', name: 'Ana Restrepo' },
@@ -1055,7 +1071,7 @@ const PANELES = [
     guion: "document.getElementById('approval-number').scrollIntoView()" },
   // avisos-orca: los avisos de Orca por WhatsApp, encendidos con horas de silencio y con el
   // numero de aprobacion elegido; y apagados, sin numero, con el aviso de que no saldria nada.
-  { nombre: 'config-avisos-orca', archivo: 'config.html', anchos: ANCHOS,
+  { nombre: 'config-avisos-orca', archivo: 'config.html', sub: 'orca-notices-card', anchos: ANCHOS,
     enTodosLosAnchos: true, idiomas: ['pt'], espera: 300, pestana: 'aprobacion',
     datos: Object.assign({}, CON_LINEA, {
       owners: [{ id: '100000000000001@lid', name: 'Ana Restrepo' }],
@@ -1063,14 +1079,14 @@ const PANELES = [
       orcaNotices: { waiting: 'on', finished: 'on', automationFailed: 'off', quietStart: '22:00',
         quietEnd: '07:00', hourlyCap: '6', finishedDelaySeconds: '25', finishedDigestMinutes: '60' } }),
     guion: "document.getElementById('orca-notices-card').scrollIntoView()" },
-  { nombre: 'config-avisos-orca-sin-numero', archivo: 'config.html', anchos: ANCHOS,
+  { nombre: 'config-avisos-orca-sin-numero', archivo: 'config.html', sub: 'orca-notices-card', anchos: ANCHOS,
     enTodosLosAnchos: true, espera: 300, pestana: 'aprobacion', datos: DATOS,
     guion: "document.getElementById('orca-notices-card').scrollIntoView()" },
   // ajustes-sin-lectura: el host todavia no contesto por los numeros ni por los avisos (el
   // cupo es por plugin y el tablero gasta del mismo). Las dos tarjetas dicen que estan
   // leyendo, sin los controles de fabrica a la vista y con Guardar apagado; y cuando el
   // host vuelve a contestar, las mismas dos con lo guardado.
-  { nombre: 'config-aprobacion-leyendo', archivo: 'config.html', anchos: ANCHOS,
+  { nombre: 'config-aprobacion-leyendo', archivo: 'config.html', sub: 'owners-card', anchos: ANCHOS,
     enTodosLosAnchos: true, idiomas: ['pt'], espera: 300, pestana: 'aprobacion',
     datos: Object.assign({}, CON_LINEA, {
       owners: [{ id: '100000000000001@lid', name: 'Ana Restrepo' }],
@@ -1079,7 +1095,7 @@ const PANELES = [
         quietEnd: '', hourlyCap: '6', finishedDelaySeconds: '25', finishedDigestMinutes: '60' } }),
     stub: { rechazaGet: ['owners', 'approvalNumber', 'orcaNotices'] },
     guion: "document.getElementById('owners-card').scrollIntoView()" },
-  { nombre: 'config-aprobacion-releida', archivo: 'config.html', anchos: ANCHOS,
+  { nombre: 'config-aprobacion-releida', archivo: 'config.html', sub: 'owners-card', anchos: ANCHOS,
     enTodosLosAnchos: true, espera: 1500, pestana: 'aprobacion',
     datos: Object.assign({}, CON_LINEA, {
       owners: [{ id: '100000000000001@lid', name: 'Ana Restrepo' }],
@@ -1090,22 +1106,22 @@ const PANELES = [
     guion: "document.getElementById('owners-card').scrollIntoView()" },
   // acuse-inteligente: los minutos sin acuse despues de que la linea escribio en el chat,
   // junto al acuse, con su pista. En portugues tambien: la etiqueta es la mas larga.
-  { nombre: 'config-acuse-silencio', archivo: 'config.html', anchos: ANCHOS,
+  { nombre: 'config-acuse-silencio', archivo: 'config.html', sub: 'auto-card', anchos: ANCHOS,
     enTodosLosAnchos: true, idiomas: ['pt'], espera: 300, pestana: 'aprobacion',
     datos: Object.assign({}, DATOS, { ackQuietMinutes: '45' }),
     guion: "document.getElementById('ack-mode').scrollIntoView()" },
   // primer-mensaje-beta: quien escribe el primer mensaje. El acuse de siempre, el agente sin
   // respaldo (con el aviso de que sin el el cliente puede no recibir nada), el agente con
   // respaldo (con sus tres numeros) y lo propio de una conversacion.
-  { nombre: 'config-primer-acuse', archivo: 'config.html', anchos: ANCHOS,
+  { nombre: 'config-primer-acuse', archivo: 'config.html', sub: 'auto-card', anchos: ANCHOS,
     enTodosLosAnchos: true, espera: 300, pestana: 'aprobacion', datos: DATOS,
     guion: "document.getElementById('first-reply').scrollIntoView()" },
-  { nombre: 'config-primer-agente', archivo: 'config.html', anchos: ANCHOS,
+  { nombre: 'config-primer-agente', archivo: 'config.html', sub: 'auto-card', anchos: ANCHOS,
     enTodosLosAnchos: true, espera: 300, pestana: 'aprobacion',
     datos: Object.assign({}, DATOS, { firstReply: { mode: 'model', fallbackMinutes: '5',
       everyMinutes: '10', max: '3' } }),
     guion: "document.getElementById('first-reply').scrollIntoView()" },
-  { nombre: 'config-primer-respaldo', archivo: 'config.html', anchos: ANCHOS,
+  { nombre: 'config-primer-respaldo', archivo: 'config.html', sub: 'auto-card', anchos: ANCHOS,
     enTodosLosAnchos: true, espera: 300, pestana: 'aprobacion',
     datos: Object.assign({}, DATOS, { firstReply: { mode: 'model_with_ack_fallback',
       fallbackMinutes: '5', everyMinutes: '10', max: '3' } }),
@@ -1116,13 +1132,13 @@ const PANELES = [
       "button[data-value=\"model\"]').click();" +
       "document.getElementById('chat-first-reply').scrollIntoView()" },
   // ritmo-triage: bajo el selector, a que ritmo corre el triage en Orca, o que no se pudo.
-  { nombre: 'config-ritmo-triage', archivo: 'config.html', anchos: ANCHOS,
+  { nombre: 'config-ritmo-triage', archivo: 'config.html', sub: 'reading-card', anchos: ANCHOS,
     enTodosLosAnchos: true, espera: 300, pestana: 'avanzado',
     datos: Object.assign({}, DATOS, { syncMinutes: '2',
       workerBeat: { at: new Date().toISOString(),
         triage: { minutes: 2, cron: '*/2 * * * *', ok: true, code: 'ajustado' } } }),
     guion: "document.getElementById('triage-pace').scrollIntoView()" },
-  { nombre: 'config-ritmo-triage-fallo', archivo: 'config.html', anchos: ANCHOS,
+  { nombre: 'config-ritmo-triage-fallo', archivo: 'config.html', sub: 'reading-card', anchos: ANCHOS,
     enTodosLosAnchos: true, espera: 300, pestana: 'avanzado',
     datos: Object.assign({}, DATOS, { syncMinutes: '2',
       workerBeat: { at: new Date().toISOString(),
@@ -1746,7 +1762,7 @@ const PANELES = [
     // Un guardado que el host RECHAZO. Se fotografia porque el defecto que motivo esto
     // era visual: el panel decia "guardado" con un tilde verde sobre una escritura que
     // no ocurrio, y eso no lo delata ninguna prueba de codigo, solo mirarlo.
-    nombre: 'config-guardado-fallo', archivo: 'config.html', anchos: ANCHOS_ESTADO,
+    nombre: 'config-guardado-fallo', archivo: 'config.html', sub: 'reading-card', anchos: ANCHOS_ESTADO,
     datos: DATOS, stub: { falla: ['inboxDays'] }, pestana: 'avanzado',
     guion: `document.querySelector('#inbox-days [data-value="30"]').click();
             document.getElementById('save-reading').click()`
@@ -1755,7 +1771,7 @@ const PANELES = [
     // Y el guardado EN VUELO: el boton ocupado mientras el host todavia no contesta.
     // Sin poder verlo, un boton que se queda muerto y uno que esta trabajando son la
     // misma imagen.
-    nombre: 'config-guardado-en-vuelo', archivo: 'config.html', anchos: ANCHOS_ESTADO,
+    nombre: 'config-guardado-en-vuelo', archivo: 'config.html', sub: 'reading-card', anchos: ANCHOS_ESTADO,
     datos: DATOS, stub: { demoraSet: 4000 }, pestana: 'avanzado',
     guion: `document.querySelector('#inbox-days [data-value="30"]').click();
             document.getElementById('save-reading').click()`,
@@ -2162,13 +2178,13 @@ const PANELES = [
   },
   {
     // I4: la meta del primer contacto, en Su aprobacion.
-    nombre: 'config-sla', archivo: 'config.html', anchos: ANCHOS, enTodosLosAnchos: true,
+    nombre: 'config-sla', archivo: 'config.html', sub: 'sla-card', anchos: ANCHOS, enTodosLosAnchos: true,
     datos: DATOS, pestana: 'aprobacion', espera: 300,
     guion: "document.getElementById('sla-minutes').scrollIntoView({ block: 'center' })"
   },
   {
     // proyectos-por-chat (M5/M6): cuantas horas espera la pregunta "A o B?" a quien escribio.
-    nombre: 'config-pregunta-horas', archivo: 'config.html', anchos: ANCHOS, enTodosLosAnchos: true,
+    nombre: 'config-pregunta-horas', archivo: 'config.html', sub: 'pq-card', anchos: ANCHOS, enTodosLosAnchos: true,
     idiomas: ['pt'], datos: DATOS, pestana: 'aprobacion', espera: 300,
     guion: "document.getElementById('pq-hours').scrollIntoView({ block: 'center' })"
   },
@@ -2259,6 +2275,11 @@ async function main() {
           ? (panel.pestana || 'estado') : null
         if (pestana) {
           await pagina.click(`#tab-${pestana}`)
+          await pagina.waitForTimeout(100)
+        }
+        // WAINBOX-122: una pestana larga se parte en vistas; `sub` elige cual se fotografia.
+        if (panel.sub) {
+          await pagina.click(`.subnav button[aria-controls="${panel.sub}"]`)
           await pagina.waitForTimeout(100)
         }
 

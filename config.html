@@ -64,7 +64,7 @@
         color: var(--foreground, var(--fb-foreground));
         background: var(--background, var(--fb-background));
       }
-      .wrap { max-width: 880px; }
+      .wrap { max-width: 1120px; }
       h1 { font-size: 13px; font-weight: 600; margin: 0; padding: 12px 12px 0;
            letter-spacing: -0.01em; }
       .sub:first-child { margin-top: 0; }
@@ -162,13 +162,6 @@
       .grupo > h3 { margin-bottom: var(--sp-3); }
       .grupo > h3 + label, .grupo > h3 + .label, .grupo > h3 + .seg,
       .grupo > h3 + .hint { margin-top: 0; }
-      @media (min-width: 720px) {
-        .grupo { display: grid; grid-template-columns: 11rem minmax(0, 1fr);
-                 column-gap: var(--sp-5); align-items: start; }
-        .grupo > * { grid-column: 2; }
-        .grupo > .seg, .grupo .seg { justify-self: start; }
-        .grupo > h3 { grid-column: 1; grid-row: 1 / span 40; margin: 0; padding-top: 1px; }
-      }
 
       /* "Como funciona": la explicacion entera, con sus mismas palabras, a un clic. */
       details.como { margin: var(--sp-1) 0 0; font-size: 11px; }
@@ -632,6 +625,76 @@
       .jev-nota { color: var(--destructive, var(--fb-destructive)); margin: 8px 0 0; }
       .jev-nota[hidden] { display: none; }
       #jev-mirror-note code { overflow-wrap: anywhere; }
+
+      /* ── WAINBOX-122 R5: estructura por vistas ── */
+      /* Sub-navegacion: un riel a la izquierda en pantalla ancha; angosta, una fila que se
+         desplaza de costado (nunca se envuelve: una entrada partida en dos renglones se lee
+         como dos). La elegida va sobre --accent, no en un relleno de --primary. */
+      .sub-oculta { display: none !important; }
+      .subnav { display: flex; gap: 2px; overflow-x: auto; scrollbar-width: thin;
+                padding: var(--sp-3) 12px var(--sp-2);
+                border-bottom: 1px solid var(--border, var(--fb-border)); }
+      .subnav button { flex: none; white-space: nowrap; font-size: 13px; font-weight: 500;
+                       padding: 6px 10px; background: transparent; border-color: transparent;
+                       color: var(--muted-foreground, var(--fb-muted-foreground)); }
+      .subnav button:hover { background: var(--accent, var(--fb-accent));
+                             color: var(--foreground, var(--fb-foreground)); }
+      .subnav button[aria-current="true"], .subnav button[aria-current="true"]:hover {
+        background: var(--accent, var(--fb-accent)); font-weight: 600;
+        color: var(--accent-foreground, var(--fb-accent-foreground)); }
+      .con-sub > section { border-top: 0; }
+      @media (min-width: 1024px) {
+        .con-sub { display: grid; grid-template-columns: 13rem minmax(0, 1fr);
+                   column-gap: var(--sp-4); align-items: start; }
+        .con-sub > * { grid-column: 2; }
+        .con-sub > .subnav { grid-column: 1; grid-row: 1 / span 20; position: sticky; top: 0;
+                             flex-direction: column; overflow: visible; border-bottom: 0;
+                             padding: var(--sp-5) 0 var(--sp-5) 12px; }
+        .con-sub > .subnav button { text-align: left; width: 100%; white-space: normal; }
+        .con-sub > section { min-height: 60vh; }
+      }
+
+      /* Una sola forma de guardar: la barra de cada vista queda fija abajo mientras se
+         desplaza, y dice cuando hay cambios sin guardar. */
+      .barra-guardar { position: sticky; bottom: 0; z-index: 3;
+        background: var(--background, var(--fb-background)); }
+      .actions.barra-guardar { margin: var(--sp-5) -12px 0; padding: var(--sp-3) 12px;
+        border-top: 1px solid var(--border, var(--fb-border)); }
+      .barra-guardar .sin-guardar { display: none; font-size: 12px;
+        color: var(--muted-foreground, var(--fb-muted-foreground)); }
+      .barra-guardar.sucio .sin-guardar { display: inline; }
+
+      /* Conversaciones: la lista con su boton, y el formulario en un panel lateral. */
+      #scope-add { float: right; margin: 0 0 var(--sp-3) var(--sp-4); white-space: nowrap; }
+      #scope-wrap { clear: both; }
+      .panel-lateral { display: none; }
+      .panel-lateral.abierto { display: block; position: fixed; top: 0; right: 0; bottom: 0;
+        width: min(560px, 100%); overflow-y: auto; overscroll-behavior: contain; z-index: 30;
+        padding: var(--sp-5) var(--sp-4) 0;
+        background: var(--background, var(--fb-background));
+        border-left: 1px solid var(--border, var(--fb-border));
+        box-shadow: -16px 0 40px rgb(0 0 0 / 0.28); }
+      .panel-lateral > h2 { padding-right: 40px; }
+      .panel-lateral .actions.barra-guardar { margin: var(--sp-5) calc(var(--sp-4) * -1) 0;
+        padding: var(--sp-3) var(--sp-4); }
+      .panel-lateral .cerrar { position: absolute; top: 14px; right: 12px; padding: 6px;
+        line-height: 0; background: transparent; border-color: transparent;
+        color: var(--muted-foreground, var(--fb-muted-foreground)); }
+      .panel-lateral .cerrar:hover { color: var(--foreground, var(--fb-foreground)); }
+      .velo { position: fixed; inset: 0; z-index: 29; background: rgb(0 0 0 / 0.38); }
+      body.con-panel { overflow: hidden; }
+
+      /* Estado: un tablero de tarjetas, dos columnas en pantalla ancha. */
+      #view-estado.tablero { display: grid; grid-template-columns: minmax(0, 1fr);
+        gap: var(--sp-4); padding: var(--sp-4) 12px; }
+      #view-estado.tablero > section, #view-estado.tablero > #opcionales {
+        margin: 0; padding: var(--sp-4); border: 1px solid var(--border, var(--fb-border));
+        border-radius: var(--radius, 0.625rem); }
+      #view-estado.tablero > #opcionales { padding: var(--sp-2) var(--sp-4); }
+      @media (min-width: 1024px) {
+        #view-estado.tablero { grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; }
+        #view-estado.tablero > #opcionales { grid-column: 1 / -1; }
+      }
     </style>
   </head>
   <body>
@@ -678,7 +741,7 @@
       </div>
 
       <!-- ───────── Estado ───────── -->
-      <div id="view-estado" role="tabpanel" aria-labelledby="tab-estado">
+      <div id="view-estado" class="tablero" role="tabpanel" aria-labelledby="tab-estado">
         <!-- Las lineas: el transporte unico (T3/T4, docs/ENCARGO-TRANSPORTE-UNICO.md) de cada
              numero vinculado (odd/tasks/varias-lineas-y-segundo-cerebro.md, L4/L5). Primera
              seccion a proposito: sin sesion nada mas de este panel importa todavia.
@@ -730,7 +793,7 @@
 
         <!-- Lo que falta para que el agente trabaje, con un boton a la pestana donde se
              arregla cada cosa. Se arma con lo que el panel YA lee: no gasta cupo. -->
-        <section>
+        <section id="checklist-card">
           <h2 data-t="checkLegend"></h2>
           <ul class="checklist" id="checklist"></ul>
         </section>
@@ -740,7 +803,10 @@
 
       <!-- ───────── Conversaciones ───────── -->
       <div id="view-chats" role="tabpanel" aria-labelledby="tab-chats" hidden>
-        <section>
+        <!-- WAINBOX-122 R5: la lista es la vista principal; agregar y editar abren el
+             formulario en un panel lateral (#scope-form) en vez de debajo de la tabla. -->
+        <section id="scope-list" data-sub-t="subChats">
+          <button type="button" class="primary" id="scope-add" data-t="scopeAdd"></button>
           <h2 data-t="scopeLegend"></h2>
           <p class="hint lead" data-t="scopeHelp"></p>
           <div id="scope-wrap"></div>
@@ -749,7 +815,11 @@
 
         <!-- Agregar o cambiar una conversacion: un buscador que filtra mientras se
              escribe, el proyecto con el mismo buscador, y el modo con botones. -->
-        <section class="card" id="scope-form">
+        <section class="card panel-lateral" id="scope-form" role="dialog"
+                 aria-labelledby="scope-form-title">
+          <button type="button" class="cerrar" id="scope-close" data-t-title="closePanel"><svg
+                  width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8"
+                  stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></button>
           <h2 id="scope-form-title" data-t="formLegend"></h2>
           <!-- WAINBOX-122: el formulario va en grupos con titulo propio; cada control lleva
                una linea corta y la explicacion entera queda detras de "Como funciona". -->
@@ -934,12 +1004,14 @@
           </div>
           <details class="como"><summary data-t="howItWorks"></summary><p class="hint" data-t="chatApHelp"></p></details>
           </div>
-          <div class="actions pie">
+          <div class="actions pie barra-guardar">
             <button class="primary" id="save-scope" data-t="save"></button>
             <button id="cancel-edit" hidden data-t="cancelEdit"></button>
             <span class="said" id="said-scope"></span>
           </div>
         </section>
+
+        <div class="velo" id="scope-velo" hidden></div>
 
         <!-- Reglas por texto: un grupo de operaciones lleva trabajo de varios clientes, y
              la palabra del mensaje decide el proyecto. Las viejas de Plane se marcan. -->
@@ -998,7 +1070,7 @@
       <div id="view-aprobacion" role="tabpanel" aria-labelledby="tab-aprobacion" hidden>
         <!-- Las reglas tal como son (T22.4): que pide cada una, los tres niveles que cada
              conversacion elige (bin/wa_reglas.py, NIVELES_DEFECTO) y lo que no se apaga. -->
-        <section>
+        <section id="rules-card" data-sub-t="subRules">
           <h2 data-t="approvalLegend"></h2>
           <div id="exceptions">
             <p class="hint lead" data-t="approvalShort"></p>
@@ -1025,7 +1097,7 @@
 
         <!-- Los numeros del dueno (T22.1): se eligen de los que ya escribieron en las
              conversaciones, por el id que dejo WhatsApp. Nunca se escribe un numero. -->
-        <section class="card" id="owners-card">
+        <section class="card" id="owners-card" data-sub-t="subOwners">
           <h2 data-t="ownersLegend"></h2>
           <p class="hint lead" data-t="ownersShort"></p>
           <details class="como"><summary data-t="howItWorks"></summary><p class="hint" data-t="ownersIntro"></p></details>
@@ -1047,7 +1119,7 @@
           <p class="hint approval-warn" id="approval-warn" hidden></p>
           <details class="como"><summary data-t="howItWorks"></summary><p class="hint" data-t="approvalNumberHelp"></p></details>
           <p class="hint" id="approval-main-line" hidden></p>
-          <div class="actions">
+          <div class="actions barra-guardar">
             <button class="primary" id="save-owners" data-t="saveCard"></button>
             <span class="said" id="said-owners"></span>
           </div>
@@ -1121,7 +1193,7 @@
                    aria-describedby="orca-cap-help" />
           </div>
           <p class="hint" id="orca-cap-help" data-t="orcaCapHelp"></p>
-          <div class="actions">
+          <div class="actions barra-guardar">
             <button class="primary" id="save-orca" data-t="saveCard"></button>
             <span class="said" id="said-orca"></span>
           </div>
@@ -1183,7 +1255,7 @@
           </div>
           <input id="greeting-text" data-t-ph="greetingPh" />
           <details class="como"><summary data-t="howItWorks"></summary><p class="hint" data-t="autoTextHelp"></p></details>
-          <div class="actions">
+          <div class="actions barra-guardar">
             <button class="primary" id="save-auto" data-t="saveCard"></button>
             <span class="said" id="said-auto"></span>
           </div>
@@ -1200,7 +1272,7 @@
                    inputmode="numeric" aria-describedby="sla-help" />
           </div>
           <p class="hint" id="sla-help" data-t="slaHelp"></p>
-          <div class="actions">
+          <div class="actions barra-guardar">
             <button class="primary" id="save-sla" data-t="saveCard"></button>
             <span class="said" id="said-sla"></span>
           </div>
@@ -1217,7 +1289,7 @@
                    aria-describedby="pq-hours-help" />
           </div>
           <p class="hint" id="pq-hours-help" data-t="pqHoursHelp"></p>
-          <div class="actions">
+          <div class="actions barra-guardar">
             <button class="primary" id="save-pq-hours" data-t="saveCard"></button>
             <span class="said" id="said-pq-hours"></span>
           </div>
@@ -1235,7 +1307,7 @@
             <button type="button" data-value="off" data-t="autoOff"></button>
           </div>
           <p class="hint" id="send-files-help" data-t="filesHelp"></p>
-          <div class="actions">
+          <div class="actions barra-guardar">
             <button class="primary" id="save-files" data-t="saveCard"></button>
             <span class="said" id="said-files"></span>
           </div>
@@ -1269,7 +1341,7 @@
             </div>
           </div>
           <p class="hint" id="fu-help" data-t="fuHelp"></p>
-          <div class="actions">
+          <div class="actions barra-guardar">
             <button class="primary" id="save-follow-up" data-t="saveCard"></button>
             <span class="said" id="said-follow-up"></span>
           </div>
@@ -1328,7 +1400,7 @@
           <label for="tone" data-t="toneLabel"></label>
           <textarea id="tone" rows="3" data-t-ph="tonePh"></textarea>
           <p class="hint" data-t="toneHelp"></p>
-          <div class="actions">
+          <div class="actions barra-guardar">
             <button class="primary" id="save-agent" data-t="saveCard"></button>
             <span class="said" id="said-agent"></span>
           </div>
@@ -1344,7 +1416,7 @@
             <button type="button" data-value="auto" data-t="botAccountAuto"></button>
           </div>
           <p class="hint" id="bot-account-status"></p>
-          <div class="actions">
+          <div class="actions barra-guardar">
             <button class="primary" id="save-bot-account" data-t="saveCard"></button>
             <button id="bot-account-refresh" data-t="botAccountRefresh"></button>
             <span class="said" id="said-bot-account"></span>
@@ -1405,7 +1477,7 @@
             <button type="button" data-value="minima" data-t="qualityMinima"></button>
           </div>
           <details class="como"><summary data-t="howItWorks"></summary><p class="hint" data-t="qualityHelp"></p></details>
-          <div class="actions">
+          <div class="actions barra-guardar">
             <button class="primary" id="save-voice" data-t="saveCard"></button>
             <span class="said" id="said-voice"></span>
           </div>
@@ -1435,7 +1507,7 @@
           </div>
           <details class="como"><summary data-t="howItWorks"></summary><p class="hint" data-t="syncHelp"></p></details>
           <p class="hint" id="triage-pace" aria-live="polite" hidden></p>
-          <div class="actions">
+          <div class="actions barra-guardar">
             <button class="primary" id="save-reading" data-t="saveCard"></button>
             <span class="said" id="said-reading"></span>
           </div>
@@ -1711,6 +1783,12 @@
           chatFetchDone: "Pidiendo la lista. Puede tardar unos segundos.",
           chatCount: "{n} de {total}", chatNoMatch: "Ninguna coincide con eso",
           kindGroup: 'Grupo', kindDirect: 'Directo',
+          subRules: 'Reglas',
+          subOwners: 'Numeros',
+          subChats: 'Conversaciones',
+          scopeAdd: 'Agregar conversacion',
+          closePanel: 'Cerrar',
+          unsaved: 'Cambios sin guardar',
           skillsShort: 'Le ensenan a sus agentes de Claude Code a usar este plugin.',
           approvalShort: 'Su agente responde solo y le pregunta antes solo por estas reglas.',
           autoShort: 'Lo que su agente envia solo, en las conversaciones en Automatico.',
@@ -2371,6 +2449,12 @@
           chatFetchDone: "Asking for the list. It can take a few seconds.",
           chatCount: "{n} of {total}", chatNoMatch: "Nothing matches that",
           kindGroup: 'Group', kindDirect: 'Direct',
+          subRules: 'Rules',
+          subOwners: 'Numbers',
+          subChats: 'Conversations',
+          scopeAdd: 'Add conversation',
+          closePanel: 'Close',
+          unsaved: 'Unsaved changes',
           skillsShort: 'They teach your Claude Code agents to use this plugin.',
           approvalShort: 'Your agent replies on its own and asks you first only for these rules.',
           autoShort: 'What your agent sends on its own, in conversations on Automatic.',
@@ -3144,6 +3228,12 @@
         routeRmFail: 'Nao foi possivel remover a regra, entao ela continua valendo. Tente de novo.',
         routeRmBadPattern: 'Essa regra nao tem um texto valido, entao nao foi removida.',
         kindGroup: 'Grupo', kindDirect: 'Direto',
+        subRules: 'Regras',
+        subOwners: 'Numeros',
+        subChats: 'Conversas',
+        scopeAdd: 'Adicionar conversa',
+        closePanel: 'Fechar',
+        unsaved: 'Alteracoes nao salvas',
         skillsShort: 'Ensinam os seus agentes do Claude Code a usar este plugin.',
         approvalShort: 'O seu agente responde sozinho e so pergunta antes por estas regras.',
         autoShort: 'O que o seu agente envia sozinho, nas conversas em Automatico.',
@@ -5979,8 +6069,7 @@
         el('save-scope').textContent = t('saveEdit')
         el('cancel-edit').hidden = false
         said('said-scope', '')
-        var form = el('scope-form')
-        if (form.scrollIntoView) form.scrollIntoView({ block: 'start', behavior: 'smooth' })
+        abrirFormulario()
       }
       function resetScopeForm() {
         editandoJid = ''
@@ -7268,6 +7357,114 @@
       var PESTANAS = ['estado', 'chats', 'proyectos', 'aprobacion', 'agente', 'skills',
         'avanzado']
       var pestanaElegida = false
+      // ── WAINBOX-122 R5: estructura por vistas ──────────────────────────────────────
+      // Una pestana con dos bloques o mas deja de ser una pagina larga: cada bloque es una
+      // vista y una sub-navegacion elige cual se ve. Se arma con los bloques que ya hay, asi
+      // que ningun control cambia de lugar ni de id: solo cual se ve a la vez. El nombre de
+      // cada entrada es el titulo del bloque, o uno mas corto (`data-sub-t`).
+      var SUBVISTAS = {}
+      function armarSubvistas () {
+        PESTANAS.forEach(function (p) {
+          var vista = el('view-' + p)
+          if (vista.classList.contains('tablero')) return
+          var bloques = Array.prototype.filter.call(vista.children, function (n) {
+            return n.tagName === 'SECTION' && !n.classList.contains('panel-lateral')
+          })
+          if (bloques.length < 2) return
+          vista.classList.add('con-sub')
+          var nav = document.createElement('nav')
+          nav.className = 'subnav'
+          nav.setAttribute('aria-labelledby', 'tab-' + p)
+          bloques.forEach(function (s) {
+            var h = s.querySelector('h2')
+            var clave = s.dataset.subT || (h && h.dataset.t)
+            var b = document.createElement('button')
+            b.type = 'button'
+            b.setAttribute('aria-controls', s.id)
+            if (clave) { b.dataset.t = clave; b.innerHTML = t(clave) }
+            b.addEventListener('click', function () { mostrarSub(p, s.id) })
+            nav.appendChild(b)
+          })
+          vista.insertBefore(nav, vista.firstChild)
+          SUBVISTAS[p] = bloques
+          mostrarSub(p, bloques[0].id)
+        })
+      }
+      function mostrarSub (p, id) {
+        var bloques = SUBVISTAS[p]
+        if (!bloques) return
+        bloques.forEach(function (s) { s.classList.toggle('sub-oculta', s.id !== id) })
+        Array.prototype.forEach.call(el('view-' + p).querySelectorAll('.subnav button'), function (b) {
+          if (b.getAttribute('aria-controls') === id) b.setAttribute('aria-current', 'true')
+          else b.removeAttribute('aria-current')
+        })
+        if (p === 'chats' && id !== 'scope-list') cerrarFormulario()
+      }
+
+      // Una sola forma de guardar: el Guardar de cada vista vive en una barra fija abajo, y
+      // la barra dice cuando hay algo cambiado que todavia no se guardo. Solo cuenta lo que
+      // hace el dueno (escribir, apretar una opcion); pintar lo leido no ensucia nada.
+      function armarBarras () {
+        Array.prototype.forEach.call(document.querySelectorAll('.barra-guardar'), function (barra) {
+          var bloque = barra.closest('section')
+          var boton = barra.querySelector('button.primary')
+          if (!bloque || !boton) return
+          var aviso = document.createElement('span')
+          aviso.className = 'sin-guardar'
+          aviso.dataset.t = 'unsaved'
+          aviso.textContent = t('unsaved')
+          barra.appendChild(aviso)
+          function ensuciar (e) { if (!barra.contains(e.target)) barra.classList.add('sucio') }
+          bloque.addEventListener('input', ensuciar)
+          bloque.addEventListener('click', function (e) {
+            var b = e.target && e.target.closest && e.target.closest('.seg button, .switch')
+            if (b && !barra.contains(b)) barra.classList.add('sucio')
+          })
+          boton.addEventListener('click', function () { barra.classList.remove('sucio') })
+        })
+      }
+
+      // Conversaciones: el formulario de agregar y editar es un panel lateral. Abrirlo y
+      // cerrarlo no toca lo escrito; editar sigue entrando por `startEdit`.
+      var volverA = null
+      function abrirFormulario (desde) {
+        volverA = desde || document.activeElement
+        el('scope-form').classList.add('abierto')
+        el('scope-velo').hidden = false
+        document.body.classList.add('con-panel')
+        var foco = el('chat-search').readOnly
+          ? el('mode').querySelector('button[aria-pressed="true"]') || el('mode').querySelector('button')
+          : el('chat-search')
+        if (foco && foco.focus) foco.focus()
+      }
+      function cerrarFormulario () {
+        var panel = el('scope-form')
+        if (!panel.classList.contains('abierto')) return
+        panel.classList.remove('abierto')
+        el('scope-velo').hidden = true
+        document.body.classList.remove('con-panel')
+        comboChats.cerrar(); comboProyecto.cerrar()
+        combosExtra.forEach(function (c) { c.cerrar() })
+        if (volverA && volverA.isConnected && volverA.focus) volverA.focus()
+        volverA = null
+      }
+      el('scope-add').addEventListener('click', function () {
+        // Si venia editando otra, el panel abre limpio; si estaba agregando, sigue lo escrito.
+        if (editandoJid) { resetScopeForm(); said('said-scope', '') }
+        abrirFormulario(el('scope-add'))
+      })
+      el('scope-close').addEventListener('click', cerrarFormulario)
+      el('scope-velo').addEventListener('click', cerrarFormulario)
+      el('cancel-edit').addEventListener('click', cerrarFormulario)
+      document.addEventListener('keydown', function (e) {
+        if (e.key !== 'Escape' || !el('scope-form').classList.contains('abierto')) return
+        // Con una lista de autocompletar abierta, Escape cierra primero la lista.
+        if (el('scope-form').querySelector('.combo-list:not([hidden])')) return
+        cerrarFormulario()
+      })
+      armarSubvistas()
+      armarBarras()
+
       function mostrarPestana (cual) {
         PESTANAS.forEach(function (p) {
           var activa = p === cual
@@ -7275,6 +7472,7 @@
           el('tab-' + p).setAttribute('aria-selected', activa ? 'true' : 'false')
           el('tab-' + p).tabIndex = activa ? 0 : -1
         })
+        if (cual !== 'chats') cerrarFormulario()
         // Una lista abierta en la pestana que se va quedaria flotando sobre la otra.
         comboChats.cerrar(); comboProyecto.cerrar(); comboRegla.cerrar()
         combosExtra.forEach(function (c) { c.cerrar() })
@@ -7329,7 +7527,7 @@
             }), ir: 'chats', clave: 'chkChat' },
           { item: 'proyectos', ok: proyectos.length > 0, ir: 'proyectos',
             clave: 'chkProyectos', nota: 'chkRecommended' },
-          { item: 'jev', ok: jevEnVista(jev) && jev.keySet === true, ir: 'aprobacion',
+          { item: 'jev', ok: jevEnVista(jev) && jev.keySet === true, ir: 'aprobacion', sub: 'jev-card',
             clave: 'chkJev', nota: 'chkOptional' }
         ]
       }
@@ -7347,7 +7545,8 @@
             (f.ok ? '✓' : '○') + '</span><span class="what">' + esc(t(f.clave)) +
             (f.nota ? ' <span class="tag">(' + esc(t(f.nota)) + ')</span>' : '') + '</span>' +
             (f.ok || f.ir === 'estado' ? ''
-              : '<button class="link" data-ir="' + f.ir + '">' +
+              : '<button class="link" data-ir="' + f.ir + '"' +
+                (f.sub ? ' data-sub="' + f.sub + '"' : '') + '>' +
                 esc(t('tab' + f.ir.charAt(0).toUpperCase() + f.ir.slice(1))) +
                 ' →</button>') + '</li>'
         }).join('')
@@ -7357,6 +7556,7 @@
           b.addEventListener('click', function () {
             pestanaElegida = true
             mostrarPestana(b.dataset.ir)
+            if (b.dataset.sub) mostrarSub(b.dataset.ir, b.dataset.sub)
           })
         })
       }

@@ -43,5 +43,22 @@ fields, same calls, same validations. Visual and copy only.
       Skills, Avanzado, on the real page (owner: improve the current page, keep every
       control). Long static help over 90 characters goes behind "Como funciona"; a section
       whose intro moved there gets a short lead (`*Short` strings, es/en/pt).
-- [ ] **R3b** Decision gate with before/after of all seven tabs; wait for the owner.
+- [x] **R3b** Decision gate with before/after of all seven tabs. Owner: "changes",
+      restructure, not restyle (Su aprobacion is a long stack of blocks with a Guardar each).
+- [x] **R5** Structure by views:
+      - A tab with two or more blocks gets a sub-navigation built from those blocks. It is a
+        left rail from 1024px and a sideways-scrolling row below that, and one block shows
+        at a time. Same ids and handlers; only which block shows changes.
+      - One save model: each view's Guardar lives in a `.barra-guardar` pinned to the bottom,
+        which says "Cambios sin guardar" after a user edit. Reading values in does not mark it.
+      - Conversaciones: the list is the main view. Add and edit open `#scope-form` as a side
+        panel (full width on a phone), closed by the close button, Escape, the backdrop or
+        Cancelar edicion.
+      - Estado is a dashboard of cards.
+      - "Encender Jev" in Lo que falta opens the Jev view.
+      - Test adaptation (the only edit to an existing test): "ajustes sin lectura" asserted
+        that Numeros and Avisos de Orca are both visible at once in Su aprobacion. With one
+        view at a time that cannot hold by design, so the test now opens each card's view
+        before looking, as the owner would. Its assertions are unchanged.
+- [ ] **R5b** Decision gate with round 2; wait for the owner.
 - [ ] **R4** Shots of every tab at 1440/768/390/320, light and dark, via `WA_INBOX_SOLO=config`.
