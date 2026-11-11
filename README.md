@@ -329,3 +329,29 @@ publica. No se mezclan.
 Las capturas salen a `docs/capturas/` y **no se versionan**: hoy son 65 MB de salida de
 build para un plugin que versionado pesa menos de 1 MB, y el marketplace clona el repo
 entero en cada instalación. Se regeneran con `npm run shots`.
+
+## Licencia
+
+Copyright (C) 2026 Ab2Web and contributors.
+
+El plugin entero se distribuye bajo la **GNU General Public License, versión 3**
+(SPDX `GPL-3.0-only`). El texto completo está en [`LICENSE`](LICENSE). Es la misma
+licencia de libsignal, que el sidecar empaqueta: por eso no hay otra opción para el
+conjunto.
+
+Este programa es software libre: puede redistribuirlo y modificarlo bajo los términos
+de la GPL-3.0. Se distribuye con la esperanza de que sea útil, pero **sin ninguna
+garantía**, ni siquiera la implícita de comerciabilidad o de idoneidad para un
+propósito particular. Los detalles están en [`LICENSE`](LICENSE).
+
+**Código fuente correspondiente del sidecar.** `sidecar/sidecar.cjs` es un archivo
+generado; no se edita a mano. Su fuente es este mismo repositorio:
+
+- [`sidecar/src`](sidecar/src): el código del sidecar.
+- [`sidecar/build.mjs`](sidecar/build.mjs): el script que lo empaqueta
+  (`npm run build:sidecar`).
+- [`scripts/deps.package.json`](scripts/deps.package.json): las dependencias, con sus
+  versiones, que entran al paquete.
+
+Cuando existan, esta sección enlaza también el lockfile de esas dependencias
+(WAINBOX-109) y los avisos de terceros de los paquetes empaquetados (WAINBOX-112).

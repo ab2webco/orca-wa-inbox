@@ -1,6 +1,7 @@
 {
   "name": "orca-wa-inbox",
   "private": true,
+  "license": "GPL-3.0-only",
   "description": "Arnes de verificacion del plugin WhatsApp Inbox: paneles, prompts y CLIs.",
   "scripts": {
     "setup": "node scripts/setup.mjs",

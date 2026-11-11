@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// SPDX-License-Identifier: GPL-3.0-only
 /**
  * Empaqueta `sidecar/src/index.js` en `sidecar/sidecar.cjs`: un solo archivo, sin
  * `node_modules`, para que el arbol del plugin nunca cargue Baileys crudo
