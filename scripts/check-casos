@@ -11,6 +11,7 @@ Cada caso corre en su propio HOME temporal, como scripts/check-closing: la base 
 ~/.wa-inbox/scope.db y no hay variable para moverla.
 """
 import argparse
+import atexit
 import datetime
 import hashlib
 import importlib.machinery
@@ -29,6 +30,25 @@ import time
 
 RAIZ = pathlib.Path(__file__).resolve().parent.parent
 WA_SCOPE = RAIZ / "bin" / "wa-scope"
+
+
+def corrida_aislada():
+    """Una carpeta solo de esta corrida, borrada al salir (WAINBOX-108). Todo lo temporal
+    cuelga de ella (los HOME de cada caso, y lo que creen wa-scope y node via TMPDIR), y el
+    HOME por defecto tambien: un paso que se olvide de mover el HOME escribe aca y no en el
+    ~/.wa-inbox del usuario, que otra corrida a la vez tambien tocaria."""
+    raiz = tempfile.mkdtemp(prefix="check-casos-")
+    atexit.register(shutil.rmtree, raiz, True)
+    tempfile.tempdir = raiz
+    casa = os.path.join(raiz, "home")
+    os.mkdir(casa)
+    os.environ.update(TMPDIR=raiz, TEMP=raiz, TMP=raiz, HOME=casa,
+                      XDG_CONFIG_HOME=os.path.join(casa, ".config"),
+                      APPDATA=os.path.join(casa, "AppData", "Roaming"))
+    return raiz
+
+
+CORRIDA = corrida_aislada()
 CHAT = "120363000000000001@g.us"
 OTRO = "120363000000000002@g.us"
 
@@ -111,6 +131,28 @@ def cuenta(home, sql, *params):
     n = con.execute(sql, params).fetchone()[0]
     con.close()
     return n
+
+
+print("\nla corrida: su propio almacen (WAINBOX-108)")
+# Dos corridas a la vez en un equipo chocaban con "database is locked". Ninguna puede
+# llegar a un almacen que otra tambien usa: ni el ~/.wa-inbox del usuario (si algo se
+# olvida de mover el HOME) ni una carpeta temporal compartida.
+try:
+    import pwd
+    CASA_REAL = os.path.realpath(pwd.getpwuid(os.getuid()).pw_dir)
+except ImportError:  # Windows: sin pwd, el perfil del usuario
+    CASA_REAL = os.path.realpath(os.environ.get("USERPROFILE", ""))
+TMP_DE_LA_CORRIDA = os.path.realpath(tempfile.gettempdir())
+ok("la carpeta temporal es solo de esta corrida",
+   os.path.basename(TMP_DE_LA_CORRIDA).startswith("check-casos-")
+   and os.environ.get("TMPDIR") and os.path.realpath(os.environ["TMPDIR"]) == TMP_DE_LA_CORRIDA,
+   TMP_DE_LA_CORRIDA)
+ok("el HOME por defecto es de la corrida, no el del usuario",
+   os.path.realpath(os.environ.get("HOME", "")).startswith(TMP_DE_LA_CORRIDA + os.sep)
+   and os.path.realpath(os.environ.get("HOME", "")) != CASA_REAL, os.environ.get("HOME"))
+with tempfile.TemporaryDirectory() as home:
+    ok("y los HOME de cada caso cuelgan de ella",
+       os.path.realpath(home).startswith(TMP_DE_LA_CORRIDA + os.sep), home)
 
 
 # ── 1. La migracion: el trabajo abierto de antes pasa a ser casos ─────────────────
@@ -1222,9 +1264,17 @@ CHATS = [{"jid": SOPORTE, "nombre": "Soporte Norte", "grupo": True},
          {"jid": PERSONA, "nombre": "Cliente Uno", "grupo": False}]
 
 
-def msg(chat, mid, texto="", minutos=1, **extra):
-    """Un mensaje que llego hace `minutos`. Por defecto es una linea suelta del chat."""
-    return dict(chat=chat, id=mid, texto=texto, ts=int(time.time() - minutos * 60), **extra)
+def reloj_de_mensajes():
+    """El reloj de las pruebas que arman mensajes. Una prueba lo cambia por uno falso
+    (casos-cli K4) para ver que no depende de cuanto tarda el equipo entre paso y paso."""
+    return time.time()
+
+
+def msg(chat, mid, texto="", minutos=1, ahora=None, **extra):
+    """Un mensaje que llego `minutos` antes de `ahora` (sin `ahora`, antes de este momento
+    del reloj). Por defecto es una linea suelta del chat."""
+    ahora = reloj_de_mensajes() if ahora is None else ahora
+    return dict(chat=chat, id=mid, texto=texto, ts=int(ahora - minutos * 60), **extra)
 
 
 def llegan(home, cuenta, mensajes, activar=True):
@@ -18313,11 +18363,13 @@ if NODE:
 # El agente es lo unico que el dueno tiene por WhatsApp, y el agente solo tiene el CLI: lo
 # que el tablero hace (buscar, filtrar, leer una tarjeta, los informes) lo tiene que poder
 # hacer `wa-scope caso`.
-def casos_cli_linea(home):
-    """La linea A con Soporte Norte y Cliente Uno autorizados y tres casos con titulo."""
-    llegan(home, A, [msg(SOPORTE, "CB1", "no carga el login", 30, mencion=True),
-                     msg(PERSONA, "CB2", "quiero renovar", 20),
-                     msg(SOPORTE, "CB3", "otra cosa", 10, mencion=True)])
+def casos_cli_linea(home, ahora=None):
+    """La linea A con Soporte Norte y Cliente Uno autorizados y tres casos con titulo. Los
+    mensajes llegaron 30, 20 y 10 minutos antes de `ahora` (sin `ahora`, del reloj)."""
+    ahora = reloj_de_mensajes() if ahora is None else ahora
+    llegan(home, A, [msg(SOPORTE, "CB1", "no carga el login", 30, ahora, mencion=True),
+                     msg(PERSONA, "CB2", "quiero renovar", 20, ahora),
+                     msg(SOPORTE, "CB3", "otra cosa", 10, ahora, mencion=True)])
     js(home, "set", SOPORTE, "--provider", "ninguno", "--mode", "borrador")
     js(home, "set", PERSONA, "--provider", "ninguno", "--mode", "borrador")
     ids = {}
@@ -18501,55 +18553,143 @@ if NODE:
            "E_NOT_FOUND" in corre(home, "caso", "estado", "999").stderr)
 
 
+# K4 corre con relojes falsos (WAINBOX-108). Un K4 que lee el reloj en cada mensaje mide
+# la primera respuesta en 300 s MAS lo que el equipo tardo entre armar la linea y la
+# respuesta: en un equipo cargado se pasaba de los 5 s de margen y K4 fallaba sin que el
+# codigo cambiara. Y la hora es la local: medianoche y el cambio de hora no lo pueden mover.
+def casos_cli_k4(home, escenario):
+    def ok_(nombre, condicion, detalle=""):
+        return ok(f"{nombre} [{escenario}]", condicion, detalle)
+
+    # Un solo "ahora" para toda la linea: la respuesta sale 5 minutos despues del mensaje
+    # del cliente aunque el equipo tarde lo que tarde en armarla.
+    ahora = reloj_de_mensajes()
+    ids = casos_cli_linea(home, ahora)
+    llegan(home, A, [msg(PERSONA, "CB2R", "Ya lo vemos.", 15, ahora, yo=True)])
+    js(home, "caso", "mover", ids["CB1"], "cerrado", "--motivo", "listo", "--actor", "dueno")
+    r = js(home, "caso", "informe", "--periodo", "7d")[0]
+    antes = dict(os.environ)
+    try:
+        ws = carga_wa_scope(home)
+        con = ws.db()
+        try:
+            informe = ws.build_reports(con)
+        finally:
+            con.close()
+    finally:
+        os.environ.clear()
+        os.environ.update(antes)
+    per = informe["periods"]["7d"]
+    ok_("cuenta por etapa y lo vivo, como el tablero",
+        r.get("stages", {}).get("recibido") == 2 and r["stages"].get("cerrado") == 1
+        and r.get("live") == informe["live"], f"{r.get('stages')} {r.get('live')}")
+    ok_("la primera respuesta contra la meta, la misma del informe",
+        r.get("first_response", {}).get("median_s") == per["first_response"]["value"]
+        and 295 <= r["first_response"]["median_s"] <= 305
+        and r["first_response"]["n"] == 1 and r.get("sla", {}).get("target_minutes")
+        == informe["sla_minutes"] and r["sla"].get("met") == per["sla"]["met"],
+        f"{r.get('first_response')} {r.get('sla')}")
+    ok_("la resolucion y la espera del cliente",
+        r.get("resolution", {}).get("n") == per["resolution"]["n"] == 1
+        and "unanswered" in r.get("customer_wait", {}), f"{r.get('resolution')}")
+    ok_("el periodo y la linea", r.get("period") == "7d" and r.get("account") == A
+        and r.get("from") == per["from"], f"{r}")
+    p = corre(home, "caso", "informe", "--periodo", "ayer")
+    ok_("un periodo que no existe es E_ARGS", p.returncode == 2 and "E_ARGS" in p.stderr)
+    csv_ = subprocess.run([str(WA_SCOPE), "caso", "informe", "--periodo", "today", "--csv"],
+                          capture_output=True, text=True,
+                          env=dict(os.environ, HOME=str(home), ORCA_CLI_COMMAND=SIN_ORCA))
+    filas = csv_.stdout.strip().splitlines()
+    ok_("--csv: una fila por caso creado en el periodo, con las columnas del panel",
+        csv_.returncode == 0 and filas[0] ==
+        "case_id,chat,created,first_response_s,resolution_s,stage,project,sla"
+        and len(filas) == 4 and any(f.startswith(ids["CB2"] + ",") and ",30" in f
+                                    and f.endswith(",met") for f in filas[1:]), csv_.stdout)
+    texto = subprocess.run([str(WA_SCOPE), "caso", "informe"], capture_output=True,
+                           text=True, env=dict(os.environ, HOME=str(home),
+                                               ORCA_CLI_COMMAND=SIN_ORCA)).stdout
+    ok_("en texto, unas lineas cortas", "First reply" in texto and "5m" in texto
+        and len(texto.strip().splitlines()) <= 10, texto)
+
+
+class RelojLento:
+    """Un equipo cargado: cada lectura del reloj llega `paso` segundos despues que la
+    anterior, como si entre paso y paso de la prueba se fueran esos segundos."""
+
+    def __init__(self, paso):
+        self.paso = paso
+        self.lecturas = 0
+
+    def __call__(self):
+        self.lecturas += 1
+        return time.time() + self.lecturas * self.paso
+
+
+def zona_fija(hora_local, t, lado="este"):
+    """Una zona POSIX sin cambio de hora en la que el instante `t` son las `hora_local`
+    ('HH:MM'), al `lado` del UTC que se pida si una zona de verdad (de -12 a +14 h) cabe
+    alli: al este, el dia local empezo antes que el UTC; al oeste, despues."""
+    h, m = map(int, hora_local.split(":"))
+    este = (h * 3600 + m * 60 - int(t) % 86400) % 86400       # local = utc + desfase
+    oeste = este - 86400
+    desfase = este if (lado == "este" and este <= 14 * 3600) or oeste < -12 * 3600 else oeste
+    signo = "-" if desfase >= 0 else "+"                      # POSIX: el signo va al reves
+    d = abs(desfase)
+    return f"<FAK>{signo}{d // 3600}:{d % 3600 // 60:02d}:{d % 60:02d}"
+
+
+def zona_con_cambio(t, hace_s):
+    """Una zona que adelanto el reloj una hora (a las 00:00 locales, pasan a ser la 01:00)
+    hace `hace_s` segundos: el cambio cae entre el mensaje del cliente y su respuesta."""
+    cambio = int(t) - hace_s
+    base = zona_fija("00:00", cambio)
+    signo, hms = base[5], base[6:]
+    hh, mm, ss = map(int, hms.split(":"))
+    desfase = (1 if signo == "-" else -1) * (hh * 3600 + mm * 60 + ss)
+    dia = time.gmtime(cambio + desfase).tm_yday - 1           # 0..365, cuenta el 29/2
+    return f"{base}<FAKV>,{dia}/0,{(dia + 182) % 365}/0"
+
+
+def con_reloj(nuevo):
+    global reloj_de_mensajes
+    antes, reloj_de_mensajes = reloj_de_mensajes, nuevo
+    return antes
+
+
+def casos_cli_k4_con_relojes():
+    # La zona de cada escenario se arma justo antes de correrlo: las 00:10 son las 00:10
+    # cuando K4 arranca, y el cambio de hora cae entre el mensaje (20 min) y la respuesta
+    # (15 min) de esa corrida.
+    escenarios = [("el reloj del equipo", None, None),
+                  ("un equipo lento, 10 s por paso", None, RelojLento(10)),
+                  ("las 00:10 al este del UTC, lento",
+                   lambda t: zona_fija("00:10", t, "este"), RelojLento(10)),
+                  ("las 00:10 al oeste del UTC, lento",
+                   lambda t: zona_fija("00:10", t, "oeste"), RelojLento(10)),
+                  ("el cambio de hora entre el mensaje y la respuesta, lento",
+                   lambda t: zona_con_cambio(t, 17 * 60), RelojLento(10))]
+    zona_antes = os.environ.get("TZ")
+    for escenario, zona, reloj_falso in escenarios:
+        if zona:
+            os.environ["TZ"] = zona(time.time())
+            time.tzset()
+        reloj_antes = con_reloj(reloj_falso) if reloj_falso else None
+        try:
+            with tempfile.TemporaryDirectory() as home:
+                casos_cli_k4(home, escenario)
+        finally:
+            if reloj_falso:
+                con_reloj(reloj_antes)
+            if zona_antes is None:
+                os.environ.pop("TZ", None)
+            else:
+                os.environ["TZ"] = zona_antes
+            time.tzset()
+
+
 print("\ncasos-cli K4: caso informe trae los numeros de la pestana Informes")
 if NODE:
-    with tempfile.TemporaryDirectory() as home:
-        ids = casos_cli_linea(home)
-        llegan(home, A, [msg(PERSONA, "CB2R", "Ya lo vemos.", 15, yo=True)])
-        js(home, "caso", "mover", ids["CB1"], "cerrado", "--motivo", "listo", "--actor", "dueno")
-        r = js(home, "caso", "informe", "--periodo", "7d")[0]
-        antes = dict(os.environ)
-        try:
-            ws = carga_wa_scope(home)
-            con = ws.db()
-            try:
-                informe = ws.build_reports(con)
-            finally:
-                con.close()
-        finally:
-            os.environ.clear()
-            os.environ.update(antes)
-        per = informe["periods"]["7d"]
-        ok("cuenta por etapa y lo vivo, como el tablero",
-           r.get("stages", {}).get("recibido") == 2 and r["stages"].get("cerrado") == 1
-           and r.get("live") == informe["live"], f"{r.get('stages')} {r.get('live')}")
-        ok("la primera respuesta contra la meta, la misma del informe",
-           r.get("first_response", {}).get("median_s") == per["first_response"]["value"]
-           and 295 <= r["first_response"]["median_s"] <= 305
-           and r["first_response"]["n"] == 1 and r.get("sla", {}).get("target_minutes")
-           == informe["sla_minutes"] and r["sla"].get("met") == per["sla"]["met"],
-           f"{r.get('first_response')} {r.get('sla')}")
-        ok("la resolucion y la espera del cliente",
-           r.get("resolution", {}).get("n") == per["resolution"]["n"] == 1
-           and "unanswered" in r.get("customer_wait", {}), f"{r.get('resolution')}")
-        ok("el periodo y la linea", r.get("period") == "7d" and r.get("account") == A
-           and r.get("from") == per["from"], f"{r}")
-        p = corre(home, "caso", "informe", "--periodo", "ayer")
-        ok("un periodo que no existe es E_ARGS", p.returncode == 2 and "E_ARGS" in p.stderr)
-        csv_ = subprocess.run([str(WA_SCOPE), "caso", "informe", "--periodo", "today", "--csv"],
-                              capture_output=True, text=True,
-                              env=dict(os.environ, HOME=str(home), ORCA_CLI_COMMAND=SIN_ORCA))
-        filas = csv_.stdout.strip().splitlines()
-        ok("--csv: una fila por caso creado en el periodo, con las columnas del panel",
-           csv_.returncode == 0 and filas[0] ==
-           "case_id,chat,created,first_response_s,resolution_s,stage,project,sla"
-           and len(filas) == 4 and any(f.startswith(ids["CB2"] + ",") and ",30" in f
-                                       and f.endswith(",met") for f in filas[1:]), csv_.stdout)
-        texto = subprocess.run([str(WA_SCOPE), "caso", "informe"], capture_output=True,
-                               text=True, env=dict(os.environ, HOME=str(home),
-                                                   ORCA_CLI_COMMAND=SIN_ORCA)).stdout
-        ok("en texto, unas lineas cortas", "First reply" in texto and "5m" in texto
-           and len(texto.strip().splitlines()) <= 10, texto)
+    casos_cli_k4_con_relojes()
 
 
 print("\ncasos-cli K5: una nota en el caso, sin moverlo")
