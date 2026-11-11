@@ -22,7 +22,8 @@
  * principio que el sync: un camino de falla que ninguna prueba recorre es un camino
  * que nadie sabe si existe.
  */
-import { mandoSinValla, mandoDe, encontrarPython, crearPythonDelProceso, SIN_PYTHON } from '../main.mjs'
+import { mandoSinValla, mandoDe, encontrarPython, crearPythonDelProceso, SIN_PYTHON,
+  restriccionDeSidecar } from '../main.mjs'
 import { mandoHerramienta, resolverPython, pythonDeEnv, PYTHON_ENV } from '../sidecar/src/herramienta.js'
 import {
   mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, realpathSync, rmSync,
@@ -6209,6 +6210,39 @@ console.log('\nworker: la vista previa del hilo se hace fuera de la valla')
   ok('WAINBOX-87: la accion hilo pide la vista previa a quien se la inyecta el worker',
     pedidas.length === 1 && pedidas[0] === foto &&
     v?.mensajes?.[0]?.adjunto?.vista === 'data:image/png;base64,' + PNG_1X1, JSON.stringify(v))
+}
+
+console.log('\nworker: la restriccion de la linea llega a storage, sin nombrar a nadie (WAINBOX-75)')
+{
+  const fin = 1_800_000_000_000 + 3_600_000
+  const puesta = restriccionDeSidecar(null, { type: 'restriccion', origen: 'bloqueo',
+    activa: true, tipo: 'BIZ_QUALITY', hasta: fin, ts: 1_800_000_000_000 })
+  ok('un bloqueo activo queda en storage con su fin',
+    puesta?.bloqueo?.activa === true && puesta.bloqueo.hasta === fin &&
+    puesta.bloqueo.tipo === 'BIZ_QUALITY' && puesta.cupo === null, JSON.stringify(puesta))
+  const conCupo = restriccionDeSidecar(puesta, { type: 'restriccion', origen: 'cupo',
+    activa: false, tipo: 'NONE', total: 20, restante: 15, hasta: null, ts: 1 })
+  ok('el cupo se suma sin pisar el bloqueo',
+    conCupo.bloqueo?.activa === true && conCupo.cupo?.restante === 15 && conCupo.cupo.total === 20,
+    JSON.stringify(conCupo))
+  const levantada = restriccionDeSidecar(conCupo, { type: 'restriccion', origen: 'bloqueo',
+    activa: false, tipo: 'DEFAULT', hasta: null, ts: 2 })
+  ok('levantado, el bloqueo queda inactivo', levantada.bloqueo.activa === false &&
+    levantada.cupo?.restante === 15, JSON.stringify(levantada))
+  const sucia = restriccionDeSidecar(null, { type: 'restriccion', origen: 'bloqueo', activa: true,
+    tipo: '573001112233@s.whatsapp.net', hasta: 'manana', jid: '573001112233@s.whatsapp.net',
+    body: 'hola' })
+  ok('lo que no es un codigo o un numero no llega al storage',
+    !/573001112233|hola|manana/.test(JSON.stringify(sucia)), JSON.stringify(sucia))
+  ok('un origen desconocido o otro tipo de mensaje no escribe nada',
+    restriccionDeSidecar(null, { type: 'restriccion', origen: 'otro' }) === null &&
+    restriccionDeSidecar(null, { type: 'latido' }) === null)
+  const fuente = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'main.mjs'), 'utf8')
+  ok('el worker escribe la restriccion que manda el sidecar',
+    /mensaje\?\.type === 'restriccion'[\s\S]{0,200}restriccionDeSidecar\(estado\.restriccion, mensaje\)/
+      .test(fuente))
+  ok('y la borra al cambiar de numero',
+    /cambio === true \? \{ restriccion: null \}/.test(fuente))
 }
 
 rmSync(RAIZ, { recursive: true, force: true })

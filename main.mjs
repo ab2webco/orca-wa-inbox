@@ -1684,6 +1684,36 @@ function motivoAuthDir(resuelto) {
   return SIDECAR_MOTIVO.AUTHDIR_FALLO
 }
 
+
+// Los tipos de restriccion son codigos de Baileys; lo demas no llega al storage.
+const TIPO_RESTRICCION = /^[A-Z][A-Z_]{0,63}$/
+
+/**
+ * La restriccion de la linea como la guarda storage (WAINBOX-75), o `null` si el mensaje
+ * no es una. `previa` es la de antes: cada origen (`bloqueo`, `cupo`) pisa solo el suyo.
+ *
+ * Solo banderas, un codigo y numeros: esto lo lee el panel y nada de aca nombra a
+ * nadie. Un campo con otra forma se tira en vez de copiarse.
+ */
+export function restriccionDeSidecar (previa, mensaje) {
+  if (mensaje?.type !== 'restriccion') return null
+  const origen = mensaje.origen === 'bloqueo' || mensaje.origen === 'cupo' ? mensaje.origen : null
+  if (!origen) return null
+  const numero = (v) => (Number.isFinite(Number(v)) && v !== null && v !== '' ? Number(v) : null)
+  const entrada = {
+    activa: mensaje.activa === true,
+    tipo: TIPO_RESTRICCION.test(String(mensaje.tipo ?? '')) ? String(mensaje.tipo) : null,
+    hasta: numero(mensaje.hasta),
+    at: numero(mensaje.ts) ?? Date.now()
+  }
+  if (origen === 'cupo') {
+    entrada.total = numero(mensaje.total)
+    entrada.restante = numero(mensaje.restante)
+  }
+  const base = previa && typeof previa === 'object' ? previa : {}
+  return { bloqueo: base.bloqueo ?? null, cupo: base.cupo ?? null, [origen]: entrada }
+}
+
 /**
  * Como lanzar un hijo que tiene que correr FUERA de la valla de permisos.
  *
@@ -1812,6 +1842,9 @@ export function lanzarSidecar({ orca, scriptPath, authDir, toolsDir = TOOLS,
     latido: null,
     // De que numero es la linea (`pn:<digitos>`), cuando el sidecar lo sabe.
     cuenta: null,
+    // Si WhatsApp tiene restringida la linea (WAINBOX-75): `{ bloqueo, cupo }`, cada uno
+    // como lo dejo `restriccionDeSidecar`. El panel pinta el aviso con esto.
+    restriccion: null,
     startedAt: new Date().toISOString() }
   // Las escrituras se ENCADENAN sobre una sola promesa. `guardar` es async y nada
   // garantiza que dos `storage.set` en vuelo resuelvan en el orden en que se
@@ -1921,7 +1954,8 @@ export function lanzarSidecar({ orca, scriptPath, authDir, toolsDir = TOOLS,
         // el panel lo compara con lo que tiene guardado para no pintar lo del numero
         // anterior como si fuera del nuevo, y etiqueta con esto lo que autoriza.
         const cuenta = typeof mensaje.cuenta === 'string' ? mensaje.cuenta : null
-        escribir({ cuenta })
+        // La restriccion es del numero: la de la linea de antes no es de esta.
+        escribir({ cuenta, ...(mensaje.cambio === true ? { restriccion: null } : {}) })
         // De que numero es esta linea, siempre que se sabe: el registro de lineas lo anota.
         if (cuenta) avisar(() => alCuenta(cuenta), 'cuenta')
         if (cuenta && mensaje.cambio === true) {
@@ -1978,6 +2012,9 @@ export function lanzarSidecar({ orca, scriptPath, authDir, toolsDir = TOOLS,
           }
         }
         guardadosVistos = guardados
+      } else if (mensaje?.type === 'restriccion') {
+        const restriccion = restriccionDeSidecar(estado.restriccion, mensaje)
+        if (restriccion) escribir({ restriccion })
       } else if (mensaje?.type === 'error') {
         escribir({ error: { code: mensaje.code ?? null,
           detail: String(mensaje.detail ?? '').slice(0, 300) } })

@@ -42,6 +42,12 @@ export const ENVIO = Object.freeze({
   RECHAZADO: 'rechazado'
 })
 
+// El motivo de un envio a un chat nuevo mientras WhatsApp tiene restringida la linea
+// (WAINBOX-75). Es contrato con `bin/wa-send`, que lo traduce a una frase, y
+// `scripts/check-clis` compara los dos lados: un codigo que se renombra de un lado solo
+// deja al dueno leyendo "WhatsApp lo rechazo" sin saber que la linea esta frenada.
+export const MOTIVO_RESTRINGIDA = 'cuenta-restringida'
+
 // Cada cuanto el sidecar mira la bandeja de salida y publica su latido. `wa-send` es un
 // proceso corto esperando un veredicto: un segundo es lo que separa "contesto enseguida"
 // de "parece colgado", y es un `select` sobre un indice, no una llamada al host.
@@ -127,7 +133,8 @@ export function contenidoDe (fila, leer = readFileSync) {
  * al dueno que WhatsApp se nego a un mensaje que nunca lo vio.
  */
 export async function atenderSalida ({ almacen, enviar, conectado = true,
-  ahora = () => Date.now(), maximo = POR_VUELTA, cuenta, leer = readFileSync } = {}) {
+  ahora = () => Date.now(), maximo = POR_VUELTA, cuenta, leer = readFileSync,
+  restringida = () => false } = {}) {
   if (!almacen || typeof enviar !== 'function' || !conectado) return { enviados: 0, rechazados: 0 }
   // Cada numero, su linea: el socket solo manda lo encolado para SU cuenta. Lo de otro
   // numero queda pendiente hasta que ese numero se vuelva a vincular. `null` es "todavia
@@ -143,6 +150,16 @@ export async function atenderSalida ({ almacen, enviar, conectado = true,
   for (let i = 0; i < maximo; i += 1) {
     const fila = almacen.tomarEnvio(ahora(), cuenta)
     if (!fila) break
+    // Con la linea restringida, WhatsApp no deja escribir a quien todavia no tiene un
+    // mensaje nuestro (error 463, o el cupo de chats nuevos agotado). Intentarlo solo
+    // trae un error generico de la libreria; se cierra antes, con un codigo que dice que
+    // hacer. Una respuesta en un chat donde la linea ya escribio se intenta igual.
+    if (restringida() && !chatConSalida(almacen, fila)) {
+      almacen.resolverEnvio(fila.req_id, { estado: ENVIO.RECHAZADO,
+        motivo: MOTIVO_RESTRINGIDA, ahora: ahora() })
+      rechazados += 1
+      continue
+    }
     try {
       const r = await enviar(fila.chat_jid, contenidoDe(fila, leer))
       almacen.resolverEnvio(fila.req_id, { estado: ENVIO.ENVIADO,
@@ -158,6 +175,96 @@ export async function atenderSalida ({ almacen, enviar, conectado = true,
     }
   }
   return { enviados, rechazados }
+}
+
+/** Si la linea de esa fila ya le escribio a ese chat: un mensaje propio en el almacen, o
+ *  un envio de esta bandeja que salio. Solo se pregunta con la linea restringida. */
+export function chatConSalida (almacen, fila) {
+  const propio = almacen.con.prepare('select 1 from mensaje where account=? and chat_jid=? ' +
+    'and from_me=1 limit 1').get(fila.account, fila.chat_jid)
+  if (propio) return true
+  return Boolean(almacen.con.prepare("select 1 from envio where account=? and chat_jid=? " +
+    "and estado='enviado' limit 1").get(fila.account, fila.chat_jid))
+}
+
+// Un tipo de restriccion es un codigo de Baileys (`ReachoutTimelockEnforcementType`,
+// `NewChatMessageCappingStatusType`: mayusculas y guiones bajos). Lo que no tenga esa
+// forma no viaja tal cual: esto termina en storage y en el `doctor`.
+const TIPO_DE_RESTRICCION = /^[A-Z][A-Z_]{0,63}$/
+const tipoDe = (valor) => (TIPO_DE_RESTRICCION.test(String(valor ?? ''))
+  ? String(valor) : 'desconocido')
+
+/** Una hora de Baileys en ms: un `Date`, segundos en texto (los `*_timestamp` del cupo) o
+ *  un numero. `null` si no hay. */
+function horaDe (valor, enSegundos = false) {
+  if (valor instanceof Date) return Number.isFinite(valor.getTime()) ? valor.getTime() : null
+  const n = Number(valor)
+  if (!Number.isFinite(n) || n <= 0) return null
+  return enSegundos ? n * 1000 : n
+}
+
+/**
+ * Lo que WhatsApp dice de la restriccion de esta linea (WAINBOX-75), y la compuerta del
+ * envio que sale de ahi.
+ *
+ * Baileys 7 lo avisa de dos maneras: el bloqueo de contacto (`reachoutTimeLock` en
+ * `connection.update`, lib/Types/State.d.ts `ReachoutTimelockState`) y el cupo de chats
+ * nuevos (`message-capping.update`, `NewChatMessageCapInfo`). Cada aviso devuelve el
+ * mensaje `restriccion` que el sidecar emite, o `null` si no cambio nada: la consulta de
+ * Baileys repite por `connection.update` lo mismo que devuelve.
+ *
+ * El mensaje es de la LINEA, no de nadie: banderas, el tipo, horas y numeros. Ni un jid,
+ * ni un cuerpo.
+ *
+ * El riesgo es un "restringida" falso, que frenaria envios legitimos a chats nuevos. Por
+ * eso la compuerta cierra solo con `isActive: true` explicito o con el cupo `CAPPED`, y
+ * el bloqueo se abre solo al llegar `timeEnforcementEnds`.
+ */
+export function crearRestriccion ({ ahora = () => Date.now() } = {}) {
+  let bloqueo = { activa: false, tipo: 'DEFAULT', hasta: null }
+  let capado = false
+  const mensaje = (origen, cuerpo) => ({ type: 'restriccion', origen, ...cuerpo, ts: ahora() })
+  const bloqueoVigente = () => bloqueo.activa &&
+    (bloqueo.hasta === null || bloqueo.hasta > ahora())
+  return {
+    /** Un `ReachoutTimelockState`. */
+    bloqueo (estado) {
+      if (typeof estado?.isActive !== 'boolean') return null
+      const nuevo = estado.isActive
+        ? { activa: true, tipo: tipoDe(estado.enforcementType),
+            hasta: horaDe(estado.timeEnforcementEnds) }
+        : { activa: false, tipo: tipoDe(estado.enforcementType ?? 'DEFAULT'), hasta: null }
+      if (nuevo.activa === bloqueo.activa && nuevo.tipo === bloqueo.tipo &&
+        nuevo.hasta === bloqueo.hasta) return null
+      bloqueo = nuevo
+      return mensaje('bloqueo', nuevo)
+    },
+    /** Un `NewChatMessageCapInfo`. Siempre se emite: lo que queda cambia con cada chat. */
+    cupo (info) {
+      if (!info || typeof info !== 'object') return null
+      const total = Number.isFinite(Number(info.total_quota)) ? Number(info.total_quota) : null
+      const usado = Number.isFinite(Number(info.used_quota)) ? Number(info.used_quota) : null
+      const tipo = tipoDe(info.capping_status ?? 'NONE')
+      capado = tipo === 'CAPPED'
+      return mensaje('cupo', {
+        activa: capado,
+        tipo,
+        hasta: horaDe(info.cycle_end_timestamp, true),
+        total,
+        restante: total !== null && usado !== null ? Math.max(0, total - usado) : null
+      })
+    },
+    /** El levantamiento de un bloqueo que llego a su fin, una vez; si no, `null`. */
+    revisar () {
+      if (!bloqueo.activa || bloqueoVigente()) return null
+      bloqueo = { activa: false, tipo: 'DEFAULT', hasta: null }
+      return mensaje('bloqueo', bloqueo)
+    },
+    /** Si la compuerta del envio esta cerrada para chats nuevos. */
+    activa () {
+      return bloqueoVigente() || capado
+    }
+  }
 }
 
 /**

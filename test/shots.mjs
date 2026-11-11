@@ -1134,6 +1134,18 @@ const PANELES = [
       })
     })
   },
+  // WAINBOX-75: WhatsApp restringio la linea. El aviso va debajo de "Linea conectada", con
+  // su fin, y se quita solo al levantarse.
+  {
+    nombre: 'actividad-restringida',
+    archivo: 'activity.html',
+    anchos: ANCHOS,
+    datos: Object.assign({}, CON_LINEA, {
+      sidecar: Object.assign({}, CON_LINEA.sidecar, { me: '+573000000001',
+        restriccion: { bloqueo: { activa: true, tipo: 'BIZ_QUALITY',
+          hasta: AHORA_MS + 3 * 3600 * 1000, at: AHORA_MS }, cupo: null } })
+    })
+  },
   // El tablero de casos (T5, con la anatomia del de Plane en Orca) y las acciones del dueno
   // (T6). Los estados que pide el rediseno van a los cuatro anchos, en los dos idiomas y los
   // dos temas: a lo ancho son columnas y desde 768 hacia abajo la lista por etapa, que es

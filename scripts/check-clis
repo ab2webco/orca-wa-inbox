@@ -2049,6 +2049,68 @@ def revisa_doctor_lid(fallos: list) -> int:
     return hechas
 
 
+def revisa_restriccion(fallos: list) -> int:
+    """WAINBOX-75: una linea que WhatsApp restringio se dice igual en los tres lados. El
+    codigo del rechazo es el MISMO en el sidecar y en `wa-send`, la frase es la MISMA en
+    `wa-send` y en `wa-scope doctor`, y el doctor lee lo que el sidecar anoto."""
+    hechas = 0
+    nodo = shutil.which("node")
+    if not nodo:
+        print("  aviso: sin node, no se comparo la restriccion", file=sys.stderr)
+        return hechas
+    wa_send = cargar_modulo("wa_send_restr", BIN / "wa-send")
+    wa_scope = cargar_modulo("wa_scope_restr", BIN / "wa-scope")
+    js = subprocess.run(
+        [nodo, "--input-type=module", "-e",
+         "import { MOTIVO_RESTRINGIDA } from %r; process.stdout.write(MOTIVO_RESTRINGIDA)"
+         % (RAIZ / "sidecar" / "src" / "envio.js").as_uri()],
+        capture_output=True, text=True, timeout=120)
+    hechas += 1
+    if (js.stdout or "").strip() != wa_send.MOTIVO_RESTRINGIDA:
+        fallos.append(f"el sidecar rechaza con {js.stdout.strip()!r} y wa-send traduce "
+                      f"{wa_send.MOTIVO_RESTRINGIDA!r}: la linea restringida se leeria como un "
+                      "rechazo cualquiera")
+    hechas += 1
+    if wa_send.RESTRINGIDA_FRASE != wa_scope.RESTRINGIDA_FRASE:
+        fallos.append("wa-send y wa-scope doctor dicen distinto lo de la linea restringida")
+
+    fin_ms = (int(time.time()) + 3 * 3600) * 1000
+    with tempfile.TemporaryDirectory() as tmp:
+        home = pathlib.Path(tmp)
+        env = entorno(home)
+        arma = (
+            "import { abrirAlmacen, rutaAlmacen } from %r;"
+            "import { anotarRestriccion } from %r;"
+            "const a = abrirAlmacen(rutaAlmacen({ HOME: process.env.HOME }));"
+            "a.registrarLinea({ cuenta: %r, pn: '573000000012:7@s.whatsapp.net', nombre: 'L' });"
+            "a.activarLinea(%r); a.latir();"
+            "anotarRestriccion({ almacen: a, cuenta: %r, mensaje: { type: 'restriccion',"
+            " origen: 'bloqueo', activa: true, tipo: 'BIZ_QUALITY', hasta: %d, ts: 1 } });"
+            "a.cerrar();"
+            % ((RAIZ / "sidecar" / "src" / "almacen.js").as_uri(),
+               (RAIZ / "sidecar" / "src" / "index.js").as_uri(), NUEVA, NUEVA, NUEVA, fin_ms))
+        subprocess.run([nodo, "--input-type=module", "-e", arma], env=env, check=True,
+                       capture_output=True, timeout=120)
+        p = subprocess.run([str(BIN / "wa-scope"), "doctor", "--json"], capture_output=True,
+                           text=True, env=env, timeout=120)
+        try:
+            r = json.loads(p.stdout or "[]")[0].get("restriction") or {}
+        except (ValueError, IndexError, AttributeError):
+            r = {}
+        hasta = time.strftime("%Y-%m-%d %H:%M", time.localtime(fin_ms // 1000))
+        hechas += 1
+        if r.get("active") is not True or r.get("kind") != "bloqueo" or r.get("until") != hasta:
+            fallos.append(f"`wa-scope doctor --json` no dice la restriccion: {p.stdout.strip()[:300]} "
+                          f"{p.stderr.strip()[-200:]}")
+        t = subprocess.run([str(BIN / "wa-scope"), "doctor"], capture_output=True, text=True,
+                           env=env, timeout=120)
+        hechas += 1
+        if f"restricted until {hasta}" not in t.stdout or wa_scope.RESTRINGIDA_FRASE not in t.stdout:
+            fallos.append(f"`wa-scope doctor` no dice 'restricted until {hasta}': "
+                          f"{t.stdout.strip()[:300]} {t.stderr.strip()[-200:]}")
+    return hechas
+
+
 def revisa_reclave_local(fallos: list) -> int:
     """T9f: lo que colgaba de `local` en scope.db pasa al numero de su linea, al MISMO
     numero que anoto el sidecar en capture.db. Explicito: ningun comando de todos los
@@ -4181,6 +4243,7 @@ def main() -> int:
                       + revisa_miembros(fallos)
                       + revisa_roles(fallos)
                       + revisa_doctor_lid(fallos)
+                      + revisa_restriccion(fallos)
                       + revisa_proyectos(fallos)
                       + revisa_varios_proyectos(fallos)
                       + revisa_rutas_y_proyectos_por_linea(fallos)

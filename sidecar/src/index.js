@@ -19,7 +19,8 @@ import { basename, dirname, isAbsolute, join } from 'node:path'
 import { abrirAlmacen, rutaAlmacen, rutaMedia } from './almacen.js'
 import { crearAlcance } from './alcance.js'
 import { crearRegistro } from './registro.js'
-import { atenderSalida, crearCacheDeReintentos, ENVIO_LATIDO_MS, mensajeDeEnvio } from './envio.js'
+import { atenderSalida, crearCacheDeReintentos, crearRestriccion, ENVIO_LATIDO_MS, mensajeDeEnvio,
+  motivoDeFallo } from './envio.js'
 import { INGESTA, ingerirActualizacion, ingerirCambioDeMiembros, ingerirChats, ingerirEntrega,
   ingerirContactos, ingerirMensaje, ingerirMiembros, ingerirParesLid } from './ingesta.js'
 import { cuentaDeIdentidad, identidadDeSesion, identidadesPropias,
@@ -391,6 +392,48 @@ function emitir (mensaje) {
   process.stdout.write(JSON.stringify(mensaje) + '\n')
 }
 
+/**
+ * Las dos consultas de restriccion de Baileys 7, una vez cada una, al abrir (WAINBOX-75):
+ * el bloqueo de contacto (`fetchAccountReachoutTimelock`) y el cupo de chats nuevos
+ * (`fetchNewChatMessageCap`). El aviso solo llega cuando CAMBIA: una linea que ya
+ * estaba restringida al conectar no lo diria nunca sin preguntar.
+ *
+ * Que una falle no tumba la sesion: se dice con `restriccion-sin-leer`, con el detalle
+ * limpio (el error puede traer un jid), y la otra sigue. Un socket sin las consultas
+ * (Baileys 6) no es un error: no hay nada que preguntar.
+ */
+export async function consultarRestriccion ({ sock, restriccion, emitir, emitirError }) {
+  const consultas = [
+    ['fetchAccountReachoutTimelock', (r) => restriccion.bloqueo(r)],
+    ['fetchNewChatMessageCap', (r) => restriccion.cupo(r)]
+  ]
+  await Promise.all(consultas.map(async ([nombre, anotar]) => {
+    if (typeof sock?.[nombre] !== 'function') return
+    try {
+      const mensaje = anotar(await sock[nombre]())
+      if (mensaje) emitir(mensaje)
+    } catch (error) {
+      emitirError('restriccion-sin-leer', motivoDeFallo(error))
+    }
+  }))
+}
+
+/** La restriccion de la linea, en su almacen (`restriccion@<cuenta>`): `wa-scope doctor`
+ *  la lee de ahi, con Orca cerrado. Un objeto por origen, el ultimo que llego. */
+export function anotarRestriccion ({ almacen, cuenta, mensaje }) {
+  if (!almacen || !cuenta || mensaje?.type !== 'restriccion') return
+  const llave = `restriccion@${cuenta}`
+  let previo = {}
+  try {
+    previo = JSON.parse(almacen.con.prepare('select value from store_meta where key=?')
+      .get(llave)?.value ?? '{}') || {}
+  } catch {
+    previo = {}
+  }
+  const { type, origen, ...resto } = mensaje
+  almacen.anotarMeta(llave, JSON.stringify({ ...previo, [origen]: resto }))
+}
+
 function emitirQr (qr, rotacion) {
   emitir(mensajeQr(qr, rotacion))
 }
@@ -632,6 +675,18 @@ async function iniciar () {
   // dueno que WhatsApp rechazo un mensaje que nunca lo vio es peor que tardar.
   let socket = null
   let conectado = false
+  // Lo que WhatsApp dice de la restriccion de esta linea, y la compuerta del envio.
+  const restriccion = crearRestriccion()
+  const emitirRestriccion = (mensaje) => {
+    if (!mensaje) return
+    // Sin la cuenta: el worker ya sabe de que linea es (`linea`), y esto es de la linea.
+    emitir(mensaje)
+    try {
+      anotarRestriccion({ almacen, cuenta, mensaje })
+    } catch (error) {
+      avisarFallo('restriccion-sin-anotar', error)
+    }
+  }
   // UNA por proceso, no por socket: ver `crearCacheDeReintentos`.
   const reintentos = crearCacheDeReintentos()
   // Las llaves con su cache se envuelven UNA vez: cada reconexion usa el mismo almacen.
@@ -706,7 +761,10 @@ async function iniciar () {
     })
 
     sock.ev.on('connection.update', (actualizacion) => {
-      const { connection, lastDisconnect, qr } = actualizacion
+      const { connection, lastDisconnect, qr, reachoutTimeLock } = actualizacion
+      // El bloqueo de contacto llega por este mismo evento, solo o junto a otra cosa
+      // (lib/Socket/messages-recv.js): se lee antes de decidir por `connection`.
+      if (reachoutTimeLock) emitirRestriccion(restriccion.bloqueo(reachoutTimeLock))
       if (qr) {
         // Un QR nuevo reinicia el contador: ver `intentoTrasEvento`. El backoff
         // exponencial esta para una caida de red, no para la rotacion esperada del QR.
@@ -719,6 +777,8 @@ async function iniciar () {
         intento = intentoTrasEvento(intento, 'open')
         conectado = true
         emitirConexion('open')
+        // Si la linea ya estaba restringida al conectar, el aviso no vuelve a llegar solo.
+        consultarRestriccion({ sock, restriccion, emitir: emitirRestriccion, emitirError })
         // Quien soy yo, a los efectos de "me nombraron" y "contestaron algo mio". El
         // LID y el TELEFONO son numeros DISTINTOS y llegan cada uno por su lado: mirar
         // uno solo pierde las respuestas viejas sin un solo error (§11-B1/B2).
@@ -792,6 +852,9 @@ async function iniciar () {
         setTimeout(conectar, decision.esperaMs)
       }
     })
+
+    // El cupo de chats nuevos (`NewChatMessageCapInfo`): lo que queda, y si se agoto.
+    sock.ev.on('message-capping.update', (info) => emitirRestriccion(restriccion.cupo(info)))
 
     // ── Los mensajes ───────────────────────────────────────────────────────────────
     sock.ev.on('messages.upsert', async ({ messages }) => {
@@ -1031,7 +1094,7 @@ async function iniciar () {
     if (drenando) return
     drenando = true
     // Solo lo encolado para ESTE numero (`cuenta`): lo de otra linea espera a su numero.
-    atenderSalida({ almacen, conectado, cuenta,
+    atenderSalida({ almacen, conectado, cuenta, restringida: () => restriccion.activa(),
       enviar: (jid, contenido) => socket.sendMessage(jid, contenido) })
       .catch((error) => avisarFallo('salida-sin-atender', error))
       .finally(() => { drenando = false })
@@ -1050,6 +1113,8 @@ async function iniciar () {
       alcance.refrescar()
       resolverLegado()
     }
+    // Un bloqueo que llego a su fin se levanta solo, y el panel se entera en este latido.
+    emitirRestriccion(restriccion.revisar())
     // Lo que no se pudo descifrar y no volvio en el plazo queda ilegible (WAINBOX-43).
     try {
       if (almacen.vencerSinDescifrar()) reportarAlmacen({}, true)
