@@ -177,6 +177,43 @@ def estado_de_lineas(con, cuentas):
     return salida
 
 
+def sin_descifrar(con, cuentas):
+    """Un renglon por linea con lo que no se pudo descifrar (WAINBOX-117, tras WAINBOX-43):
+    `pendientes` esperan que el telefono reenvie el contenido y `ilegibles` ya vencieron
+    el plazo. Un pendiente es normal y no avisa; un ilegible si, porque es un mensaje de
+    un cliente que nadie va a poder leer desde aca. `ok: False` con un ilegible para que
+    llegue al panel (`checkSystem` solo pinta `requerido === false && !ok`, main.mjs), y
+    nunca bloquea: el doctor sigue saliendo 0. Un almacen de antes de la columna no tiene
+    ningun stub guardado: cuenta cero, no se cae."""
+    conteos = {}
+    columna = wa_store.columna_descifrado(con, "mensaje")
+    if columna != "null":
+        for r in con.execute(
+                f"select account, sum({columna} = 'pendiente') pendientes, "
+                f"sum({columna} = 'ilegible') ilegibles from mensaje "
+                f"where revocado = 0 group by account"):
+            conteos[r["account"]] = (int(r["pendientes"] or 0), int(r["ilegibles"] or 0))
+    filas = []
+    for cuenta in dict.fromkeys(cuentas):
+        pendientes, ilegibles = conteos.get(cuenta, (0, 0))
+        esperando = (f"{pendientes} message{'' if pendientes == 1 else 's'} still waiting "
+                     f"for the phone to resend {'it' if pendientes == 1 else 'them'}")
+        if ilegibles:
+            detalle = (f"optional — {ilegibles} message{'' if ilegibles == 1 else 's'} on "
+                       f"{cuenta} could not be read: WhatsApp never delivered the content "
+                       f"to this device. Open {'it' if ilegibles == 1 else 'them'} on the "
+                       f"phone to see what the customer wrote. {esperando}.")
+        else:
+            detalle = f"no unreadable messages on {cuenta}; {esperando}."
+        filas.append({"check": "unreadable messages", "ok": not ilegibles,
+                      "detalle": detalle, "requerido": False,
+                      "code": "unreadable-messages",
+                      "detailCode": ("messages-unreadable" if ilegibles
+                                     else "messages-readable"),
+                      "via": cuenta, "pendientes": pendientes, "ilegibles": ilegibles})
+    return filas
+
+
 def cmd_doctor(a):
     """Para que el usuario sepa que le falta antes de que nada dependa de esto.
 
@@ -230,6 +267,8 @@ def cmd_doctor(a):
                                   "connection from the plugin settings."),
                       "requerido": True, "code": wa_store.LINEA_MUDA, "via": via,
                       "lineas": por_linea}]
+        filas.extend(sin_descifrar(con, [x["account"] for x in por_linea] or
+                                   [x.get("account") for x in lineas if x.get("account")]))
         # El desalojo va al doctor porque es lo unico del almacen que el usuario puede
         # cambiar: subir `capture_max` o `capture_days` desde el panel. Un tope que
         # muerde en silencio deja filas sin cuerpo sin que nadie sepa por que (§11-F2).

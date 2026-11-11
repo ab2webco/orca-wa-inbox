@@ -2460,6 +2460,8 @@ console.log('\nWAINBOX-43: un mensaje sin descifrar queda pendiente, se reemplaz
     filas('C43-4').length === 0 &&
     !alm.con.prepare('select 1 from chat where chat_jid=?').get(CALLADO),
     JSON.stringify(r4))
+  // Una linea viva, para que el doctor de abajo hable de los conteos y no de un sidecar mudo.
+  alm.latir()
   alm.cerrar()
 
   // FR-4: lo que lee el agente y el tablero.
@@ -2501,6 +2503,45 @@ console.log('\nWAINBOX-43: un mensaje sin descifrar queda pendiente, se reemplaz
     conContenido('C43-2'))
   ok('un pendiente tampoco', conContenido('C43-3') === 'True', conContenido('C43-3'))
 
+  // WAINBOX-117: el doctor dice, por linea, cuantos esperan y cuantos no se pudieron leer.
+  const doctor = leerJson(casa, ['doctor'])
+  const sinDescifrar = (doctor.filas || []).filter((f) => f.code === 'unreadable-messages')
+  const deLaLinea = sinDescifrar.find((f) => f.via === CUENTA)
+  ok('WAINBOX-117 el doctor trae un renglon por linea con los dos conteos',
+    sinDescifrar.length === 1 && deLaLinea?.pendientes === 1 && deLaLinea?.ilegibles === 1,
+    JSON.stringify(doctor.filas) + doctor.stderr)
+  // `checkSystem` lleva al panel solo `requerido === false && !ok` (main.mjs): con un
+  // ilegible el renglon tiene que llegar, y no puede bloquear.
+  ok('con un ilegible el renglon avisa sin bloquear y el doctor sale 0',
+    deLaLinea?.ok === false && deLaLinea?.requerido === false &&
+    deLaLinea?.detailCode === 'messages-unreadable' && doctor.code === 0,
+    `${doctor.code} ${JSON.stringify(deLaLinea)}`)
+  ok('y el aviso lo dice en palabras: cuantos, de que linea y que hacer',
+    /1 message/.test(deLaLinea?.detalle || '') &&
+    (deLaLinea?.detalle || '').includes(CUENTA) &&
+    /phone/.test(deLaLinea?.detalle || '') && /1 .*still waiting/.test(deLaLinea?.detalle || ''),
+    String(deLaLinea?.detalle))
+
+  // Sin ilegibles, los conteos siguen ahi pero el renglon va en verde: un pendiente es
+  // normal (el telefono todavia puede reenviarlo) y no merece un aviso en el panel.
+  const limpio = new DatabaseSync(ruta)
+  limpio.prepare("update mensaje set descifrado='pendiente' where stanza_id='C43-2'").run()
+  limpio.close()
+  const doctorLimpio = leerJson(casa, ['doctor'])
+  const renglonLimpio = (doctorLimpio.filas || []).find((f) => f.code === 'unreadable-messages')
+  ok('sin ilegibles: los conteos estan, en verde y sin aviso',
+    renglonLimpio?.ok === true && renglonLimpio.ilegibles === 0 &&
+    renglonLimpio.pendientes === 2 && renglonLimpio.detailCode === 'messages-readable',
+    JSON.stringify(renglonLimpio) + doctorLimpio.stderr)
+  // Un mensaje revocado no cuenta: el cliente lo borro, no hay nada que leer.
+  const revocar = new DatabaseSync(ruta)
+  revocar.prepare("update mensaje set descifrado='ilegible', revocado=1 where stanza_id='C43-2'").run()
+  revocar.close()
+  const renglonRevocado = (leerJson(casa, ['doctor']).filas || [])
+    .find((f) => f.code === 'unreadable-messages')
+  ok('un ilegible revocado no cuenta', renglonRevocado?.ilegibles === 0 &&
+    renglonRevocado?.ok === true, JSON.stringify(renglonRevocado))
+
   // El almacen de antes de la columna: se lee igual y el sidecar nuevo la agrega.
   const viejo = new DatabaseSync(ruta)
   viejo.exec("delete from mensaje where descifrado is not null")
@@ -2510,6 +2551,12 @@ console.log('\nWAINBOX-43: un mensaje sin descifrar queda pendiente, se reemplaz
   ok('sin la columna (el sidecar de antes), la bandeja sale 0 con sus mensajes',
     sinColumna.code === 0 && (sinColumna.filas || []).some((f) => f.stanza_id === 'C43-1'),
     sinColumna.stderr)
+  const doctorViejo = leerJson(casa, ['doctor'])
+  const renglonViejo = (doctorViejo.filas || []).find((f) => f.code === 'unreadable-messages')
+  ok('WAINBOX-117 sin la columna, el doctor no se cae y cuenta cero',
+    Array.isArray(doctorViejo.filas) && renglonViejo?.ilegibles === 0 &&
+    renglonViejo?.pendientes === 0 && renglonViejo?.ok === true,
+    JSON.stringify(renglonViejo) + doctorViejo.stderr)
   const reabierto = abrirAlmacen(ruta)
   ok('el sidecar nuevo le agrega la columna al abrir', reabierto.con
     .prepare('pragma table_info(mensaje)').all().some((f) => f.name === 'descifrado'))
