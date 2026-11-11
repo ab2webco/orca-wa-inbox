@@ -342,7 +342,32 @@ function descripcionDe (c) {
     return linea('group invite', [textoLimpio(g.groupName), textoLimpio(g.caption)]
       .filter(Boolean).join(' — '))
   }
+  // Un pedido o un producto de un catalogo de WhatsApp Business. El `token` del pedido
+  // es la credencial para pedir sus lineas: no se lee aca, asi que nunca llega a la fila.
+  if (c.orderMessage) {
+    const o = c.orderMessage
+    const n = aNumero(o.itemCount)
+    const items = n === null ? null : `${n} ${n === 1 ? 'item' : 'items'}`
+    const detalle = [items, monto(o.totalAmount1000, o.totalCurrencyCode)].filter(Boolean).join(', ')
+    const titulo = textoLimpio(o.orderTitle)
+    const cabeza = titulo && detalle ? `${titulo}: ${detalle}` : titulo || detalle
+    return linea('order', [cabeza, textoLimpio(o.message)].filter(Boolean).join(' — '))
+  }
+  if (c.productMessage) {
+    const p = c.productMessage.product || {}
+    const ref = textoLimpio(p.retailerId)
+    const ficha = [[textoLimpio(p.title), monto(p.priceAmount1000, p.currencyCode)]
+      .filter(Boolean).join(', '), ref && `(${ref})`].filter(Boolean).join(' ')
+    return linea('product', [ficha, textoLimpio(c.productMessage.body)].filter(Boolean).join(' — '))
+  }
   return ''
+}
+
+/** Un monto de catalogo: viene multiplicado por 1000 y puede ser un `Long`. */
+function monto (valor1000, moneda) {
+  const n = aNumero(valor1000)
+  if (n === null) return null
+  return [(n / 1000).toFixed(2), textoLimpio(moneda)].filter(Boolean).join(' ')
 }
 
 /** El contextInfo del mensaje, venga de donde venga: cada tipo lo cuelga del suyo. */
