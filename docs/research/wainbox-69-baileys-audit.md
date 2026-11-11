@@ -322,7 +322,7 @@ replies is not possible (7.1).
 wording); K5–K7 together as one board slice; K4 after a short privacy note; K11 last and
 only with the owner's explicit opt-in because of its ban risk.
 
-## 8. Phase 2 Plane items (approved by the owner on 2026-11-11)
+## 8. Phase 2 Plane items (approved by the owner on 2026-11-10)
 
 The owner approved all fifteen items. Each one was written with the `plane-refinement` skill and
 says where to implement it: file:line anchors, helpers to reuse, the test files to extend, and
@@ -359,16 +359,54 @@ Changes from §7 found while refining:
 - **Baileys never emits `blocklist.set`** (declared at `lib/Types/Events.d.ts:117`, emitted
   nowhere). K8 reads the list with `fetchBlocklist()` on open and keeps it in step with
   `blocklist.update`.
-- **Sizes by the rubric:** K4 and K9 score 4 (top of S), not the M that §7 guessed.
+- **Sizes by the rubric:** K4 and K9 score 4 (top of S), not the M that §7 guessed; K13 scores 5
+  (M), not S.
 - **Priority** is justified at the end of each item's Estimate section.
+- **Automatic texts only go out in `responder` chats.** `auto_de_jev` returns nothing for any
+  other mode (`bin/wa-scope:7506`), and `wa-send` sends only where the registry says `responder`
+  (`bin/wa-send:5`). K2, K10 and K11 now say so.
+- **K2's away text states the hours instead of promising a time.** On 2026-11-10 the repo's
+  `bin/wa_reglas.py` flagged "…we will answer from Monday 08:00." as `commitment`. "Our hours
+  are Monday to Friday, 08:00 to 18:00." passed in es, en and pt, and so did the default texts
+  of K10 and K11. The placeholder is `{hours}`, not `{opens}`.
+- **K6 does not repeat the approval notice.** A `decision` or `listo` case that already has an
+  `aprobacion` notice for its version (with its own reminder) gets no stuck alert.
+- **K5 keeps customer priority out of `miembros`.** That column holds roles only
+  (`bin/wa-scope:326-328`), so K5 uses a separate `prioridades` column.
+- **K10's call link travels on the call row.** Only the sidecar holds the socket, so the token
+  is stored with the WAINBOX-77 call row and `wa-scope` reads it when it queues the text.
+- **K8's new verb is key-gated from the start**, as `aprobar` is (`acciones.mjs:223`,
+  `:239`). Precedents: WAINBOX-27 and WAINBOX-36.
+- **Relations beyond the three the lead named:**
+  - K2↔K6, K5↔K7;
+  - K8 blocks K12;
+  - K10 is blocked by WAINBOX-77 and related to the epic;
+  - K11↔WAINBOX-84 and K15↔WAINBOX-72.
 
-**Lint (`plane-refinement --lint`, read back from Plane):** 16 items × 16 rows = 256 rows,
-all PASS (module/cycle noted as N/A inside R14), 0 GAP. The first run found real gaps, and they
-were fixed before this table:
+  All of them come from §7's text. The CLI cannot remove a relation.
+- **Overlap check:** WAINBOX-87 to WAINBOX-90 were created during this work by someone else.
+  None of them duplicates a K item. WAINBOX-88 (board refresh) touches the same board code as
+  K5–K7, so whoever builds those should coordinate.
+
+**Lint (`plane-refinement --lint`, read back from Plane):** the rows are R1–R16 of the skill,
+checked by a scratch script. Every check that can be mechanical (sections, numbering, FR→TC
+coverage, relations against the body, labels, parent, DoD verbatim, state) is mechanical. The
+semantic part of R1 (no jargon), R7 (criteria describe behaviour) and R11 (steps can be
+followed) was judged by reading. Result: 16 items × 16 rows = 256 rows, all PASS (module/cycle
+noted as N/A inside R14), 0 GAP. The first run found real gaps, and they were fixed before
+this table:
 
 - three FRs without a test case (WAINBOX-93 FR-7, WAINBOX-101 FR-6, WAINBOX-106 D-4);
 - dependency lines that named the epic without its identifier;
 - a title with internal jargon (WAINBOX-95).
 
-During the batch, the Orca runtime dropped the connection three times. The batch could resume,
-and before each retry the list was read back, so no duplicate was created.
+During the batch, the Orca runtime dropped the connection three times. The batch could resume.
+After the failed create (K11 had in fact been created) and the failed relation, the items were
+read back before the retry. The third failure was an idempotent body rewrite, so it was retried
+directly. No duplicate was created.
+
+**Anchor check:** a second script checked all 159 `symbol (file:line)` anchors in the 16 bodies
+against the code (the symbol must sit within ±3 lines). Wrong lines were fixed: for example
+`auto_omite` became `auto_de_jev`, the action handlers moved to `acciones.mjs:369`/`:447`, and
+`CONFIG_RANGOS` to `bin/wa_settings.py:611`. References that named the wrong file were made
+explicit. The 5 flags left were checked by hand and fall inside the cited ranges.
