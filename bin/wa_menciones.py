@@ -150,3 +150,18 @@ def aplicar(texto, miembros, pedidas=()):
         salida = " ".join("@" + usuario(m["id"]) for m in faltan) + " " + salida
         jids = [m["id"] for m in faltan] + jids
     return salida, jids
+
+
+def legible(texto, jids, miembros):
+    """The text as the owner should read it before approving: each mentioned `@<user part>`
+    back as `@<name>`. What goes out to WhatsApp keeps the number (that is the mention);
+    this is only for the board and the owner's notice. A member with no known name, or a
+    number that was not mentioned, is left as it is."""
+    texto = texto or ""
+    for jid in jids or ():
+        miembro = next((m for m in miembros if m.get("id") == jid), None)
+        nombre = " ".join((miembro or {}).get("name", "").split())
+        if not nombre:
+            continue
+        texto = re.sub("@" + re.escape(usuario(jid)) + r"(?!\d)", lambda _: "@" + nombre, texto)
+    return texto

@@ -126,6 +126,16 @@ case file has a "Files: allowed" line). Never mention or try `--file` anywhere e
 4. `E_FILES_OFF`: the chat does not allow files. Send the message without the file; only the
    owner turns the setting on.
 
+## Tagging a person in a group
+
+In a group, when your reply is for one person, tag them so WhatsApp notifies them: write
+`@` and their name exactly as `"$WA/wa-read" members --chat "<chat_jid>"` lists it, where
+you greet them (`Hola @Ana Ruiz, ...`). The first name alone works when no other member
+shares it. When two members share the name, write `@` and their phone from that list. The
+plugin turns it into a real WhatsApp mention. A name that matches nobody, or more than one
+member, goes out as plain text and notifies nobody. Never tag in a direct chat, and never
+tag someone the reply is not for.
+
 ## Follow-ups
 
 Every message the customer gets says what it waits for, and the plugin reviews the case

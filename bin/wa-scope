@@ -58,6 +58,7 @@ from wa_settings import VARIABLE_ENVIO_PLUGIN  # noqa: E402
 from wa_settings import mando_herramienta  # noqa: E402
 import wa_store  # noqa: E402  (solo lectura: de capture.db se lee la linea activa)
 import wa_jev  # noqa: E402  (el cliente de Jev: falla cerrado, nunca habilita)
+import wa_menciones  # noqa: E402  (lo que el dueno lee de una mencion, WAINBOX-124)
 import wa_reglas  # noqa: E402  (el piso fijo de excepciones: corre siempre, con o sin Jev)
 
 def scope_db_path():
@@ -10751,7 +10752,7 @@ def retenidos_del_tablero(con, cuenta):
         # El archivo va con nombre y tamano: el dueno aprueba algo que nadie mas pudo leer.
         archivo = adjunto_del_envio(dict(f))
         salida.append({"req_id": f["req_id"], "chat_jid": f["chat_jid"], "account": cuenta,
-                       "chat": f["chat_name"] or f["chat_jid"], "text": f["body"] or "",
+                       "chat": f["chat_name"] or f["chat_jid"], "text": cuerpo_para_el_dueno(dict(f)),
                        "file": ({"name": str(archivo.get("nombre") or "?"),
                                  "bytes": int(archivo.get("bytes") or 0)} if archivo else None),
                        "at": datetime.datetime.fromtimestamp(int(f["created_at"] or 0))
@@ -13448,11 +13449,35 @@ def codigo_de_borrador(con):
             return codigo
 
 
+def cuerpo_para_el_dueno(fila):
+    """El cuerpo de un envio como lo lee el dueno antes de aprobarlo: cada mencion
+    (WAINBOX-124) con el nombre del miembro y no con su numero. Lo que sale a WhatsApp no
+    cambia: el "@<numero>" ES la mencion. Sin menciones, o sin almacen, el cuerpo tal cual."""
+    cuerpo = fila.get("body") or ""
+    try:
+        jids = json.loads(fila.get("menciones") or "null")
+    except ValueError:
+        jids = None
+    if not jids or not isinstance(jids, list):
+        return cuerpo
+    try:
+        fuente = wa_store.abrir()
+    except wa_store.SinFuente:
+        return cuerpo
+    try:
+        miembros = wa_store.miembros(fuente, fila.get("account"), fila.get("chat_jid"), True)
+    except sqlite3.Error:
+        return cuerpo
+    finally:
+        fuente.close()
+    return wa_menciones.legible(cuerpo, jids, miembros)
+
+
 def texto_de_borrador(con, fila, codigo):
     """El aviso: para quien es, por que espera, el texto entero y como contestarlo. Con un
     secreto o una credencial, ni el texto ni el codigo: solo el tablero."""
     tx = aviso_textos()
-    cuerpo = fila["body"] or ""
+    cuerpo = cuerpo_para_el_dueno(dict(fila))
     lineas = [tx["borrador"].format(chat=recorta(nombre_del_chat(con, fila["chat_jid"]),
                                                  LARGO_PIDE)),
               tx["espera"].format(x=motivos_en_palabras(motivos_del_borrador(con, fila)))]
