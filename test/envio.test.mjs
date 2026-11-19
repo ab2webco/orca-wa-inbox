@@ -1295,6 +1295,95 @@ console.log('\nsidecar: las menciones de la fila salen como menciones de WhatsAp
   otra.cerrar()
 }
 
+console.log('\nwa-send: --mention y @Nombre etiquetan de verdad a un miembro del grupo (WAINBOX-124)')
+{
+  const home = nueva()
+  firmar(home, 'Agente De Ejemplo')
+  const almacen = abrirAlmacen(rutaAlmacen({ HOME: home }))
+  almacen.registrarLinea({ cuenta: CUENTA, lid: 'x@lid', pn: 'y@s.whatsapp.net' })
+  autorizar(home, { jid: ALFA, nombre: 'Cliente Alfa', modo: 'responder' })
+  autorizar(home, { jid: LAURA, nombre: 'Laura Mendez', modo: 'responder' })
+  autorizar(home, { jid: CALLADO, nombre: 'Grupo Callado', modo: 'borrador' })
+  const ANA = '573000000001@s.whatsapp.net'
+  const ANA_GIL = '573000000002@s.whatsapp.net'
+  const JOSE = '100000000000001@lid'
+  for (const grupo of [ALFA, CALLADO]) {
+    almacen.reemplazarMiembros({ cuenta: CUENTA, chatJid: grupo,
+      miembros: [{ jid: ANA }, { jid: ANA_GIL }, { jid: JOSE }] })
+  }
+  const nombrar = almacen.con.prepare('insert into contacto (account, jid, nombre, fuente, ' +
+    "updated_at) values (?,?,?,'libreta',1)")
+  nombrar.run(CUENTA, ANA, 'Ana Ruiz')
+  nombrar.run(CUENTA, ANA_GIL, 'Ana Gil')
+  nombrar.run(CUENTA, JOSE, 'José Pérez')
+  const socket = socketDeArchivos()
+  const fila = (req) => filasEnvio(home).find((f) => f.req_id === req)
+
+  const r = await correrEnvio(home, ['Cliente Alfa', 'ya quedó el acceso', '--send',
+    '--mention', 'Ana Gil', '--id', 'MEN-1'], { almacen, socket })
+  ok('--mention sale 0', r.code === 0, r.stderr)
+  const salio = socket.enviados[0]?.contenido
+  ok('el texto empieza con @<usuario> y lleva la lista de jids',
+    salio?.text?.startsWith('@573000000002 ya quedó el acceso') &&
+    JSON.stringify(salio?.mentions) === JSON.stringify([ANA_GIL]), JSON.stringify(salio))
+  ok('la fila guarda las menciones', fila('MEN-1')?.menciones === JSON.stringify([ANA_GIL]),
+    JSON.stringify(fila('MEN-1')))
+
+  const t = await correrEnvio(home, ['Cliente Alfa', 'Hola @José, listo', '--send',
+    '--id', 'MEN-2'], { almacen, socket })
+  ok('@Nombre de un solo miembro se vuelve mencion sin --mention', t.code === 0 &&
+    socket.enviados[1]?.contenido?.text?.startsWith('Hola @100000000000001, listo') &&
+    JSON.stringify(socket.enviados[1]?.contenido?.mentions) === JSON.stringify([JOSE]),
+    JSON.stringify(socket.enviados[1]) + t.stderr)
+
+  const amb = await correrEnvio(home, ['Cliente Alfa', 'Hola @Ana, listo', '--send',
+    '--id', 'MEN-3'], { almacen, socket })
+  ok('@Nombre compartido sale como texto, sin mencion', amb.code === 0 &&
+    socket.enviados[2]?.contenido?.text?.startsWith('Hola @Ana, listo') &&
+    !('mentions' in (socket.enviados[2]?.contenido || {})), JSON.stringify(socket.enviados[2]))
+
+  const n = socket.enviados.length
+  const ambigua = await correrEnvio(home, ['Cliente Alfa', 'listo', '--send',
+    '--mention', 'Ana', '--id', 'MEN-4'], { almacen, socket })
+  ok('--mention ambiguo se niega con su codigo y no encola nada',
+    ambigua.primera === 'wa-send: mention-ambiguous' && ambigua.code === 1 &&
+    !fila('MEN-4') && socket.enviados.length === n, ambigua.stderr)
+  ok('y la negativa no nombra a nadie', !/573000|Gil|Ruiz/.test(ambigua.stderr), ambigua.stderr)
+  const nadie = await correrEnvio(home, ['Cliente Alfa', 'listo', '--send',
+    '--mention', 'Pedro', '--id', 'MEN-5'], { almacen, socket })
+  ok('--mention a quien no esta se niega', nadie.primera === 'wa-send: mention-unknown' &&
+    !fila('MEN-5'), nadie.stderr)
+  const directo = await correrEnvio(home, ['Laura Mendez', 'listo', '--send',
+    '--mention', 'Ana Gil', '--id', 'MEN-6'], { almacen, socket })
+  ok('--mention en un directo se niega', directo.primera === 'wa-send: mention-not-group' &&
+    !fila('MEN-6'), directo.stderr)
+  const sinMencion = await correrEnvio(home, ['Laura Mendez', 'escriba a @Ana Gil', '--send',
+    '--id', 'MEN-7'], { almacen, socket })
+  ok('en un directo el texto no se toca', sinMencion.code === 0 &&
+    fila('MEN-7')?.body?.startsWith('escriba a @Ana Gil') && !fila('MEN-7')?.menciones,
+    JSON.stringify(fila('MEN-7')))
+
+  // Un borrador guarda sus menciones, y el visto del dueno manda exactamente eso.
+  const b = await correrEnvio(home, ['Grupo Callado', 'Hola @Ana Ruiz, revisado', '--send',
+    '--id', 'MEN-8'], { almacen, socket })
+  ok('el borrador ya lleva el texto reescrito y las menciones', b.primera === 'wa-send: send-needs-approval' &&
+    fila('MEN-8')?.body?.startsWith('Hola @573000000001, revisado') &&
+    fila('MEN-8')?.menciones === JSON.stringify([ANA]), JSON.stringify(fila('MEN-8')) + b.stderr)
+  const antes = socket.enviados.length
+  const visto = await aprobar(home, 'MEN-8', { almacen, socket })
+  const aprobado = socket.enviados[antes]?.contenido
+  ok('aprobado, sale con las mismas menciones', visto.code === 0 &&
+    JSON.stringify(aprobado?.mentions) === JSON.stringify([ANA]) &&
+    aprobado?.text?.startsWith('Hola @573000000001, revisado'), JSON.stringify(aprobado) + visto.stderr)
+
+  // El mismo id con otras menciones es otro pedido.
+  const otra = await correrEnvio(home, ['Cliente Alfa', 'ya quedó el acceso', '--send',
+    '--mention', 'José', '--id', 'MEN-1'], { almacen, socket })
+  ok('el mismo id con otra mencion se niega', otra.primera === 'wa-send: send-id-conflict',
+    otra.stderr)
+  almacen.cerrar()
+}
+
 console.log('\nsidecar: un adjunto sale como documento, y solo si sigue siendo el que se pidio')
 {
   const datos = Buffer.from('a,b\n1,2\n')
