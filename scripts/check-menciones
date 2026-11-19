@@ -1,0 +1,125 @@
+#!/usr/bin/env python3
+"""Real @mentions in group replies (odd/tasks/group-mentions.md, WAINBOX-124).
+
+WhatsApp only notifies a person when the text carries `@<user part>` AND the message lists
+their jid. `bin/wa_menciones.py` turns who the agent means (a name, a phone, a jid) into
+that, against the members of the group, and refuses to guess: an unknown or ambiguous
+`--mention` is an error, and an `@Name` in the text that matches no one or several stays
+plain text.
+
+Fake values only: the numbers are the ones `scripts/check-datos-reales` allows.
+"""
+import pathlib
+import sys
+
+RAIZ = pathlib.Path(__file__).resolve().parent.parent
+sys.dont_write_bytecode = True
+sys.path.insert(0, str(RAIZ / "bin"))
+import wa_menciones  # noqa: E402
+
+fallos = []
+pruebas = 0
+
+
+def ok(nombre, condicion, detalle=""):
+    global pruebas
+    pruebas += 1
+    if condicion:
+        print(f"  ok    {nombre}")
+        return True
+    fallos.append(f"{nombre}{f' — {detalle}' if detalle else ''}")
+    print(f"  FALLA {nombre}{f' — {detalle}' if detalle else ''}")
+    return False
+
+
+def codigo_de(funcion):
+    try:
+        funcion()
+    except wa_menciones.MencionInvalida as e:
+        return e.codigo
+    return None
+
+
+ANA = {"id": "573000000001@s.whatsapp.net", "name": "Ana Ruiz",
+       "phone": "573000000001", "wa_admin": False}
+ANA_GIL = {"id": "573000000002@s.whatsapp.net", "name": "Ana Gil",
+           "phone": "573000000002", "wa_admin": False}
+JOSE = {"id": "100000000000001@lid", "name": "José Pérez", "phone": "573000000011",
+        "wa_admin": True}
+SIN_NOMBRE = {"id": "100000000000002@lid", "name": "", "phone": None, "wa_admin": False}
+GRUPO = [ANA, ANA_GIL, JOSE, SIN_NOMBRE]
+
+# ── M1. Who the agent means ───────────────────────────────────────────────────────────
+print("\nM1: resolving an explicit --mention")
+r = wa_menciones.resolver
+ok("a full name, any case and accents", r("jose perez", GRUPO) is JOSE)
+ok("a unique first name", r("José", GRUPO) is JOSE)
+ok("a full name that is unique even if the first name is shared", r("Ana Gil", GRUPO) is ANA_GIL)
+ok("a phone with + and spaces", r("+57 300 000 0001", GRUPO) is ANA)
+ok("the phone of a member the group addresses by LID", r("573000000011", GRUPO) is JOSE)
+ok("a jid", r("100000000000002@lid", GRUPO) is SIN_NOMBRE)
+ok("a jid with a device suffix", r("573000000002:7@s.whatsapp.net", GRUPO) is ANA_GIL)
+ok("a LID user part", r("100000000000001", GRUPO) is JOSE)
+ok("a shared first name is ambiguous", codigo_de(lambda: r("Ana", GRUPO)) == "mention-ambiguous")
+ok("a name nobody has is unknown", codigo_de(lambda: r("Pedro", GRUPO)) == "mention-unknown")
+ok("a phone that is not in the group is unknown",
+   codigo_de(lambda: r("573009999999", GRUPO)) == "mention-unknown")
+ok("an empty value is unknown", codigo_de(lambda: r("  ", GRUPO)) == "mention-unknown")
+ok("a group without known members is unknown",
+   codigo_de(lambda: r("Ana Ruiz", [])) == "mention-unknown")
+ok("a prefix of a name is not a match", codigo_de(lambda: r("Jo", GRUPO)) == "mention-unknown")
+try:
+    r("Ana", GRUPO)
+except wa_menciones.MencionInvalida as e:
+    ok("the refusal names no member", "573" not in str(e) and "Gil" not in str(e), str(e))
+
+# ── M2. The text and the jids that go out ─────────────────────────────────────────────
+print("\nM2: rewriting the text with an explicit --mention")
+a = wa_menciones.aplicar
+texto, jids = a("Hola @José, ya quedó.", GRUPO, [JOSE])
+ok("the @Name becomes @<user part> of the id the group uses",
+   texto == "Hola @100000000000001, ya quedó." and jids == ["100000000000001@lid"], (texto, jids))
+texto, jids = a("Hola Ana, ya quedó.", GRUPO, [ANA_GIL])
+ok("without an @ in the text the mention goes first",
+   texto == "@573000000002 Hola Ana, ya quedó." and jids == ["573000000002@s.whatsapp.net"],
+   (texto, jids))
+texto, jids = a("@ana gil listo, @ANA GIL", GRUPO, [ANA_GIL])
+ok("every @ of that person is rewritten, once in the list",
+   texto == "@573000000002 listo, @573000000002" and jids == ["573000000002@s.whatsapp.net"],
+   (texto, jids))
+texto, jids = a("Ya @573000000001 lo vio", GRUPO, [ANA])
+ok("an @<phone> already in the text is kept", texto == "Ya @573000000001 lo vio"
+   and jids == ["573000000001@s.whatsapp.net"], (texto, jids))
+texto, jids = a("Listo @573000000011", GRUPO, [JOSE])
+ok("an @<phone> of a LID member becomes its LID", texto == "Listo @100000000000001"
+   and jids == ["100000000000001@lid"], (texto, jids))
+
+print("\nM3: the text fallback, only when exactly one member matches")
+texto, jids = a("Hola @Ana Ruiz, listo", GRUPO)
+ok("@<full name> of one member", texto == "Hola @573000000001, listo"
+   and jids == ["573000000001@s.whatsapp.net"], (texto, jids))
+texto, jids = a("Hola @jose, listo", GRUPO)
+ok("@<unique first name>", texto == "Hola @100000000000001, listo"
+   and jids == ["100000000000001@lid"], (texto, jids))
+texto, jids = a("Hola @Ana, listo", GRUPO)
+ok("@<shared first name> stays text", texto == "Hola @Ana, listo" and jids == [], (texto, jids))
+texto, jids = a("Hola @Pedro, listo", GRUPO)
+ok("@<nobody> stays text", texto == "Hola @Pedro, listo" and jids == [], (texto, jids))
+texto, jids = a("Hola @Josefina", GRUPO)
+ok("a longer word is not the name", texto == "Hola @Josefina" and jids == [], (texto, jids))
+texto, jids = a("escriba a soporte@empresa.com", [ANA, {"id": "573000000012@s.whatsapp.net",
+                                                    "name": "Empresa", "phone": None}])
+ok("an email is not a mention", texto == "escriba a soporte@empresa.com" and jids == [],
+   (texto, jids))
+texto, jids = a("Hola @573000000002 y @José", GRUPO)
+ok("a phone and a name in one text", texto == "Hola @573000000002 y @100000000000001"
+   and jids == ["573000000002@s.whatsapp.net", "100000000000001@lid"], (texto, jids))
+texto, jids = a("Hola @573009999999", GRUPO)
+ok("a phone that is not a member stays text", texto == "Hola @573009999999" and jids == [],
+   (texto, jids))
+texto, jids = a("Sin menciones", [])
+ok("no members, no change", texto == "Sin menciones" and jids == [])
+
+print(f"\n{pruebas - len(fallos)}/{pruebas} en verde")
+if fallos:
+    sys.exit(1)
