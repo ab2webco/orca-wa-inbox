@@ -1241,6 +1241,60 @@ function archivoEn (home, nombre, contenido) {
   return ruta
 }
 
+// ── Menciones (WAINBOX-124) ─────────────────────────────────────────────────────────
+console.log('\nsidecar: las menciones de la fila salen como menciones de WhatsApp')
+{
+  const GRUPO = '120363000000000001@g.us'
+  const JIDS = ['573000000001@s.whatsapp.net', '100000000000001@lid']
+  const conMenciones = { body: '@573000000001 y @100000000000001 listo',
+    menciones: JSON.stringify(JIDS) }
+  const c = contenidoDe(conMenciones)
+  ok('un texto con menciones lleva la lista de jids',
+    c.text === conMenciones.body && JSON.stringify(c.mentions) === JSON.stringify(JIDS),
+    JSON.stringify(c))
+  ok('sin menciones no hay lista', !('mentions' in contenidoDe({ body: 'hola' })) &&
+    !('mentions' in contenidoDe({ body: 'hola', menciones: null })))
+  ok('una lista ilegible no sale como mencion',
+    !('mentions' in contenidoDe({ body: 'hola', menciones: '{roto' })))
+  const datos = Buffer.from('x')
+  const sha = (await import('node:crypto')).createHash('sha256').update(datos).digest('hex')
+  const doc = contenidoDe({ body: '@573000000001 el informe', menciones: JSON.stringify(JIDS.slice(0, 1)),
+    adjunto: JSON.stringify({ ruta: '/x/a.txt', nombre: 'a.txt', mimetype: 'text/plain',
+      bytes: 1, sha256: sha }) }, () => datos)
+  ok('un documento menciona en su pie', doc.caption === '@573000000001 el informe' &&
+    JSON.stringify(doc.mentions) === JSON.stringify(JIDS.slice(0, 1)), JSON.stringify({ ...doc, document: undefined }))
+
+  // De punta a punta: la fila con menciones sale por el socket con ellas, y Baileys las
+  // vuelve a encontrar si el otro telefono pide reenviarlo.
+  const home = nueva()
+  const almacen = abrirAlmacen(rutaAlmacen({ HOME: home }))
+  ok('el almacen tiene la columna menciones',
+    almacen.con.prepare('pragma table_info(envio)').all().some((f) => f.name === 'menciones'))
+  almacen.encolarEnvio({ reqId: 'M-1', cuenta: CUENTA, chatJid: GRUPO, cuerpo: conMenciones.body,
+    estado: ENVIO.PENDIENTE })
+  almacen.con.prepare('update envio set menciones=? where req_id=?').run(conMenciones.menciones, 'M-1')
+  const socket = socketDeArchivos()
+  await atenderSalida({ almacen, enviar: socket.enviar })
+  ok('el socket recibe las menciones', JSON.stringify(socket.enviados[0]?.contenido?.mentions) ===
+    JSON.stringify(JIDS), JSON.stringify(socket.enviados))
+  const m = mensajeDeEnvio({ almacen, cuenta: CUENTA,
+    key: { id: socket.enviados.length ? 'STANZA-DOC-1' : 'X' } })
+  ok('el reenvio de Baileys lleva las mismas menciones',
+    m?.extendedTextMessage?.text === conMenciones.body &&
+    JSON.stringify(m?.extendedTextMessage?.contextInfo?.mentionedJid) === JSON.stringify(JIDS),
+    JSON.stringify(m))
+  almacen.cerrar()
+
+  // Un almacen de antes de la columna la gana al abrirse.
+  const cruda = new DatabaseSync(rutaAlmacen({ HOME: home }))
+  cruda.exec('alter table envio drop column menciones')
+  cruda.close()
+  const otra = abrirAlmacen(rutaAlmacen({ HOME: home }))
+  ok('reabrir un almacen viejo agrega menciones vacia', otra.verEnvio('M-1') &&
+    otra.verEnvio('M-1').menciones === null, JSON.stringify(otra.verEnvio('M-1')))
+  otra.cerrar()
+}
+
 console.log('\nsidecar: un adjunto sale como documento, y solo si sigue siendo el que se pidio')
 {
   const datos = Buffer.from('a,b\n1,2\n')

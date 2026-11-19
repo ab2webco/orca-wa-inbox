@@ -252,7 +252,10 @@ create table if not exists envio (
   -- adjunto: un documento que sale con el cuerpo como pie, o null. JSON con ruta, nombre,
   -- mimetype, bytes y sha256; el sidecar lo lee del disco al mandar y lo rechaza si el
   -- archivo ya no es el que se pidio (bytes o sha256 distintos)
-  adjunto    text
+  adjunto    text,
+  -- menciones: JSON con los jids que el mensaje menciona (WAINBOX-124), o null. El cuerpo
+  -- ya lleva "@<usuario>" de cada uno; sin esta lista WhatsApp no avisa a nadie
+  menciones  text
 );
 create index if not exists ix_envio_estado on envio (estado, created_at);
 
@@ -331,7 +334,7 @@ function columnasNuevas (con) {
   if (!columnasDe(con, 'envio').includes('reintentos')) {
     con.exec('alter table envio add column reintentos integer not null default 0')
   }
-  for (const columna of ['entrega text', 'entrega_at integer', 'adjunto text']) {
+  for (const columna of ['entrega text', 'entrega_at integer', 'adjunto text', 'menciones text']) {
     if (!columnasDe(con, 'envio').includes(columna.split(' ')[0])) {
       con.exec(`alter table envio add column ${columna}`)
     }

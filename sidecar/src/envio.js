@@ -117,12 +117,29 @@ export function leerAdjunto (fila, leer = readFileSync) {
   return { datos, nombre: String(meta.nombre), mimetype: meta.mimetype || 'application/octet-stream' }
 }
 
-/** Lo que se le pasa a `sock.sendMessage`: el texto, o el documento con el cuerpo de pie. */
+/** Los jids que menciona una fila (WAINBOX-124), o `[]`. `bin/wa-send` ya dejo en el
+ *  cuerpo el "@<usuario>" de cada uno: WhatsApp avisa solo cuando estan las dos cosas. Una
+ *  lista ilegible no menciona a nadie, y el texto sale igual. */
+export function mencionesDe (fila) {
+  if (!fila?.menciones) return []
+  try {
+    const jids = JSON.parse(fila.menciones)
+    return Array.isArray(jids) ? jids.filter((j) => typeof j === 'string' && j.includes('@')) : []
+  } catch {
+    return []
+  }
+}
+
+/** Lo que se le pasa a `sock.sendMessage`: el texto, o el documento con el cuerpo de pie,
+ *  con sus menciones. */
 export function contenidoDe (fila, leer = readFileSync) {
   const adjunto = leerAdjunto(fila, leer)
-  if (!adjunto) return { text: fila.body }
-  const contenido = { document: adjunto.datos, mimetype: adjunto.mimetype, fileName: adjunto.nombre }
-  if (fila.body) contenido.caption = fila.body
+  const menciones = mencionesDe(fila)
+  const contenido = adjunto
+    ? { document: adjunto.datos, mimetype: adjunto.mimetype, fileName: adjunto.nombre }
+    : { text: fila.body }
+  if (adjunto && fila.body) contenido.caption = fila.body
+  if (menciones.length) contenido.mentions = menciones
   return contenido
 }
 
@@ -328,7 +345,10 @@ export function mensajeDeEnvio ({ almacen, cuenta, key }) {
   // Un documento no se rearma desde aca: su forma lleva la llave de cifrado del medio que
   // subio Baileys, y eso no se guarda. Sin mensaje, Baileys no lo reenvia.
   if (!fila || fila.adjunto) return undefined
-  return { extendedTextMessage: { text: fila.body } }
+  const menciones = mencionesDe(fila)
+  return { extendedTextMessage: menciones.length
+    ? { text: fila.body, contextInfo: { mentionedJid: menciones } }
+    : { text: fila.body } }
 }
 
 // Lo mismo que Baileys usa de fabrica para la cuenta de reintentos (DEFAULT_CACHE_TTLS
