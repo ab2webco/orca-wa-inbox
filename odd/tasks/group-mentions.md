@@ -33,7 +33,7 @@ Out of scope: new flags on `caso propuesta/resultado/avance`. The case agent wri
 - [x] T1 `wa_menciones`: resolve and rewrite, with tests (`scripts/check-menciones`).
 - [x] T2 Sidecar: `menciones` column, `contenidoDe` and `mensajeDeEnvio`, with tests.
 - [x] T3 `wa-send --mention` and the text fallback end to end, with tests.
-- [x] T4 Agent docs and the case-file instructions.
+- [x] T4 Agent docs (skills and COMMANDS.md). The generated case file is unchanged.
 - [ ] T5 Full `npm run check`, then a live test in the owner's test group after install.
 
 ## Acceptance criteria
