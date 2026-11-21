@@ -102,6 +102,13 @@ arrival order in `hilo`. Every message before the last reply sent is marked `res
 it is context, never answer it again. A voice note shows its transcript as `text`, with
 `transcripcion: true`; an attachment shows `media` with `type`, `bytes` and `path`.
 
+In a group, `@<name>` in a reply, `caso avance` or a result becomes a real WhatsApp mention
+when the name is exactly one member's (`wa-read members --chat <jid>`): the full name, the
+first name when no other member has it, or the phone. Anything else stays plain text. Outside
+a case (`wa-send`, when the owner asks you), `--mention <name|phone|id>` tags a member and is
+refused when it matches nobody (`mention-unknown`) or several (`mention-ambiguous`), or in a
+direct chat (`mention-not-group`): nothing was sent, fix the name and send again.
+
 ## When the owner manages his cases
 
 Only in the owner's own case (or a Super admin's, except closing): he manages his board by

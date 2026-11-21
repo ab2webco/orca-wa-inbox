@@ -1,0 +1,199 @@
+#!/usr/bin/env python3
+"""Real @mentions in group replies (odd/tasks/group-mentions.md, WAINBOX-124).
+
+WhatsApp only notifies a person when the text carries `@<user part>` AND the message lists
+their jid. `bin/wa_menciones.py` turns who the agent means (a name, a phone, a jid) into
+that, against the members of the group, and refuses to guess: an unknown or ambiguous
+`--mention` is an error, and an `@Name` in the text that matches no one or several stays
+plain text.
+
+Fake values only: the numbers are the ones `scripts/check-datos-reales` allows.
+"""
+import importlib.machinery
+import importlib.util
+import json
+import os
+import pathlib
+import shutil
+import subprocess
+import sys
+import tempfile
+
+RAIZ = pathlib.Path(__file__).resolve().parent.parent
+NODE = shutil.which("node")
+sys.dont_write_bytecode = True
+sys.path.insert(0, str(RAIZ / "bin"))
+import wa_menciones  # noqa: E402
+
+fallos = []
+pruebas = 0
+
+
+def ok(nombre, condicion, detalle=""):
+    global pruebas
+    pruebas += 1
+    if condicion:
+        print(f"  ok    {nombre}")
+        return True
+    fallos.append(f"{nombre}{f' — {detalle}' if detalle else ''}")
+    print(f"  FALLA {nombre}{f' — {detalle}' if detalle else ''}")
+    return False
+
+
+def codigo_de(funcion):
+    try:
+        funcion()
+    except wa_menciones.MencionInvalida as e:
+        return e.codigo
+    return None
+
+
+ANA = {"id": "573000000001@s.whatsapp.net", "name": "Ana Ruiz",
+       "phone": "573000000001", "wa_admin": False}
+ANA_GIL = {"id": "573000000002@s.whatsapp.net", "name": "Ana Gil",
+           "phone": "573000000002", "wa_admin": False}
+JOSE = {"id": "100000000000001@lid", "name": "José Pérez", "phone": "573000000011",
+        "wa_admin": True}
+SIN_NOMBRE = {"id": "100000000000002@lid", "name": "", "phone": None, "wa_admin": False}
+GRUPO = [ANA, ANA_GIL, JOSE, SIN_NOMBRE]
+
+# ── M1. Who the agent means ───────────────────────────────────────────────────────────
+print("\nM1: resolving an explicit --mention")
+r = wa_menciones.resolver
+ok("a full name, any case and accents", r("jose perez", GRUPO) is JOSE)
+ok("a unique first name", r("José", GRUPO) is JOSE)
+ok("a full name that is unique even if the first name is shared", r("Ana Gil", GRUPO) is ANA_GIL)
+ok("a phone with + and spaces", r("+57 300 000 0001", GRUPO) is ANA)
+ok("the phone of a member the group addresses by LID", r("573000000011", GRUPO) is JOSE)
+ok("a jid", r("100000000000002@lid", GRUPO) is SIN_NOMBRE)
+ok("a jid with a device suffix", r("573000000002:7@s.whatsapp.net", GRUPO) is ANA_GIL)
+ok("a LID user part", r("100000000000001", GRUPO) is JOSE)
+ok("a shared first name is ambiguous", codigo_de(lambda: r("Ana", GRUPO)) == "mention-ambiguous")
+ok("a name nobody has is unknown", codigo_de(lambda: r("Pedro", GRUPO)) == "mention-unknown")
+ok("a phone that is not in the group is unknown",
+   codigo_de(lambda: r("573009999999", GRUPO)) == "mention-unknown")
+ok("an empty value is unknown", codigo_de(lambda: r("  ", GRUPO)) == "mention-unknown")
+ok("a group without known members is unknown",
+   codigo_de(lambda: r("Ana Ruiz", [])) == "mention-unknown")
+ok("a prefix of a name is not a match", codigo_de(lambda: r("Jo", GRUPO)) == "mention-unknown")
+try:
+    r("Ana", GRUPO)
+except wa_menciones.MencionInvalida as e:
+    ok("the refusal names no member", "573" not in str(e) and "Gil" not in str(e), str(e))
+
+# ── M2. The text and the jids that go out ─────────────────────────────────────────────
+print("\nM2: rewriting the text with an explicit --mention")
+a = wa_menciones.aplicar
+texto, jids = a("Hola @José, ya quedó.", GRUPO, [JOSE])
+ok("the @Name becomes @<user part> of the id the group uses",
+   texto == "Hola @100000000000001, ya quedó." and jids == ["100000000000001@lid"], (texto, jids))
+texto, jids = a("Hola Ana, ya quedó.", GRUPO, [ANA_GIL])
+ok("without an @ in the text the mention goes first",
+   texto == "@573000000002 Hola Ana, ya quedó." and jids == ["573000000002@s.whatsapp.net"],
+   (texto, jids))
+texto, jids = a("@ana gil listo, @ANA GIL", GRUPO, [ANA_GIL])
+ok("every @ of that person is rewritten, once in the list",
+   texto == "@573000000002 listo, @573000000002" and jids == ["573000000002@s.whatsapp.net"],
+   (texto, jids))
+texto, jids = a("Ya @573000000001 lo vio", GRUPO, [ANA])
+ok("an @<phone> already in the text is kept", texto == "Ya @573000000001 lo vio"
+   and jids == ["573000000001@s.whatsapp.net"], (texto, jids))
+texto, jids = a("Listo @573000000011", GRUPO, [JOSE])
+ok("an @<phone> of a LID member becomes its LID", texto == "Listo @100000000000001"
+   and jids == ["100000000000001@lid"], (texto, jids))
+
+print("\nM3: the text fallback, only when exactly one member matches")
+texto, jids = a("Hola @Ana Ruiz, listo", GRUPO)
+ok("@<full name> of one member", texto == "Hola @573000000001, listo"
+   and jids == ["573000000001@s.whatsapp.net"], (texto, jids))
+texto, jids = a("Hola @jose, listo", GRUPO)
+ok("@<unique first name>", texto == "Hola @100000000000001, listo"
+   and jids == ["100000000000001@lid"], (texto, jids))
+texto, jids = a("Hola @Ana, listo", GRUPO)
+ok("@<shared first name> stays text", texto == "Hola @Ana, listo" and jids == [], (texto, jids))
+texto, jids = a("Hola @Pedro, listo", GRUPO)
+ok("@<nobody> stays text", texto == "Hola @Pedro, listo" and jids == [], (texto, jids))
+texto, jids = a("Hola @Josefina", GRUPO)
+ok("a longer word is not the name", texto == "Hola @Josefina" and jids == [], (texto, jids))
+texto, jids = a("escriba a soporte@empresa.com", [ANA, {"id": "573000000012@s.whatsapp.net",
+                                                    "name": "Empresa", "phone": None}])
+ok("an email is not a mention", texto == "escriba a soporte@empresa.com" and jids == [],
+   (texto, jids))
+texto, jids = a("Hola @573000000002 y @José", GRUPO)
+ok("a phone and a name in one text", texto == "Hola @573000000002 y @100000000000001"
+   and jids == ["573000000002@s.whatsapp.net", "100000000000001@lid"], (texto, jids))
+texto, jids = a("Hola @573009999999", GRUPO)
+ok("a phone that is not a member stays text", texto == "Hola @573009999999" and jids == [],
+   (texto, jids))
+texto, jids = a("Sin menciones", [])
+ok("no members, no change", texto == "Sin menciones" and jids == [])
+
+print("\nM4: what the owner reads shows the name, not the number")
+leg = wa_menciones.legible
+ok("@<user part> of a mentioned member reads as @<name>",
+   leg("@573000000002 listo, @100000000000001", ["573000000002@s.whatsapp.net",
+                                                  "100000000000001@lid"], GRUPO)
+   == "@Ana Gil listo, @José Pérez")
+ok("a number that was not mentioned is left alone",
+   leg("llame al @573000000001", ["573000000002@s.whatsapp.net"], GRUPO)
+   == "llame al @573000000001")
+ok("a member with no name keeps the number",
+   leg("@100000000000002 listo", ["100000000000002@lid"], GRUPO) == "@100000000000002 listo")
+ok("a longer number is not that member",
+   leg("@5730000000021 x", ["573000000002@s.whatsapp.net"], GRUPO) == "@5730000000021 x")
+ok("no mentions, no change", leg("hola", [], GRUPO) == "hola")
+
+# The draft the owner approves, on WhatsApp and on the board, from a real store.
+ALMACEN_JS = """
+import { abrirAlmacen, rutaAlmacen } from '%s';
+const a = abrirAlmacen(rutaAlmacen({ HOME: process.env.HOME }));
+a.registrarLinea({ cuenta: 'local', lid: 'x@lid', pn: 'y@s.whatsapp.net' });
+a.reemplazarMiembros({ cuenta: 'local', chatJid: '120363111222333444@g.us',
+  miembros: [{ jid: '573000000002@s.whatsapp.net' }] });
+a.con.prepare("insert into contacto (account, jid, nombre, fuente, updated_at) values " +
+  "('local', '573000000002@s.whatsapp.net', 'Ana Gil', 'libreta', 1)").run();
+a.encolarEnvio({ reqId: 'B-1', cuenta: 'local', chatJid: '120363111222333444@g.us',
+  cuerpo: '@573000000002 listo', estado: 'borrador' });
+a.con.prepare('update envio set menciones=? where req_id=?')
+  .run(JSON.stringify(['573000000002@s.whatsapp.net']), 'B-1');
+a.cerrar();
+""" % (RAIZ / "sidecar" / "src" / "almacen.js").as_uri()
+if not NODE:
+    print("  aviso: sin node, no se armo el almacen", file=sys.stderr)
+else:
+    home = tempfile.mkdtemp(prefix="wa-menciones-")
+    antes = dict(os.environ)
+    try:
+        (pathlib.Path(home) / ".wa-inbox").mkdir(parents=True)
+        os.environ.update(HOME=home, XDG_CONFIG_HOME=str(pathlib.Path(home) / ".config"))
+        subprocess.run([NODE, "--input-type=module", "-e", ALMACEN_JS], check=True,
+                       capture_output=True, timeout=120, env=dict(os.environ))
+        cargador = importlib.machinery.SourceFileLoader("wa_scope_menciones",
+                                                         str(RAIZ / "bin" / "wa-scope"))
+        spec = importlib.util.spec_from_loader("wa_scope_menciones", cargador)
+        ws = importlib.util.module_from_spec(spec)
+        cargador.exec_module(ws)
+        import sqlite3
+        fuente = sqlite3.connect(pathlib.Path(home) / ".wa-inbox" / "capture.db")
+        fuente.row_factory = sqlite3.Row
+        fila = dict(fuente.execute("select * from envio where req_id='B-1'").fetchone())
+        fuente.close()
+        ok("the draft text for the owner names the member", ws.cuerpo_para_el_dueno(fila)
+           == "@Ana Gil listo", ws.cuerpo_para_el_dueno(fila))
+        sin = dict(fila, menciones=None)
+        ok("a draft with no mentions is shown as it is",
+           ws.cuerpo_para_el_dueno(sin) == "@573000000002 listo")
+        ok("the board's held drafts use it",
+           "cuerpo_para_el_dueno(" in pathlib.Path(RAIZ / "bin" / "wa-scope").read_text()
+           .split("def retenidos_del_tablero", 1)[1].split("\ndef ", 1)[0])
+        ok("the owner's WhatsApp notice uses it",
+           "cuerpo_para_el_dueno(" in pathlib.Path(RAIZ / "bin" / "wa-scope").read_text()
+           .split("def texto_de_borrador", 1)[1].split("\ndef ", 1)[0])
+    finally:
+        os.environ.clear()
+        os.environ.update(antes)
+        shutil.rmtree(home, ignore_errors=True)
+
+print(f"\n{pruebas - len(fallos)}/{pruebas} en verde")
+if fallos:
+    sys.exit(1)

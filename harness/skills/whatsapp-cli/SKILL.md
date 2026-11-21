@@ -43,6 +43,7 @@ the owner what is waiting instead.
     "$WA/wa-scope" check "<chat_jid>" --for responder   # exit 3 = denied
     "$WA/wa-scope" where "<text>" --chat "<chat_jid>" --json
     "$WA/wa-read" chat "<chat_jid>" --json      # more of the conversation
+    "$WA/wa-read" members --chat "<chat_jid>" --json   # a group's members: name, phone, id
     "$WA/wa-read" wait --chat "<chat_jid>" --after <stanza_id> --timeout 600 --json   # block until the other side writes
 
 `hilo` marks every message before the last reply sent as `respondido`: context only.
@@ -83,6 +84,10 @@ waits for the owner's approval, in every chat: never send it again or another wa
 The same proposal twice changes nothing. A different proposal on a case in `listo` (the
 result of a job) sends it back to `decision`, to be approved again. A stage that is not
 allowed fails without writing; read the error instead of retrying.
+
+In a group, `@<name as wa-read members lists it>` (or `@<phone>` when two members share
+the name) in a reply becomes a real WhatsApp mention that notifies that person. A name that
+matches nobody, or more than one member, stays plain text.
 
 ## Manage cases for the owner
 
